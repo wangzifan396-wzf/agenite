@@ -231,14 +231,30 @@ function openBrowser(url) {
   } catch { /* not fatal — the URL is printed anyway */ }
 }
 
-server.listen(PORT, HOST, () => {
-  const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
-  const url = `http://${shown}:${PORT}`;
-  console.log(`\n  \x1b[1mAgenite\x1b[0m 已启动  →  \x1b[36m${url}\x1b[0m`);
-  console.log(`  工作区（可操作范围）: ${WORKSPACE}`);
-  console.log('  在设置里填入你的模型 API Key（OpenAI / DeepSeek / 通义 / Kimi / 智谱 / Groq / Ollama 等）。');
-  console.log('  按 Ctrl+C 退出。\n');
-  if (process.argv.includes('--open') || process.env.AGENITE_OPEN === '1') openBrowser(url);
-});
+// Start listening, but if the port is taken, walk upward to the next free
+// one instead of crashing — a common cause of "double-click does nothing".
+function listenOn(port) {
+  const onErr = (err) => {
+    if (err.code === 'EADDRINUSE' && port < 4193) {
+      console.log(`  \x1b[33m⚠ 端口 ${port} 已被占用，改试 ${port + 1} ...\x1b[0m`);
+      listenOn(port + 1);
+    } else {
+      console.error(`  \x1b[31m✗ 无法启动服务: ${err.message}\x1b[0m`);
+      process.exit(1);
+    }
+  };
+  server.once('error', onErr);
+  server.listen(port, HOST, () => {
+    server.removeListener('error', onErr);
+    const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
+    const url = `http://${shown}:${port}`;
+    console.log(`\n  \x1b[1mAgenite\x1b[0m 已启动  →  \x1b[36m${url}\x1b[0m`);
+    console.log(`  工作区（可操作范围）: ${WORKSPACE}`);
+    console.log('  在设置里填入你的模型 API Key（OpenAI / DeepSeek / 通义 / Kimi / 智谱 / Groq / Ollama 等）。');
+    console.log('  按 Ctrl+C 退出。\n');
+    if (process.argv.includes('--open') || process.env.AGENITE_OPEN === '1') openBrowser(url);
+  });
+}
+listenOn(PORT);
 
 export { server };
