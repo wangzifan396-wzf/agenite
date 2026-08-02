@@ -2,88 +2,235 @@
 <html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#fbfbfa" />
+  <meta name="description" content="Agenite — 运行在你自己电脑上的本地智能体。填入任意模型 API，即可读写文件、执行命令、联网查资料。" />
   <title>Agenite · 本地智能体</title>
   <link rel="stylesheet" href="./src/styles.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
+  <link rel="manifest" href="./agenite.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+
+  <!--
+    Guard: a classic (non-module) script always runs, even from file://.
+    Module scripts do NOT — the browser blocks them by CORS on the file:
+    protocol, which silently kills every button on the page. So if someone
+    double-clicks this HTML, we explain it instead of looking broken.
+  -->
+  <script>
+    (function () {
+      if (location.protocol !== 'file:') return;
+      var CMD = 'node server.js';
+      function build() {
+        var wrap = document.createElement('div');
+        wrap.className = 'file-guard';
+        wrap.innerHTML =
+          '<div class="file-guard-card">' +
+          '<div class="fg-icon">🔌</div>' +
+          '<h1>需要先启动本地服务</h1>' +
+          '<p>你现在是用 <code>file://</code> 直接打开这个文件的。浏览器出于安全策略会拦截模块脚本，' +
+          '页面上的按钮全部不会响应；而且 Agenite 的智能体能力依赖本地服务进程，也无法工作。</p>' +
+          '<ol>' +
+          '<li>Windows：双击项目里的 <b>start.cmd</b></li>' +
+          '<li>macOS / Linux：终端执行 <b>./start.sh</b></li>' +
+          '<li>或手动运行：<code id="fg-cmd">' + CMD + '</code> <button id="fg-copy" type="button">复制</button></li>' +
+          '</ol>' +
+          '<p class="fg-foot">启动后浏览器会自动打开 <b>http://localhost:4173</b>，一切正常。</p>' +
+          '</div>';
+        document.body.appendChild(wrap);
+        var btn = document.getElementById('fg-copy');
+        if (btn) btn.onclick = function () {
+          try { navigator.clipboard.writeText(CMD); btn.textContent = '已复制'; }
+          catch (e) { btn.textContent = '请手动复制'; }
+        };
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build);
+      else build();
+    })();
+  </script>
 </head>
 <body>
   <div id="app">
     <aside id="sidebar">
-      <div class="brand"><span class="logo">🤖</span> Agenite</div>
-      <button id="new-chat" class="primary">+ 新对话</button>
-      <div id="conv-list"></div>
-      <div class="sidebar-foot">
-        <button id="open-settings" title="设置">⚙ 设置</button>
-        <span id="conn-status" class="dot" title="连接状态"></span>
+      <div class="side-head">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Agenite</span>
+        </div>
+        <button id="sidebar-close" class="icon-btn only-mobile" title="收起" aria-label="收起侧栏">✕</button>
+      </div>
+
+      <button id="new-chat" class="btn-new">
+        <span class="plus" aria-hidden="true">+</span> 新对话
+      </button>
+
+      <div class="side-scroll">
+        <div class="side-label">最近</div>
+        <div id="conv-list"></div>
+      </div>
+
+      <div class="side-foot">
+        <button id="workspace-chip" class="ws-chip" title="智能体可操作的目录">
+          <span class="ws-dot" id="conn-status"></span>
+          <span class="ws-text" id="workspace-label">未连接本地服务</span>
+        </button>
+        <button id="open-settings" class="side-link">设置</button>
       </div>
     </aside>
 
+    <div id="scrim"></div>
+
     <main id="main">
       <header id="topbar">
+        <button id="sidebar-open" class="icon-btn only-mobile" title="菜单" aria-label="打开侧栏">☰</button>
         <div id="chat-title">新对话</div>
         <div class="top-actions">
-          <button id="agent-toggle" class="chip active" title="工具调用 Agent">🛠 Agent</button>
-          <button id="theme-toggle" title="切换主题">🌙</button>
-          <button id="clear-chat" title="清空当前对话">🗑</button>
+          <button id="perm-chip" class="chip" title="点击切换电脑操作权限">
+            <span class="chip-dot"></span><span id="perm-text">只读</span>
+          </button>
+          <button id="agent-toggle" class="chip" title="开启后模型可以调用工具">
+            <span class="chip-dot"></span>Agent
+          </button>
+          <button id="theme-toggle" class="icon-btn" title="切换主题" aria-label="切换主题"></button>
+          <button id="clear-chat" class="icon-btn" title="清空当前对话" aria-label="清空当前对话">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>
+          </button>
         </div>
       </header>
 
-      <div id="messages"></div>
+      <div id="scroller">
+        <div id="messages"></div>
+      </div>
 
-      <div id="composer">
-        <textarea id="input" placeholder="输入消息…（Enter 发送，Shift+Enter 换行；开启 Agent 后可让它联网/读写文件）" rows="2"></textarea>
-        <div class="composer-actions">
-          <span id="model-label" class="muted"></span>
-          <button id="send" class="primary">发送</button>
-          <button id="stop" class="hidden" title="停止生成">■ 停止</button>
+      <div id="composer-wrap">
+        <div id="composer">
+          <textarea id="input" rows="1" placeholder="让 Agenite 做点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <div class="composer-bar">
+            <button id="model-chip" class="mini-chip" title="点击配置模型">
+              <span class="mini-dot"></span><span id="model-label">未配置模型</span>
+            </button>
+            <div class="grow"></div>
+            <button id="stop" class="btn-stop hidden" title="停止生成">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+              停止
+            </button>
+            <button id="send" class="btn-send" title="发送 (Enter)" aria-label="发送">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </div>
         </div>
+        <div class="composer-hint">Agenite 在你本机运行，写入与命令默认需要你点击确认。</div>
       </div>
     </main>
   </div>
 
-  <div id="settings-modal" class="modal hidden">
-    <div class="modal-card">
-      <div class="modal-head">
-        <h2>设置</h2>
-        <button id="close-settings" class="icon">✕</button>
+  <!-- 审批弹窗：智能体要动你电脑之前必须过这一关 -->
+  <div id="approval-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card approval-card">
+      <div class="approval-head">
+        <span class="approval-badge">需要你的许可</span>
+        <h2 id="approval-title">执行操作</h2>
+        <p id="approval-desc" class="muted small"></p>
       </div>
-      <p class="muted small">配置仅保存在你本地浏览器 (localStorage)，不会上传。API Key 通过本地代理发送至对应运营商。</p>
-      <div class="form">
-        <label>供应商
-          <select id="set-provider"></select>
-        </label>
-        <label>Base URL
-          <input id="set-baseURL" type="text" placeholder="https://..." />
-        </label>
-        <label>API Key
-          <input id="set-apiKey" type="password" placeholder="sk-..." autocomplete="off" />
-        </label>
-        <label>模型名称 (model)
-          <input id="set-model" type="text" placeholder="deepseek-chat" />
-        </label>
-        <div class="row">
-          <label>温度 (temperature): <span id="temp-val">0.7</span>
-            <input id="set-temperature" type="range" min="0" max="2" step="0.05" value="0.7" />
-          </label>
-          <label>最大 Token
-            <input id="set-maxTokens" type="number" min="1" max="128000" value="2048" />
-          </label>
-        </div>
-        <label class="check">
-          <input id="set-agentEnabled" type="checkbox" checked /> 启用 Agent（工具调用）
-        </label>
-        <label class="check danger">
-          <input id="set-dangerTools" type="checkbox" /> 启用高级工具（写文件 / 执行命令）— 有风险
-        </label>
+      <pre id="approval-args" class="approval-args"></pre>
+      <div class="approval-foot">
+        <label class="check tiny"><input id="approval-remember" type="checkbox" /> 本次会话内不再询问</label>
+        <div class="grow"></div>
+        <button id="approval-deny" class="btn-ghost">拒绝</button>
+        <button id="approval-allow" class="btn-primary">允许</button>
       </div>
-      <div class="modal-foot">
-        <button id="test-conn" class="ghost">测试连接</button>
-        <button id="save-settings" class="primary">保存</button>
-      </div>
-      <div id="settings-msg" class="muted small"></div>
     </div>
   </div>
+
+  <!-- 设置抽屉 -->
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="drawer">
+      <div class="drawer-head">
+        <h2>设置</h2>
+        <button id="close-settings" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="model" role="tab">模型</button>
+        <button class="tab" data-tab="power" role="tab">电脑权限</button>
+        <button class="tab" data-tab="advanced" role="tab">高级</button>
+      </div>
+
+      <div class="drawer-body">
+        <section class="tab-panel active" data-panel="model">
+          <p class="muted small">配置只保存在本机浏览器 (localStorage)，API Key 经本地服务转发给运营商，不会流向第三方。</p>
+          <label class="field">供应商
+            <select id="set-provider"></select>
+          </label>
+          <label class="field">Base URL
+            <input id="set-baseURL" type="text" placeholder="https://..." spellcheck="false" />
+          </label>
+          <label class="field">API Key
+            <input id="set-apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">模型名称
+            <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" />
+          </label>
+          <div class="field-row">
+            <label class="field">温度 <span id="temp-val" class="tag">0.7</span>
+              <input id="set-temperature" type="range" min="0" max="2" step="0.05" value="0.7" />
+            </label>
+            <label class="field">最大 Token
+              <input id="set-maxTokens" type="number" min="1" max="128000" value="2048" />
+            </label>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="power">
+          <p class="muted small">Agenite 的服务进程跑在你电脑上，所以它<b>确实能</b>读写文件、执行命令。下面决定它能走多远。</p>
+          <label class="switch-row">
+            <span><b>Agent 工具调用</b><em>关闭后就只是个普通聊天窗</em></span>
+            <input id="set-agentEnabled" type="checkbox" checked />
+          </label>
+          <label class="switch-row danger">
+            <span><b>电脑操作权限</b><em>允许写文件、执行命令、打开程序</em></span>
+            <input id="set-dangerTools" type="checkbox" />
+          </label>
+          <div class="field">
+            <span class="field-title">批准方式</span>
+            <div id="approval-modes" class="radio-list"></div>
+          </div>
+          <label class="switch-row">
+            <span><b>允许访问工作区之外</b><em>关闭时只能操作启动目录内的文件</em></span>
+            <input id="set-allowOutside" type="checkbox" />
+          </label>
+          <div class="ws-box">
+            <span class="field-title">当前工作区</span>
+            <code id="ws-path">—</code>
+            <span class="muted small">在其他目录执行 <code>node /path/to/agenite/server.js</code> 即可切换。</span>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="advanced">
+          <label class="field">系统提示词（可选）
+            <textarea id="set-systemPrompt" rows="6" placeholder="例如：回答尽量简洁，代码优先给可运行片段。"></textarea>
+          </label>
+          <div class="field">
+            <span class="field-title">数据</span>
+            <div class="btn-row">
+              <button id="export-data" class="btn-ghost">导出对话</button>
+              <button id="import-data" class="btn-ghost">导入对话</button>
+              <button id="reset-all" class="btn-ghost danger-text">清空全部数据</button>
+            </div>
+            <input id="import-file" type="file" accept="application/json" class="hidden" />
+          </div>
+        </section>
+      </div>
+
+      <div class="drawer-foot">
+        <span id="settings-msg" class="muted small"></span>
+        <div class="grow"></div>
+        <button id="test-conn" class="btn-ghost">测试连接</button>
+        <button id="save-settings" class="btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
 
   <script type="module" src="./src/app.js"></script>
 </body>

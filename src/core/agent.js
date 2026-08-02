@@ -4,13 +4,31 @@
 //
 // messages: mutable array of internal message objects (OpenAI-ish shape).
 // callModel(messages, { onDelta }) -> Promise<{ content, toolCalls, usage }>
+// toolContext: extra opts handed to executeTool (workspace, approval hook, ...)
 // onEvent(type, payload):
-//   'delta'   (text chunk, for streaming UI)
-//   'assistant' (full assistant message object)
-//   'tool'    ({ id, name, args, result, ok })
-//   'done'    ({ usage, stopped })
+//   'delta'      (text chunk, for streaming UI)
+//   'assistant'  (full assistant message object)
+//   'tool_start' ({ id, name, args })
+//   'tool'       ({ id, name, args, result, ok, ms })
+//   'done'       ({ usage, stopped })
 
-export async function runAgent({ messages, callModel, executeTool, onEvent = () => {}, config = {}, maxTurns = 8 }) {
+export async function runAgent({
+  messages,
+  callModel,
+  executeTool,
+  onEvent = () => {},
+  config = {},
+  toolContext = {},
+  maxTurns = 8
+}) {
+  const opts = {
+    dangerTools: config.dangerTools,
+    approvalMode: config.approvalMode,
+    workspace: config.workspace,
+    allowOutsideWorkspace: config.allowOutsideWorkspace,
+    ...toolContext
+  };
+
   for (let turn = 0; turn < maxTurns; turn++) {
     const { content, toolCalls, usage } = await callModel(messages, {
       onDelta: (t) => onEvent('delta', t)
@@ -28,18 +46,21 @@ export async function runAgent({ messages, callModel, executeTool, onEvent = () 
     onEvent('assistant', assistantMsg);
 
     if (!toolCalls || !toolCalls.length) {
-      onEvent('done', { usage, stopped: 'done' });
-      return { messages, stopped: 'done' };
+      onEvent('done', { usage, stopped: 'done', turns: turn + 1 });
+      return { messages, stopped: 'done', turns: turn + 1 };
     }
 
     for (const tc of toolCalls) {
-      const res = await executeTool(tc.name, tc.args || {}, { dangerTools: config.dangerTools });
+      onEvent('tool_start', { id: tc.id, name: tc.name, args: tc.args || {} });
+      const started = Date.now();
+      const res = await executeTool(tc.name, tc.args || {}, opts);
       onEvent('tool', {
         id: tc.id,
         name: tc.name,
         args: tc.args,
         result: res.ok ? res.content : res.error,
-        ok: res.ok
+        ok: res.ok,
+        ms: Date.now() - started
       });
       messages.push({
         role: 'tool',
@@ -49,6 +70,6 @@ export async function runAgent({ messages, callModel, executeTool, onEvent = () 
       });
     }
   }
-  onEvent('done', { stopped: 'max_turns' });
-  return { messages, stopped: 'max_turns' };
+  onEvent('done', { stopped: 'max_turns', turns: maxTurns });
+  return { messages, stopped: 'max_turns', turns: maxTurns };
 }

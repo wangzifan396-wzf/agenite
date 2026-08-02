@@ -83,6 +83,16 @@ export const PROVIDER_PRESETS = [
   }
 ];
 
+// How the agent asks for permission before touching the machine.
+// - 'ask'  : every write / command needs a human click (default, safest useful mode)
+// - 'auto' : no prompts — the agent acts on its own inside the workspace
+// - 'deny' : refuse every dangerous tool outright (read-only agent)
+export const APPROVAL_MODES = [
+  { id: 'ask', label: '每次询问', hint: '写文件 / 执行命令前弹窗确认（推荐）' },
+  { id: 'auto', label: '自动放行', hint: '沙箱内不再询问，速度快但风险自负' },
+  { id: 'deny', label: '只读模式', hint: '拒绝一切写入与命令执行' }
+];
+
 export function defaultConfig() {
   return {
     provider: 'deepseek',
@@ -94,7 +104,14 @@ export function defaultConfig() {
     maxTokens: 2048,
     topP: 1,
     agentEnabled: true,
-    dangerTools: false
+    dangerTools: false,
+    // --- machine control ---
+    approvalMode: 'ask',
+    // Empty means "the folder Agenite was started from"; the server fills it in.
+    workspace: '',
+    // Escape hatch: allow the agent outside the workspace root. Off by default.
+    allowOutsideWorkspace: false,
+    systemPrompt: ''
   };
 }
 
@@ -113,6 +130,10 @@ export function normalizeConfig(input = {}) {
   cfg.topP = clampNum(cfg.topP, 0, 1, 1);
   cfg.agentEnabled = !!cfg.agentEnabled;
   cfg.dangerTools = !!cfg.dangerTools;
+  cfg.allowOutsideWorkspace = !!cfg.allowOutsideWorkspace;
+  if (!APPROVAL_MODES.some((m) => m.id === cfg.approvalMode)) cfg.approvalMode = 'ask';
+  cfg.workspace = typeof cfg.workspace === 'string' ? cfg.workspace.trim() : '';
+  cfg.systemPrompt = typeof cfg.systemPrompt === 'string' ? cfg.systemPrompt : '';
   return cfg;
 }
 
