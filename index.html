@@ -207,8 +207,16 @@
             <input id="set-apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
           </label>
           <label class="field">模型名称
-            <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" />
+            <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" list="ollama-models" />
           </label>
+          <div id="ollama-box" class="hidden">
+            <div class="btn-row">
+              <button id="ollama-refresh" class="btn-ghost" type="button">🔄 刷新本地模型</button>
+              <span id="ollama-hint" class="tag green">本地模型 · 零成本 · 数据不出本机</span>
+            </div>
+            <datalist id="ollama-models"></datalist>
+            <p class="muted small">选 Ollama 后点刷新，会自动列出本机已拉取的模型；运行 <code>ollama pull llama3.1</code> 下载更多。API Key 可留空。</p>
+          </div>
           <div class="field-row">
             <label class="field">温度 <span id="temp-val" class="tag">0.7</span>
               <input id="set-temperature" type="range" min="0" max="2" step="0.05" value="0.7" />
@@ -240,6 +248,10 @@
           <label class="switch-row">
             <span><b>MCP 只读工具免确认</b><em>截图、读取、查询这类不改动系统的调用直接放行</em></span>
             <input id="set-mcpReadonly" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span><b>长期记忆</b><em>跨会话记住你的偏好与项目，写入 ~/.agenite/memory（可用 memory_* 工具读写）</em></span>
+            <input id="set-memoryEnabled" type="checkbox" checked />
           </label>
           <div class="field">
             <span class="field-title">工具白名单<em class="muted small">（审批弹窗里点"始终允许"会加到这里）</em></span>

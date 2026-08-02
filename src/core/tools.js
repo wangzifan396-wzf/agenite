@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { resolve, sep, join, relative } from 'node:path';
 import os from 'node:os';
 import { sanitizeUrl } from './util.js';
+import { recall as memRecall, saveMemory, logDaily } from './memory.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -51,6 +52,19 @@ export const TOOL_DEFS = [
         max_chars: { type: 'number', description: 'Optional max characters to return (default 8000).' }
       },
       required: ['url']
+    },
+    danger: false
+  },
+  {
+    name: 'web_search',
+    description: 'Search the public web (DuckDuckGo, no API key needed) and return the top result titles, URLs and snippets. Use this to look up current information, facts, docs or recent news before answering.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query, e.g. "node child_process spawn options".' },
+        limit: { type: 'number', description: 'Max results to return (default 6).' }
+      },
+      required: ['query']
     },
     danger: false
   },
@@ -178,6 +192,59 @@ export const TOOL_DEFS = [
       required: ['patch']
     },
     danger: true
+  },
+  {
+    name: 'memory_recall',
+    description: "Search the agent's long-term memory (file-based, persists across sessions) for facts about the user, projects, preferences or past decisions. Query with keywords.",
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keywords to search, e.g. "preferred language" or "project decision".' },
+        limit: { type: 'number', description: 'Max hits (default 12).' }
+      },
+      required: ['query']
+    },
+    danger: false
+  },
+  {
+    name: 'memory_save',
+    description: 'Save a durable fact to long-term memory so it survives future sessions. Use it to remember user preferences, project context, or decisions. Category groups related facts (e.g. "Preferences", "Projects", "Decisions").',
+    parameters: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: 'Section name, e.g. "Preferences".' },
+        key: { type: 'string', description: 'Short identifier for the fact.' },
+        value: { type: 'string', description: 'The fact to remember.' }
+      },
+      required: ['category', 'key', 'value']
+    },
+    danger: false
+  },
+  {
+    name: 'memory_log',
+    description: "Append a dated note to today's memory log. Use it to record progress, what was tried, or open questions for next time.",
+    parameters: {
+      type: 'object',
+      properties: {
+        section: { type: 'string', description: 'Short heading, e.g. "Progress" or "Blockers".' },
+        content: { type: 'string', description: 'The note to record.' }
+      },
+      required: ['section', 'content']
+    },
+    danger: false
+  },
+  {
+    name: 'plan',
+    description: 'Record a structured, inspectable plan as a numbered list of steps. Call this (especially in plan mode) before doing the work so the human can review the approach. Steps are surfaced in the UI as a checklist.',
+    parameters: {
+      type: 'object',
+      properties: {
+        steps: { type: 'array', items: { type: 'string' }, description: 'Ordered plan steps, e.g. ["Read config.js", "Add the endpoint", "Test it"].' },
+        text: { type: 'string', description: 'Optional free-form plan text if you prefer not to use steps.' }
+      },
+      required: []
+    },
+    danger: false
   }
 ];
 
@@ -283,6 +350,16 @@ async function dispatch(name, args, opts) {
         return grepFiles(args, opts);
       case 'apply_patch':
         return applyPatchTool(args, opts);
+      case 'web_search':
+        return webSearch(args, opts);
+      case 'memory_recall':
+        return memoryRecall(args, opts);
+      case 'memory_save':
+        return memorySave(args, opts);
+      case 'memory_log':
+        return memoryLog(args, opts);
+      case 'plan':
+        return planTool(args, opts);
     default:
       return { ok: false, error: `未实现的工具: ${name}` };
   }
@@ -756,6 +833,98 @@ export async function applyPatchTool(args, opts = {}) {
   }
   if (!results.length) return { ok: false, error: '没有可应用的文件块。' };
   return { ok: true, content: `已应用补丁：\n\n` + results.join('\n\n'), diff: results.join('\n'), undoToken: null };
+}
+
+// ---- web search (DuckDuckGo HTML, no API key) ----
+
+function decodeEntities(s) {
+  return String(s)
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&#x27;/g, "'").replace(/&#x2F;/g, '/');
+}
+
+function stripHtml(s) {
+  return decodeEntities(String(s).replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+}
+
+// DDG result links go through a redirect (?uddg=<target>); pull the real URL.
+function extractUrl(href) {
+  try {
+    const u = new URL(href, 'https://duckduckgo.com');
+    const uddg = u.searchParams.get('uddg');
+    if (uddg) return decodeURIComponent(uddg);
+  } catch { /* not a redirect */ }
+  return href;
+}
+
+function parseDdg(html) {
+  const out = [];
+  const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) && out.length < 12) {
+    const url = extractUrl(m[1]);
+    const title = stripHtml(m[2]);
+    const snippet = stripHtml(m[3]);
+    if (title) out.push({ title, url, snippet });
+  }
+  return out;
+}
+
+async function webSearch(args, opts = {}) {
+  const q = String(args.query || '').trim();
+  if (!q) return { ok: false, error: 'query 不能为空' };
+  const url = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q);
+  const fetchImpl = opts.fetchImpl || globalThis.fetch;
+  if (!fetchImpl) return { ok: false, error: '运行环境不支持 fetch' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetchImpl(url, {
+      signal: ctrl.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml'
+      }
+    });
+    if (!res.ok) return { ok: false, error: `搜索请求失败 HTTP ${res.status}` };
+    const html = await res.text();
+    const results = parseDdg(html).slice(0, Math.min(Number(args.limit) || 6, 12));
+    if (!results.length) {
+      return { ok: true, content: `没有找到与「${q}」相关的结果（搜索引擎可能临时拦截了请求，可改用 web_fetch 直接抓取已知页面）。` };
+    }
+    const body = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join('\n\n');
+    return { ok: true, content: `关于「${q}」的搜索结果：\n\n${body}` };
+  } catch (e) {
+    return { ok: false, error: '搜索失败: ' + (e && e.message ? e.message : e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---- long-term memory tools (writes are confined to the agent's memory dir) ----
+
+async function memoryRecall(args, opts = {}) {
+  if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
+  return memRecall(opts.memoryBase, args.query, { limit: Number(args.limit) || 12 });
+}
+
+async function memorySave(args, opts = {}) {
+  if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
+  return saveMemory(opts.memoryBase, args.category || 'General', args.key, args.value);
+}
+
+async function memoryLog(args, opts = {}) {
+  if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
+  return logDaily(opts.memoryBase, args.section || 'Notes', args.content);
+}
+
+async function planTool(args, opts = {}) {
+  const steps = Array.isArray(args.steps) ? args.steps.map(String).filter(Boolean) : [];
+  const text = typeof args.text === 'string' ? args.text.trim() : '';
+  if (!steps.length && !text) return { ok: false, error: '请提供 steps 或 text' };
+  const lines = steps.length ? steps.map((s, i) => `${i + 1}. ${s}`).join('\n') : text;
+  return { ok: true, content: `已记录计划：\n${lines}` };
 }
 
 // Flat index of the workspace, used by the UI's "@" file picker.

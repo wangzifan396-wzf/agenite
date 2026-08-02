@@ -953,6 +953,15 @@ kbd {
   padding: 0 6px;
   border-radius: 5px;
 }
+.tag.green { color: #0a7d3c; background: #e3f6ea; }
+:root.dark .tag.green { color: #58d68d; background: #11331f; }
+
+#ollama-box { margin-top: 6px; }
+#ollama-box .muted.small { margin-top: 6px; }
+.plan-list { margin-top: 8px; }
+.plan-list ol { margin: 4px 0 0; padding-left: 20px; }
+.plan-list li { margin: 2px 0; line-height: 1.4; }
+.plan-list b { margin-bottom: 2px !important; }
 
 .switch-row {
   display: flex;

@@ -190,9 +190,36 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 
 换浏览器或清缓存后，设置里点「从本机恢复」即可把历史会话拉回（新浏览器无本地数据时也会静默尝试恢复）。
 
+## 8.5 长期记忆 / 联网搜索 / 本地模型（v0.7.0）
+
+这一版把 Agenite 从「能聊能干活」推向「记得你、会研究、跑本地」——直接对标 2026 年通用智能体竞争报告里的「工作台与记忆」「环境控制能力」两个维度。
+
+### 8.5.1 长期记忆（文件式，零依赖）
+
+位于 `src/core/memory.js`（仅服务端）。记忆全部落在 `~/.agenite/memory/` 这一个专属目录，**刻意与用户的项目文件隔离**——agent 只能往自己的「厨房」写，绝不会碰到你的代码。
+
+- `MEMORY.md`：策展式长期知识，按 `## 分类` 组织（偏好 / 项目 / 决策 / 人物…）；`memory_save` 写入时按 `key` 去重更新；
+- `YYYY-MM-DD.md`：每日日志，`memory_log` 追加当日进展；
+- `injectMemory()`：每次请求开始时读取 `MEMORY.md`，截断后注入系统提示词，让模型「默认就知道你是谁、项目在干嘛」；
+- `recall()`：跨 `MEMORY.md` + 最近 7 天日志做关键词检索，供 `memory_recall` 工具调用；
+- 三个工具：`memory_recall`（检索）、`memory_save`（存事实）、`memory_log`（记今日），均为 `danger:false`（只写记忆目录）；
+- 可在「⚙ 工作区 / 权限」关闭「长期记忆」，关闭后工具列表与系统提示词都不再包含记忆相关项。
+
+### 8.5.2 联网搜索 `web_search`（免 key）
+
+位于 `tools.js` 的 `webSearch()`。免 API key，走 DuckDuckGo 的 HTML 端点（`https://html.duckduckgo.com/html/?q=`），解析 `result__a` / `result__snippet` 并还原 `uddg` 重定向真实链接，返回 Top N 标题 / URL / 摘要。`danger:false`，超时 15s 容错，搜不到时友好提示改用 `web_fetch` 直抓。这让 Agent 能主动调研，对标 Web Agent。
+
+### 8.5.3 本地模型 Ollama（零成本护城河）
+
+配置里本就有 `ollama` 预设（`baseURL: http://localhost:11434/v1`，`validateConfig` 允许空 key）；本版新增：
+
+- `GET /api/ollama/models`：抓本机 `http://localhost:11434/api/tags`，列出已 `ollama pull` 的模型，4s 超时容错（Ollama 没装时返回 `{running:false, models:[]}`）；
+- 前端 Provider 选 Ollama 时出现「🔄 刷新本地模型」按钮，自动填充 `<datalist>` 供模型名下拉，并显示「本地模型 · 零成本 · 数据不出本机」标识；
+- 配合内置的零依赖 OpenAI 兼容调用路径，本地模型可直接用工具调用（取决于模型本身的支持度）。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `util`）无 DOM，**150 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话各有独立测试文件）。
-- **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API）。
-- **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `util`）无 DOM，**159 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索各有独立测试文件）。
+- **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
+- **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

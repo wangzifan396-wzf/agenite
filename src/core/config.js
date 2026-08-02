@@ -105,6 +105,7 @@ export function defaultConfig() {
     topP: 1,
     agentEnabled: true,
     planMode: false,
+    memoryEnabled: true,
     dangerTools: false,
     // --- machine control ---
     approvalMode: 'ask',

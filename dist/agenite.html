@@ -962,6 +962,15 @@ kbd {
   padding: 0 6px;
   border-radius: 5px;
 }
+.tag.green { color: #0a7d3c; background: #e3f6ea; }
+:root.dark .tag.green { color: #58d68d; background: #11331f; }
+
+#ollama-box { margin-top: 6px; }
+#ollama-box .muted.small { margin-top: 6px; }
+.plan-list { margin-top: 8px; }
+.plan-list ol { margin: 4px 0 0; padding-left: 20px; }
+.plan-list li { margin: 2px 0; line-height: 1.4; }
+.plan-list b { margin-bottom: 2px !important; }
 
 .switch-row {
   display: flex;
@@ -1464,8 +1473,16 @@ kbd {
             <input id="set-apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
           </label>
           <label class="field">模型名称
-            <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" />
+            <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" list="ollama-models" />
           </label>
+          <div id="ollama-box" class="hidden">
+            <div class="btn-row">
+              <button id="ollama-refresh" class="btn-ghost" type="button">🔄 刷新本地模型</button>
+              <span id="ollama-hint" class="tag green">本地模型 · 零成本 · 数据不出本机</span>
+            </div>
+            <datalist id="ollama-models"></datalist>
+            <p class="muted small">选 Ollama 后点刷新，会自动列出本机已拉取的模型；运行 <code>ollama pull llama3.1</code> 下载更多。API Key 可留空。</p>
+          </div>
           <div class="field-row">
             <label class="field">温度 <span id="temp-val" class="tag">0.7</span>
               <input id="set-temperature" type="range" min="0" max="2" step="0.05" value="0.7" />
@@ -1497,6 +1514,10 @@ kbd {
           <label class="switch-row">
             <span><b>MCP 只读工具免确认</b><em>截图、读取、查询这类不改动系统的调用直接放行</em></span>
             <input id="set-mcpReadonly" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span><b>长期记忆</b><em>跨会话记住你的偏好与项目，写入 ~/.agenite/memory（可用 memory_* 工具读写）</em></span>
+            <input id="set-memoryEnabled" type="checkbox" checked />
           </label>
           <div class="field">
             <span class="field-title">工具白名单<em class="muted small">（审批弹窗里点"始终允许"会加到这里）</em></span>
@@ -2032,6 +2053,7 @@ function defaultConfig() {
     topP: 1,
     agentEnabled: true,
     planMode: false,
+    memoryEnabled: true,
     dangerTools: false,
     // --- machine control ---
     approvalMode: 'ask',
@@ -2638,6 +2660,23 @@ function upsertToolCard(el, t) {
       diffWrap.querySelector('.t-diff').textContent = String(t.diff);
     }
   }
+  // The `plan` tool records an inspectable, numbered plan — surface it as a
+  // checklist so the human can review the approach before approving execution.
+  if (t.name === 'plan' && t.args) {
+    let pw = card.querySelector('.plan-list');
+    if (!pw) {
+      pw = document.createElement('div');
+      pw.className = 'plan-list';
+      card.querySelector('.tool-body').appendChild(pw);
+    }
+    const steps = Array.isArray(t.args.steps) ? t.args.steps : [];
+    const text = typeof t.args.text === 'string' ? t.args.text : '';
+    if (steps.length) {
+      pw.innerHTML = '<b>计划</b><ol>' + steps.map((s) => `<li>${escapeHtml(String(s))}</li>`).join('') + '</ol>';
+    } else if (text) {
+      pw.innerHTML = '<b>计划</b><pre class="t-res">' + escapeHtml(text) + '</pre>';
+    }
+  }
   return card;
 }
 
@@ -3142,6 +3181,7 @@ function fillSettings() {
   $('set-allowOutside').checked = !!config.allowOutsideWorkspace;
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
+  $('set-memoryEnabled').checked = config.memoryEnabled !== false;
   $('set-autoCompact').checked = config.autoCompact !== false;
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
@@ -3172,6 +3212,7 @@ async function refreshSessionsInfo() {
 function openSettings(tab) {
   populateProviders();
   fillSettings();
+  syncOllamaUi();
   if (tab) switchTab(tab);
   $('settings-modal').classList.remove('hidden');
   $('settings-msg').textContent = '';
@@ -3191,6 +3232,37 @@ function onProviderChange() {
   if (preset.baseURL) $('set-baseURL').value = preset.baseURL;
   if (preset.defaultModel) $('set-model').value = preset.defaultModel;
   $('set-apiKey').placeholder = preset.apiKeyPlaceholder || 'your-api-key';
+  syncOllamaUi();
+}
+
+// When the provider is Ollama, reveal the local-model picker and populate it
+// from the running Ollama daemon. No-op (and hidden) for cloud providers.
+function syncOllamaUi() {
+  const isOllama = $('set-provider').value === 'ollama';
+  $('ollama-box').classList.toggle('hidden', !isOllama);
+  if (isOllama) refreshOllamaModels();
+}
+
+async function refreshOllamaModels() {
+  const hint = $('ollama-hint');
+  const box = $('ollama-models');
+  if (!box) return;
+  hint.textContent = '正在探测本地 Ollama…';
+  hint.classList.remove('green');
+  try {
+    const r = await fetch('/api/ollama/models');
+    const j = await r.json();
+    if (j.running && Array.isArray(j.models) && j.models.length) {
+      box.innerHTML = j.models.map((m) => `<option value="${escapeHtml(m)}">`).join('');
+      if (!($('set-model').value || '').trim()) $('set-model').value = j.models[0];
+      hint.textContent = `本地模型 · 零成本 · 已发现 ${j.models.length} 个`;
+      hint.classList.add('green');
+    } else {
+      hint.textContent = '未检测到 Ollama（先运行 ollama serve 并 pull 模型）';
+    }
+  } catch {
+    hint.textContent = '未检测到 Ollama 服务';
+  }
 }
 
 function saveSettings() {
@@ -3209,6 +3281,7 @@ function saveSettings() {
     allowOutsideWorkspace: $('set-allowOutside').checked,
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
+    memoryEnabled: $('set-memoryEnabled').checked,
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
@@ -3577,6 +3650,7 @@ function wire() {
   $('save-settings').onclick = saveSettings;
   $('test-conn').onclick = testConnection;
   $('set-provider').onchange = onProviderChange;
+  $('ollama-refresh').onclick = refreshOllamaModels;
   $('set-temperature').oninput = (e) => { $('temp-val').textContent = e.target.value; };
   $('theme-toggle').onclick = toggleTheme;
   $('perm-chip').onclick = cyclePerm;

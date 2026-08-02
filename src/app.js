@@ -507,6 +507,23 @@ function upsertToolCard(el, t) {
       diffWrap.querySelector('.t-diff').textContent = String(t.diff);
     }
   }
+  // The `plan` tool records an inspectable, numbered plan — surface it as a
+  // checklist so the human can review the approach before approving execution.
+  if (t.name === 'plan' && t.args) {
+    let pw = card.querySelector('.plan-list');
+    if (!pw) {
+      pw = document.createElement('div');
+      pw.className = 'plan-list';
+      card.querySelector('.tool-body').appendChild(pw);
+    }
+    const steps = Array.isArray(t.args.steps) ? t.args.steps : [];
+    const text = typeof t.args.text === 'string' ? t.args.text : '';
+    if (steps.length) {
+      pw.innerHTML = '<b>计划</b><ol>' + steps.map((s) => `<li>${escapeHtml(String(s))}</li>`).join('') + '</ol>';
+    } else if (text) {
+      pw.innerHTML = '<b>计划</b><pre class="t-res">' + escapeHtml(text) + '</pre>';
+    }
+  }
   return card;
 }
 
@@ -1011,6 +1028,7 @@ function fillSettings() {
   $('set-allowOutside').checked = !!config.allowOutsideWorkspace;
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
+  $('set-memoryEnabled').checked = config.memoryEnabled !== false;
   $('set-autoCompact').checked = config.autoCompact !== false;
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
@@ -1041,6 +1059,7 @@ async function refreshSessionsInfo() {
 function openSettings(tab) {
   populateProviders();
   fillSettings();
+  syncOllamaUi();
   if (tab) switchTab(tab);
   $('settings-modal').classList.remove('hidden');
   $('settings-msg').textContent = '';
@@ -1060,6 +1079,37 @@ function onProviderChange() {
   if (preset.baseURL) $('set-baseURL').value = preset.baseURL;
   if (preset.defaultModel) $('set-model').value = preset.defaultModel;
   $('set-apiKey').placeholder = preset.apiKeyPlaceholder || 'your-api-key';
+  syncOllamaUi();
+}
+
+// When the provider is Ollama, reveal the local-model picker and populate it
+// from the running Ollama daemon. No-op (and hidden) for cloud providers.
+function syncOllamaUi() {
+  const isOllama = $('set-provider').value === 'ollama';
+  $('ollama-box').classList.toggle('hidden', !isOllama);
+  if (isOllama) refreshOllamaModels();
+}
+
+async function refreshOllamaModels() {
+  const hint = $('ollama-hint');
+  const box = $('ollama-models');
+  if (!box) return;
+  hint.textContent = '正在探测本地 Ollama…';
+  hint.classList.remove('green');
+  try {
+    const r = await fetch('/api/ollama/models');
+    const j = await r.json();
+    if (j.running && Array.isArray(j.models) && j.models.length) {
+      box.innerHTML = j.models.map((m) => `<option value="${escapeHtml(m)}">`).join('');
+      if (!($('set-model').value || '').trim()) $('set-model').value = j.models[0];
+      hint.textContent = `本地模型 · 零成本 · 已发现 ${j.models.length} 个`;
+      hint.classList.add('green');
+    } else {
+      hint.textContent = '未检测到 Ollama（先运行 ollama serve 并 pull 模型）';
+    }
+  } catch {
+    hint.textContent = '未检测到 Ollama 服务';
+  }
 }
 
 function saveSettings() {
@@ -1078,6 +1128,7 @@ function saveSettings() {
     allowOutsideWorkspace: $('set-allowOutside').checked,
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
+    memoryEnabled: $('set-memoryEnabled').checked,
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
@@ -1446,6 +1497,7 @@ function wire() {
   $('save-settings').onclick = saveSettings;
   $('test-conn').onclick = testConnection;
   $('set-provider').onchange = onProviderChange;
+  $('ollama-refresh').onclick = refreshOllamaModels;
   $('set-temperature').oninput = (e) => { $('temp-val').textContent = e.target.value; };
   $('theme-toggle').onclick = toggleTheme;
   $('perm-chip').onclick = cyclePerm;

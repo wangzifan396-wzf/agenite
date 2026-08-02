@@ -18,12 +18,16 @@ import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } from './src/core/sessions.js';
+import { defaultMemoryDir, injectMemory } from './src/core/memory.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
 // The machine root the agent is allowed to touch. Defaults to where you ran it.
 const WORKSPACE = resolve(process.env.AGENITE_WORKSPACE || process.cwd());
+// Long-term memory lives in its own directory so the agent can never touch the
+// user's files by "remembering" something — it only writes to its own kitchen.
+const MEMORY_DIR = defaultMemoryDir();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -103,6 +107,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/mcp/import') return handleMcpImport(req, res);
   if (url === '/api/sessions' || url.startsWith('/api/sessions/')) return handleSessions(req, res, url);
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
+  if (req.method === 'GET' && url === '/api/ollama/models') return handleOllamaModels(req, res);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -270,7 +275,29 @@ async function handleFiles(req, res) {
   }
 }
 
-function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0) {
+// List models Ollama has already pulled locally (so the user can pick from a
+// dropdown instead of guessing names). Fails gracefully when Ollama isn't up.
+async function fetchOllamaModels() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch('http://localhost:11434/api/tags', { signal: ctrl.signal });
+    if (!res.ok) return { running: false, models: [] };
+    const data = await res.json().catch(() => ({ models: [] }));
+    const models = Array.isArray(data.models) ? data.models.map((m) => m.name).filter(Boolean) : [];
+    return { running: true, models };
+  } catch {
+    return { running: false, models: [] };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleOllamaModels(req, res) {
+  return sendJson(res, 200, await fetchOllamaModels());
+}
+
+function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '') {
   const extra = (config.systemPrompt || '').trim();
   const base = [
     'You are Agenite, a capable local AI agent running on the user\'s own computer.',
@@ -293,6 +320,7 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0) {
       '这些工具来自外部服务，可让你控制浏览器、桌面、数据库等——需要动机器时优先调用它们。'
     );
   }
+  if (memory) base.push(memory);
   const text = base.join(' ');
   return extra ? text + '\n\n' + extra : text;
 }
@@ -325,6 +353,12 @@ async function handleChat(req, res) {
     console.warn('[mcp] reconcile failed:', e.message);
   }
   const tools = agentEnabled ? [...activeTools(config), ...mcpTools] : [];
+  // Memory tools only make sense when long-term memory is enabled.
+  if (config.memoryEnabled === false) {
+    for (let i = tools.length - 1; i >= 0; i--) {
+      if (tools[i].name && tools[i].name.startsWith('memory_')) tools.splice(i, 1);
+    }
+  }
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -381,8 +415,9 @@ async function handleChat(req, res) {
   // Prepend a system prompt so the model knows it can act on this machine.
   const incoming = Array.isArray(body.messages) ? body.messages.slice() : [];
   const hasSystem = incoming.some((m) => m.role === 'system');
-  const planning = !!body.planning && agentEnabled;
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length) }, ...incoming];
+  const planning = !!(config.planMode || body.planning) && agentEnabled;
+  const memoryBlock = config.memoryEnabled !== false ? await injectMemory(MEMORY_DIR) : '';
+  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock) }, ...incoming];
 
   const callModel = (msgs, { onDelta }) =>
     callModelStream({ config, messages: msgs, tools, onDelta, signal: ac.signal });
@@ -464,7 +499,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR }
     });
     sse('end', { stopped: result.stopped, turns: result.turns, historyTokens: totalTokens(messages), budget });
     res.end();
