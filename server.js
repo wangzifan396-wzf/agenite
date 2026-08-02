@@ -14,6 +14,7 @@ import { normalizeConfig, validateConfig, PROVIDER_PRESETS, APPROVAL_MODES } fro
 import { runAgent } from './src/core/agent.js';
 import { callModelStream } from './src/core/client.js';
 import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
+import { McpManager } from './src/core/mcp.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -43,11 +44,19 @@ const pendingApprovals = new Map();
 const undoStore = new Map();
 setUndoStore(undoStore);
 
+// MCP client: connects to external tool servers (browser/desktop control,
+// databases, GitHub, file systems…) so the model can actually act on the
+// machine and the wider world. This is what makes Agenite a real agent.
+const mcp = new McpManager();
+
 const server = http.createServer((req, res) => {
   const url = (req.url || '/').split('?')[0];
   if (req.method === 'POST' && url === '/api/chat') return handleChat(req, res);
   if (req.method === 'POST' && url === '/api/approve') return handleApprove(req, res);
   if (req.method === 'POST' && url === '/api/undo') return handleUndo(req, res);
+  if (req.method === 'GET' && url === '/api/mcp/status') return sendJson(res, 200, { ok: true, servers: mcp.status() });
+  if (req.method === 'POST' && url === '/api/mcp/servers') return handleMcpServers(req, res);
+  if (req.method === 'POST' && url === '/api/mcp/disconnect') return handleMcpDisconnect(req, res);
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, { ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES });
@@ -116,6 +125,29 @@ async function handleUndo(req, res) {
   }
 }
 
+// The settings UI pushes the desired MCP server list here; we connect/disconnect
+// to make reality match it, then return the live status + tool inventory.
+async function handleMcpServers(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const servers = Array.isArray(body.servers) ? body.servers : [];
+    const status = await mcp.reconcile(servers);
+    return sendJson(res, 200, { ok: true, servers: status });
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, error: e.message });
+  }
+}
+
+async function handleMcpDisconnect(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    await mcp.disconnect(body.id);
+    return sendJson(res, 200, { ok: true, servers: mcp.status() });
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, error: e.message });
+  }
+}
+
 // Client answers an approval request here.
 async function handleApprove(req, res) {
   try {
@@ -145,7 +177,7 @@ async function handleFiles(req, res) {
   }
 }
 
-function buildSystemPrompt(config, workspace, planning = false) {
+function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0) {
   const extra = (config.systemPrompt || '').trim();
   const base = [
     'You are Agenite, a capable local AI agent running on the user\'s own computer.',
@@ -160,6 +192,12 @@ function buildSystemPrompt(config, workspace, planning = false) {
       'PLAN MODE: First, think through the task and respond with a clear, step-by-step PLAN only. ' +
       'Do NOT call any tools yet. Use a numbered list and mention which tools/files you expect to touch. ' +
       'After the user approves the plan, you will be asked to execute it.'
+    );
+  }
+  if (mcpCount > 0) {
+    base.push(
+      `已连接 ${mcpCount} 个 MCP 工具服务器（工具名以 mcp__ 开头，例如 mcp__server__tool）。` +
+      '这些工具来自外部服务，可让你控制浏览器、桌面、数据库等——需要动机器时优先调用它们。'
     );
   }
   const text = base.join(' ');
@@ -181,7 +219,19 @@ async function handleChat(req, res) {
   }
 
   const agentEnabled = body.agentEnabled !== false && config.agentEnabled;
-  const tools = agentEnabled ? activeTools(config) : [];
+
+  // Connect / disconnect MCP servers the client asked for, then merge their
+  // tools into what the model can call. Reconcile is idempotent, so already
+  // connected servers are reused instead of re-spawning on every message.
+  const mcpServers = Array.isArray(body.mcpServers) ? body.mcpServers : [];
+  let mcpTools = [];
+  try {
+    await mcp.reconcile(mcpServers);
+    mcpTools = mcp.listToolDefs();
+  } catch (e) {
+    console.warn('[mcp] reconcile failed:', e.message);
+  }
+  const tools = agentEnabled ? [...activeTools(config), ...mcpTools] : [];
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -199,13 +249,13 @@ async function handleChat(req, res) {
   let closed = false;
   req.on('close', () => { closed = true; ac.abort(); for (const e of pendingApprovals.values()) e.resolve({ approved: false, reason: '连接已关闭' }); });
 
-  sse('start', { model: config.model, provider: config.provider, agent: agentEnabled, toolCount: tools.length, workspace: WORKSPACE });
+  sse('start', { model: config.model, provider: config.provider, agent: agentEnabled, toolCount: tools.length, mcp: mcpTools.length, workspace: WORKSPACE });
 
   // Prepend a system prompt so the model knows it can act on this machine.
   const incoming = Array.isArray(body.messages) ? body.messages.slice() : [];
   const hasSystem = incoming.some((m) => m.role === 'system');
   const planning = !!body.planning && agentEnabled;
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning) }, ...incoming];
+  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length) }, ...incoming];
 
   const callModel = (msgs, { onDelta }) =>
     callModelStream({ config, messages: msgs, tools, onDelta, signal: ac.signal });
@@ -228,11 +278,20 @@ async function handleChat(req, res) {
     else if (type === 'done') sse('done', payload);
   };
 
+  // Route MCP tool calls (names start with mcp__) to the MCP manager, which
+  // applies the same approval gate. Everything else goes to the built-ins.
+  const executeToolWithMcp = (name, args, o) => {
+    if (name.startsWith('mcp__')) {
+      return mcp.callToolByName(name, args, { ...o, approvalMode: config.approvalMode, requestApproval });
+    }
+    return executeTool(name, args, o);
+  };
+
   try {
     await runAgent({
       messages,
       callModel,
-      executeTool,
+      executeTool: executeToolWithMcp,
       onEvent,
       config,
       toolContext: { requestApproval, platform: process.platform },

@@ -11,7 +11,12 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 ## ✨ Features
 
 - **Multi-model / multi-provider**: OpenAI, DeepSeek, Qwen, Moonshot (Kimi), Zhipu (GLM), Groq, Ollama (local), OpenRouter, any OpenAI-compatible endpoint, plus Anthropic (Claude).
-- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 14 built-in tools:
+- **MCP tool ecosystem (new in v0.5.0)**: a built-in **MCP (Model Context Protocol) client** connects to any MCP server over stdio, turning the whole open-source tool ecosystem into callable tools — **browser automation, desktop/computer control, databases, GitHub** and more. One click in Settings → MCP:
+  - 🌐 **Browser control** — Playwright MCP (`npx -y @playwright/mcp@latest`)
+  - 🖥️ **Desktop control** — windows-computer-use-mcp (click, type, screenshot)
+  - ✋ **Desktop + browser** — ScreenHand
+  - Or add any server manually with `command` / `args` / `env`. MCP tools appear as `mcp__<server>__<tool>` and go through **the same approval gate** as built-in danger tools.
+- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 14 built-in tools (plus whatever MCP servers you connect):
   - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents)
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `apply_patch` (multi-file unified diff)
 - **Plan Mode** — toggle `Plan` in the header: the agent first returns a step-by-step plan and waits for your **批准并执行** before touching anything. Ideal for risky or multi-step tasks.
@@ -44,7 +49,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (86, via node:test)
+npm test       # run core unit tests (95, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port
@@ -60,7 +65,8 @@ build.js         # inline bundler -> dist/agenite.html
 src/app.js       # browser controller
 src/core/        # pure logic, DOM-free, Node-testable
   config / markdown / provider / client / tools / agent / util
-test/            # node:test unit tests
+  mcp.js         # MCP client: stdio transport, multi-server manager (server-side only)
+test/            # node:test unit tests (+ mcp-mock-server.mjs)
 ```
 
 **Flow**: `app.js` → `POST /api/chat` (history + config) → `server.js` runs `runAgent` → calls model (SSE) → if the model requests tools, the server executes them → feeds results back → loops to final answer → streams `start`/`delta`/`tool`/`done`/`end` events to the UI.
@@ -72,6 +78,7 @@ test/            # node:test unit tests
 - API keys live only in your browser `localStorage` and are forwarded by the local proxy — never uploaded elsewhere.
 - `write_file` / `edit_file` / `make_dir` / `run_command` / `open_path` are **danger tools**, off by default, enabled only via the "高级工具" setting and gated by the approval mode (`ask` / `auto` / `deny`).
 - **Workspace sandbox**: every file path is resolved and pinned under a root directory; an escape hatch (`allowOutsideWorkspace`) is off by default.
+- **MCP servers are local child processes**: connecting one spawns a process on your machine, and its reach is whatever that server implements (desktop-control servers can move your mouse and type). Only connect servers you trust — MCP calls are gated by the same `ask` / `auto` / `deny` approval mode, and `ask` (the default) prompts on every call.
 - All Markdown is HTML-escaped; links are filtered against `javascript:` / `data:` schemes.
 
 ## 📄 License

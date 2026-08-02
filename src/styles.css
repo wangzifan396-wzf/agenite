@@ -1143,6 +1143,38 @@ kbd {
   #perm-chip span:last-child { display: none; }
 }
 
+/* ---------- MCP tool servers ---------- */
+#mcp-chip.on { background: color-mix(in srgb, #2f9e44 18%, var(--bg)); color: #2f9e44; border-color: color-mix(in srgb, #2f9e44 45%, var(--border)); }
+#mcp-chip #mcp-count { font-variant-numeric: tabular-nums; opacity: .85; margin-left: 2px; }
+.quick-add { margin: 4px 0 14px; }
+.mcp-add { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--bg-soft); }
+.mcp-add summary { cursor: pointer; font-weight: 600; color: var(--fg); }
+.mcp-add .field { margin-top: 10px; }
+.mcp-list { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.mcp-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+.mcp-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--bg-soft); }
+.mcp-row.connected { border-left: 3px solid #2f9e44; }
+.mcp-row.error { border-left: 3px solid #e03131; }
+.mcp-row.connecting { border-left: 3px solid #f08c00; }
+.mcp-row-head { display: flex; align-items: center; gap: 8px; }
+.mcp-name { font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.mcp-status { font-size: 12px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.mcp-status.connected { background: color-mix(in srgb, #2f9e44 16%, var(--bg)); color: #2f9e44; }
+.mcp-status.connecting { background: color-mix(in srgb, #f08c00 16%, var(--bg)); color: #f08c00; }
+.mcp-status.error { background: color-mix(in srgb, #e03131 16%, var(--bg)); color: #e03131; }
+.mcp-status.disconnected { background: var(--bg); color: var(--muted); }
+.mcp-cmd { margin: 6px 0 2px; font-size: 12px; color: var(--muted); overflow-x: auto; }
+.mcp-cmd code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mcp-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tool-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); color: var(--fg-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mcp-err { margin-top: 6px; font-size: 11px; color: #e03131; white-space: pre-wrap; word-break: break-word; }
+.mini-btn { font-size: 12px; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; }
+.mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* MCP tool card badge */
+.tool-card.mcp { border-left: 3px solid #2f9e44; }
+.mcp-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, #2f9e44 16%, var(--bg)); color: #2f9e44; margin-left: 2px; }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

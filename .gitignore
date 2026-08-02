@@ -9,3 +9,4 @@ agenite.config.json
 
 # Local tooling / temp verification scripts
 .workbuddy/
+.mcp-test-ws/

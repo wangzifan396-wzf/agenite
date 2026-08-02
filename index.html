@@ -93,6 +93,9 @@
           <button id="plan-toggle" class="chip" title="计划模式：先出方案，你批准后再执行">
             <span class="chip-dot"></span>Plan
           </button>
+          <button id="mcp-chip" class="chip" title="已连接的 MCP 工具服务器">
+            <span class="chip-dot"></span>MCP <span id="mcp-count">0</span>
+          </button>
           <button id="theme-toggle" class="icon-btn" title="切换主题" aria-label="切换主题"></button>
           <button id="clear-chat" class="icon-btn" title="清空当前对话" aria-label="清空当前对话">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>
@@ -183,6 +186,7 @@
       <div class="tabs" role="tablist">
         <button class="tab active" data-tab="model" role="tab">模型</button>
         <button class="tab" data-tab="power" role="tab">电脑权限</button>
+        <button class="tab" data-tab="mcp" role="tab">MCP 工具</button>
         <button class="tab" data-tab="advanced" role="tab">高级</button>
       </div>
 
@@ -234,6 +238,44 @@
             <code id="ws-path">—</code>
             <span class="muted small">在其他目录执行 <code>node /path/to/agenite/server.js</code> 即可切换。</span>
           </div>
+        </section>
+
+        <section class="tab-panel" data-panel="mcp">
+          <p class="muted small">MCP（模型上下文协议）让 Agenite 接入外部工具服务器——<b>浏览器自动化、桌面/电脑控制、数据库、GitHub</b> 等。连上后它们会变成模型可调用的工具（名字以 <code>mcp__</code> 开头）。这正是它从"聊天框"变成"智能体"的关键。</p>
+
+          <div class="quick-add">
+            <span class="field-title">快速添加（点一下接入流行服务器）</span>
+            <div class="btn-row">
+              <button class="btn-ghost" data-quick="playwright">🌐 浏览器控制 (Playwright)</button>
+              <button class="btn-ghost" data-quick="computer">🖥️ 桌面控制 (windows-computer-use-mcp)</button>
+              <button class="btn-ghost" data-quick="screenhand">✋ 桌面+浏览器 (ScreenHand)</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <span class="field-title">已配置的服务器</span>
+            <div id="mcp-list" class="mcp-list"></div>
+          </div>
+
+          <details class="mcp-add">
+            <summary>＋ 手动添加服务器</summary>
+            <label class="field">标识 (id)
+              <input id="mcp-id" type="text" placeholder="例如 my-server" spellcheck="false" />
+            </label>
+            <label class="field">启动命令 (command)
+              <input id="mcp-command" type="text" placeholder="npx" spellcheck="false" />
+            </label>
+            <label class="field">参数 (args)
+              <input id="mcp-args" type="text" placeholder="例如 -y @playwright/mcp@latest（空格分隔，或 JSON 数组）" spellcheck="false" />
+            </label>
+            <label class="field">环境变量 (env, 可选 JSON)
+              <input id="mcp-env" type="text" placeholder='例如 {"KEY":"value"}' spellcheck="false" />
+            </label>
+            <div class="btn-row">
+              <button id="mcp-add" class="btn-primary">添加并连接</button>
+            </div>
+          </details>
+          <p class="muted small">首次连接会下载/启动服务器（<code>npx</code> 可能需要联网拉取），稍候片刻即可在下方看到工具数量。</p>
         </section>
 
         <section class="tab-panel" data-panel="advanced">

@@ -11,7 +11,12 @@
 ## ✨ 功能
 
 - **多模型 / 多运营商**：OpenAI、DeepSeek、通义千问 (Qwen)、Kimi (Moonshot)、智谱 (GLM)、Groq、Ollama（本地）、OpenRouter，以及任意 OpenAI 兼容接口；也支持 Anthropic (Claude)。
-- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **14 个工具**：
+- **MCP 工具生态（v0.5.0 新增）**：内置 **MCP（Model Context Protocol）客户端**，通过 stdio 连接任意 MCP 服务器，把整个开源工具生态变成模型可调用的工具——**浏览器自动化、桌面/电脑控制、数据库、GitHub** 等等。设置里点一下即可接入：
+  - 🌐 **浏览器控制** — Playwright MCP（`npx -y @playwright/mcp@latest`）
+  - 🖥️ **桌面控制** — windows-computer-use-mcp（点击、键入、截屏）
+  - ✋ **桌面 + 浏览器** — ScreenHand
+  - 也可手动填 `command` / `args` / `env` 接入任意服务器；MCP 工具名以 `mcp__服务器__工具` 形式出现，**同样走审批门控**。
+- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **14 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`apply_patch`（一次性打多文件补丁）
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
@@ -53,7 +58,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（86 个，node:test）
+npm test       # 跑核心逻辑单元测试（95 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口
@@ -77,9 +82,10 @@ agenite/
 │       ├── provider.js   # OpenAI ↔ Anthropic 消息/工具格式互转
 │       ├── client.js     # 用 fetch 流式调用模型（可注入 mock 测试）
 │       ├── tools.js      # 工具定义与执行
+│       ├── mcp.js        # MCP 客户端：stdio 传输 + 多服务器管理 + 工具索引（仅服务端）
 │       ├── agent.js      # 工具调用循环
 │       └── util.js       # 工具函数
-└── test/                # node:test 单元测试
+└── test/                # node:test 单元测试（含 mcp-mock-server.mjs 模拟服务器）
 ```
 
 **数据流**：浏览器 `app.js` → `POST /api/chat`（带对话历史 + 配置）→ `server.js` 运行 `runAgent` → 调用模型（SSE 流式）→ 若模型请求工具则服务端执行 `executeTool` → 结果喂回模型 → 循环至最终答案 → 全程以 SSE 事件 (`start`/`delta`/`tool`/`done`/`end`) 流式回传前端。
@@ -91,6 +97,7 @@ agenite/
 - API Key 仅保存在**你本地浏览器** `localStorage`，并在本地代理中转发给对应运营商，**不会上传到任何第三方**。
 - `write_file` / `edit_file` / `make_dir` / `run_command` / `open_path` 属于**高危工具**，默认关闭，必须在设置里手动勾选「高级工具」并在审批模式（`ask` / `auto` / `deny`）下才会生效。请只在与可信模型对话时开启。
 - **工作区沙箱**：所有文件路径都会解析并锁定在根目录下；越界开关 `allowOutsideWorkspace` 默认关闭。
+- **MCP 服务器是本机子进程**：连接一个 MCP 服务器等于在你电脑上 spawn 一个进程，它能做什么完全取决于该服务器本身（桌面控制类可以点鼠标、敲键盘）。因此：**只接入你信任的服务器**；MCP 工具调用同样受 `ask` / `auto` / `deny` 审批门控，默认 `ask` 会逐次弹窗确认。
 - 所有 Markdown 渲染都做了 HTML 转义，链接做了 `javascript:` / `data:` 协议过滤。
 
 ---

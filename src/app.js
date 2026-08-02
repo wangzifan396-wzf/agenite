@@ -10,7 +10,8 @@ const LS = {
   config: 'agenite:config',
   convs: 'agenite:conversations',
   cur: 'agenite:current',
-  theme: 'agenite:theme'
+  theme: 'agenite:theme',
+  mcp: 'agenite:mcp'
 };
 
 const STARTERS = [
@@ -45,6 +46,29 @@ function loadConfig() {
   catch { return defaultConfig(); }
 }
 function saveConfig() { localStorage.setItem(LS.config, JSON.stringify(config)); }
+
+// ---------- MCP server config (client-side registry) ----------
+function getMcpServers() {
+  try { return JSON.parse(localStorage.getItem(LS.mcp) || '[]'); }
+  catch { return []; }
+}
+function saveMcpServers(list) {
+  localStorage.setItem(LS.mcp, JSON.stringify(list));
+}
+// Popular, copy-paste-free presets so connecting real tool servers is one click.
+const MCP_PRESETS = {
+  playwright: { id: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'], env: {}, enabled: true },
+  computer: { id: 'computer', command: 'npx', args: ['-y', 'windows-computer-use-mcp'], env: {}, enabled: true },
+  screenhand: { id: 'screenhand', command: 'npx', args: ['-y', 'screenhand'], env: {}, enabled: true }
+};
+function upsertMcpServer(srv) {
+  const list = getMcpServers();
+  const i = list.findIndex((s) => s.id === srv.id);
+  if (i >= 0) list[i] = { ...list[i], ...srv };
+  else list.push(srv);
+  saveMcpServers(list);
+  return list;
+}
 function loadConvs() { try { return JSON.parse(localStorage.getItem(LS.convs) || '[]'); } catch { return []; } }
 function saveConvs() { localStorage.setItem(LS.convs, JSON.stringify(conversations)); }
 function currentConv() { return conversations.find((c) => c.id === currentId) || null; }
@@ -243,14 +267,16 @@ function upsertToolCard(el, t) {
   const holder = el.querySelector('.tools');
   let card = holder.querySelector(`[data-tid="${CSS.escape(String(t.id))}"]`);
   const running = t.ok === undefined;
+  const isMcp = typeof t.name === 'string' && t.name.startsWith('mcp__');
   if (!card) {
     card = document.createElement('div');
-    card.className = 'tool-card';
+    card.className = 'tool-card' + (isMcp ? ' mcp' : '');
     card.dataset.tid = String(t.id);
+    const badge = isMcp ? '<span class="mcp-badge">MCP</span>' : '';
     card.innerHTML =
       '<div class="tool-head">' +
-      `<span class="tool-ico">${escapeHtml(TOOL_ICONS[t.name] || '⚙')}</span>` +
-      `<span class="tname">${escapeHtml(t.name)}</span>` +
+      `<span class="tool-ico">${isMcp ? '🔌' : escapeHtml(TOOL_ICONS[t.name] || '⚙')}</span>` +
+      `<span class="tname">${escapeHtml(t.name)}</span>${badge}` +
       '<span class="targs-peek"></span><span class="tstatus"></span><span class="tcaret">▶</span>' +
       '</div>' +
       '<div class="tool-body"><div><b>参数</b><pre class="t-args"></pre></div><div><b>结果</b><pre class="t-res"></pre></div></div>';
@@ -399,7 +425,8 @@ async function runTurn(conv, opts = {}) {
       messages: conv.messages.filter((m) => m !== aMsg).map(stripForApi),
       config,
       agentEnabled: config.agentEnabled,
-      planning
+      planning,
+      mcpServers: getMcpServers()
     }, (event, data) => {
       const stick = nearBottom();
       if (event === 'delta') {
@@ -684,12 +711,14 @@ function openSettings(tab) {
   if (tab) switchTab(tab);
   $('settings-modal').classList.remove('hidden');
   $('settings-msg').textContent = '';
+  refreshMcp();
 }
 function closeSettings() { $('settings-modal').classList.add('hidden'); }
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === name));
+  if (name === 'mcp') refreshMcp();
 }
 
 function onProviderChange() {
@@ -775,6 +804,98 @@ function resetAll() {
   localStorage.removeItem(LS.cur);
   localStorage.removeItem(LS.config);
   location.reload();
+}
+
+// ---------- MCP tool servers ----------
+function parseMcpArgs(text) {
+  const t = (text || '').trim();
+  if (!t) return [];
+  try { return JSON.parse(t); } catch { return t.split(/\s+/).filter(Boolean); }
+}
+function parseMcpEnv(text) {
+  const t = (text || '').trim();
+  if (!t) return {};
+  try { return JSON.parse(t); } catch { toast('env 不是合法 JSON'); return {}; }
+}
+function updateMcpChip(servers) {
+  const n = (servers || []).reduce((s, x) => s + (x.toolCount || 0), 0);
+  const el = $('mcp-count');
+  if (el) el.textContent = String(n);
+  const chip = $('mcp-chip');
+  if (chip) chip.classList.toggle('on', n > 0);
+}
+function renderMcpList(servers) {
+  const box = $('mcp-list');
+  if (!box) return;
+  const list = getMcpServers();
+  if (!list.length) {
+    box.innerHTML = '<div class="mcp-empty">还没有服务器。点上面的快速添加，或手动添加一个。</div>';
+    return;
+  }
+  const statusById = {};
+  for (const s of (servers || [])) statusById[s.id] = s;
+  box.innerHTML = '';
+  for (const s of list) {
+    const st = statusById[s.id];
+    const status = st ? st.status : 'disconnected';
+    const toolCount = st ? st.toolCount : 0;
+    const err = st && st.error ? st.error : '';
+    const row = document.createElement('div');
+    row.className = 'mcp-row ' + status;
+    const toolsHtml = st && st.tools && st.tools.length
+      ? '<div class="mcp-tools">' + st.tools.map((t) => `<span class="tool-chip" title="${escapeHtml(t.description || '')}">${escapeHtml(t.name)}</span>`).join('') + '</div>'
+      : '';
+    row.innerHTML =
+      `<div class="mcp-row-head">` +
+      `<span class="mcp-name">${escapeHtml(s.id)}</span>` +
+      `<span class="mcp-status ${status}">${statusText(status, toolCount)}</span>` +
+      `<div class="grow"></div>` +
+      `<button class="mini-btn" data-act="toggle" data-id="${escapeHtml(s.id)}">${s.enabled ? '停用' : '启用'}</button>` +
+      `<button class="mini-btn" data-act="del" data-id="${escapeHtml(s.id)}">删除</button>` +
+      `</div>` +
+      `<div class="mcp-cmd"><code>${escapeHtml([s.command, ...(s.args || [])].join(' '))}</code></div>` +
+      toolsHtml +
+      (err ? `<div class="mcp-err">${escapeHtml(err.slice(0, 300))}</div>` : '');
+    box.appendChild(row);
+  }
+  box.querySelectorAll('[data-act]').forEach((b) => {
+    b.onclick = () => {
+      const id = b.dataset.id;
+      const list2 = getMcpServers();
+      const item = list2.find((x) => x.id === id);
+      if (!item) return;
+      if (b.dataset.act === 'del') {
+        saveMcpServers(list2.filter((x) => x.id !== id));
+        refreshMcp();
+      } else if (b.dataset.act === 'toggle') {
+        item.enabled = !item.enabled;
+        saveMcpServers(list2);
+        refreshMcp();
+      }
+    };
+  });
+}
+function statusText(status, toolCount) {
+  if (status === 'connected') return '✅ 已连接 · ' + toolCount + ' 工具';
+  if (status === 'connecting') return '⏳ 连接中…';
+  if (status === 'error') return '⚠️ 错误';
+  return '○ 未连接';
+}
+async function refreshMcp() {
+  const servers = getMcpServers();
+  try {
+    await fetch('/api/mcp/servers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ servers })
+    });
+    const r = await fetch('/api/mcp/status');
+    const j = await r.json();
+    renderMcpList(j.servers || []);
+    updateMcpChip(j.servers || []);
+  } catch {
+    renderMcpList([]);
+  }
 }
 
 // ---------- "@" file refs & "/" commands ----------
@@ -980,6 +1101,37 @@ function wire() {
     renderPlanChip();
     toast('计划模式：' + (config.planMode ? '开（先出方案，批准后执行）' : '关'));
   };
+  $('mcp-chip').onclick = () => openSettings('mcp');
+
+  // MCP quick-add + manual add
+  document.querySelectorAll('[data-quick]').forEach((b) => {
+    b.onclick = () => {
+      const p = MCP_PRESETS[b.dataset.quick];
+      if (!p) return;
+      const list = getMcpServers();
+      const existing = list.find((x) => x.id === p.id);
+      if (existing) existing.enabled = true;
+      else list.push({ ...p });
+      saveMcpServers(list);
+      refreshMcp();
+      toast('已添加并连接：' + p.id);
+    };
+  });
+  $('mcp-add').onclick = () => {
+    const id = $('mcp-id').value.trim();
+    if (!id) return toast('请填写标识 (id)');
+    const srv = {
+      id,
+      command: $('mcp-command').value.trim() || 'npx',
+      args: parseMcpArgs($('mcp-args').value),
+      env: parseMcpEnv($('mcp-env').value),
+      enabled: true
+    };
+    upsertMcpServer(srv);
+    $('mcp-id').value = ''; $('mcp-command').value = ''; $('mcp-args').value = ''; $('mcp-env').value = '';
+    refreshMcp();
+    toast('已添加：' + id);
+  };
   $('clear-chat').onclick = () => clearCurrent();
   $('send').onclick = () => sendMessage();
   $('stop').onclick = () => { if (abortCtrl) abortCtrl.abort(); };
@@ -1102,6 +1254,7 @@ function init() {
   renderRefs();
   autoGrow();
   pingHealth();
+  refreshMcp();
   setInterval(pingHealth, 30000);
 }
 
