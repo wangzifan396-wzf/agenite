@@ -6,3 +6,6 @@ dist/*
 .DS_Store
 .env
 agenite.config.json
+
+# Local tooling / temp verification scripts
+.workbuddy/
