@@ -213,7 +213,13 @@ function buildMessageEl(m, index) {
   if (typeof index === 'number') {
     const acts = document.createElement('div');
     acts.className = 'msg-acts';
-    acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) + actionBtn('act-redo', ICO_REDO, '重新生成', index);
+    const c = currentConv();
+    if (c && c.awaitingPlanApproval && c.planMsgIndex === index) {
+      acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) +
+        '<button class="msg-act act-plan" data-plan="1" title="批准计划并开始执行"><span>✓ 批准并执行</span></button>';
+    } else {
+      acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) + actionBtn('act-redo', ICO_REDO, '重新生成', index);
+    }
     el.appendChild(acts);
   }
   return el;
@@ -262,6 +268,24 @@ function upsertToolCard(el, t) {
     status.textContent = (t.ok ? '完成' : '失败') + (t.ms ? ` · ${t.ms}ms` : '');
     card.querySelector('.t-res').textContent = String(t.result == null ? '' : t.result);
     if (!t.ok) card.classList.add('open');
+    // Diff preview + one-click undo for file-mutating tools.
+    let diffWrap = card.querySelector('.tool-diff');
+    if (t.diff) {
+      if (!diffWrap) {
+        diffWrap = document.createElement('div');
+        diffWrap.className = 'tool-diff';
+        diffWrap.innerHTML = '<b>改动预览 (diff)</b><pre class="t-diff"></pre>';
+        if (t.undoToken) {
+          const ub = document.createElement('button');
+          ub.className = 'undo-btn';
+          ub.dataset.token = String(t.undoToken);
+          ub.textContent = '↩ 撤销此改动';
+          diffWrap.appendChild(ub);
+        }
+        card.querySelector('.tool-body').appendChild(diffWrap);
+      }
+      diffWrap.querySelector('.t-diff').textContent = String(t.diff);
+    }
   }
   return card;
 }
@@ -342,11 +366,24 @@ async function sendMessage(preset) {
   autoGrow();
   renderMessages();
 
-  await runTurn(conv);
+  await runTurn(conv, { planning: !!config.planMode });
+}
+
+// After a plan has been presented, the user approves it and the agent executes.
+async function approvePlan() {
+  if (abortCtrl) return;
+  const conv = currentConv();
+  if (!conv) return;
+  conv.messages.push({ role: 'user', content: '已批准上述计划，请现在开始执行。', display: '（批准计划 · 开始执行）' });
+  conv.awaitingPlanApproval = false;
+  saveConvs();
+  renderMessages();
+  await runTurn(conv, { planning: false });
 }
 
 // The streaming turn itself, split out so "regenerate" can reuse it.
-async function runTurn(conv) {
+async function runTurn(conv, opts = {}) {
+  const planning = !!opts.planning;
   abortCtrl = new AbortController();
   const aMsg = { role: 'assistant', content: '', tool_calls: [], toolCalls: [] };
   conv.messages.push(aMsg);
@@ -361,7 +398,8 @@ async function runTurn(conv) {
     await postStream('/api/chat', {
       messages: conv.messages.filter((m) => m !== aMsg).map(stripForApi),
       config,
-      agentEnabled: config.agentEnabled
+      agentEnabled: config.agentEnabled,
+      planning
     }, (event, data) => {
       const stick = nearBottom();
       if (event === 'delta') {
@@ -382,6 +420,12 @@ async function runTurn(conv) {
         md.innerHTML = renderMarkdown(aMsg.content);
       } else if (event === 'done' || event === 'end') {
         md.innerHTML = renderMarkdown(aMsg.content) || '<span class="muted small">（没有文本输出）</span>';
+        if (planning) {
+          conv.awaitingPlanApproval = true;
+          conv.planMsgIndex = conv.messages.indexOf(aMsg);
+          saveConvs();
+          renderMessages();
+        }
       }
       if (stick) scrollBottom();
     }, abortCtrl.signal);
@@ -583,6 +627,9 @@ function cyclePerm() {
 
 function renderAgentChip() {
   $('agent-toggle').classList.toggle('active', config.agentEnabled !== false);
+}
+function renderPlanChip() {
+  $('plan-toggle').classList.toggle('active', config.planMode === true);
 }
 function renderModelChip() {
   const ready = !!config.model && (!!config.apiKey || config.provider === 'ollama');
@@ -927,6 +974,12 @@ function wire() {
     renderAgentChip();
     toast('Agent 工具调用：' + (config.agentEnabled ? '开' : '关'));
   };
+  $('plan-toggle').onclick = () => {
+    config.planMode = config.planMode !== true;
+    saveConfig();
+    renderPlanChip();
+    toast('计划模式：' + (config.planMode ? '开（先出方案，批准后执行）' : '关'));
+  };
   $('clear-chat').onclick = () => clearCurrent();
   $('send').onclick = () => sendMessage();
   $('stop').onclick = () => { if (abortCtrl) abortCtrl.abort(); };
@@ -992,6 +1045,7 @@ function wire() {
     }
     const act = e.target.closest('.msg-act');
     if (!act) return;
+    if (act.classList.contains('act-plan')) { approvePlan(); return; }
     const conv = currentConv();
     if (!conv) return;
     const idx = Number(act.dataset.idx);
@@ -1000,6 +1054,26 @@ function wire() {
     if (act.classList.contains('act-copy')) copyText(msg.display || msg.content || '');
     else if (act.classList.contains('act-edit')) editUserMessage(idx);
     else if (act.classList.contains('act-redo')) regenerateFrom(idx);
+  });
+
+  // Undo a file mutation from its diff card.
+  $('messages').addEventListener('click', (e) => {
+    const ub = e.target.closest('.undo-btn');
+    if (!ub) return;
+    const token = ub.dataset.token;
+    ub.disabled = true;
+    ub.textContent = '撤销中…';
+    fetch('/api/undo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.ok) { ub.textContent = '✓ 已撤销'; ub.classList.add('done'); toast('已撤销改动'); }
+        else { ub.disabled = false; ub.textContent = '↩ 撤销失败'; toast(j.error || '撤销失败'); }
+      })
+      .catch(() => { ub.disabled = false; ub.textContent = '↩ 撤销失败'; toast('撤销请求失败'); });
   });
 
   document.addEventListener('keydown', (e) => {
@@ -1023,6 +1097,7 @@ function init() {
   updateTitle();
   renderPermChip();
   renderAgentChip();
+  renderPlanChip();
   renderModelChip();
   renderRefs();
   autoGrow();

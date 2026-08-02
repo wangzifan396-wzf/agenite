@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { normalizeConfig, validateConfig, PROVIDER_PRESETS, APPROVAL_MODES } from './src/core/config.js';
 import { runAgent } from './src/core/agent.js';
 import { callModelStream } from './src/core/client.js';
-import { activeTools, executeTool, scanWorkspaceFiles } from './src/core/tools.js';
+import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -39,10 +39,15 @@ const MIME = {
 // Pending approvals: requestId -> { resolve } waiting for a POST /api/approve.
 const pendingApprovals = new Map();
 
+// Undo snapshots: token -> { path, before }. Lets the UI revert a write/edit.
+const undoStore = new Map();
+setUndoStore(undoStore);
+
 const server = http.createServer((req, res) => {
   const url = (req.url || '/').split('?')[0];
   if (req.method === 'POST' && url === '/api/chat') return handleChat(req, res);
   if (req.method === 'POST' && url === '/api/approve') return handleApprove(req, res);
+  if (req.method === 'POST' && url === '/api/undo') return handleUndo(req, res);
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, { ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES });
@@ -100,6 +105,17 @@ function readBody(req, limit = 5 * 1024 * 1024) {
   });
 }
 
+// Revert a previous write/edit by its undo token.
+async function handleUndo(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const result = applyUndo(body.token, undoStore);
+    return sendJson(res, result.ok ? 200 : 409, result);
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, error: e.message });
+  }
+}
+
 // Client answers an approval request here.
 async function handleApprove(req, res) {
   try {
@@ -129,7 +145,7 @@ async function handleFiles(req, res) {
   }
 }
 
-function buildSystemPrompt(config, workspace) {
+function buildSystemPrompt(config, workspace, planning = false) {
   const extra = (config.systemPrompt || '').trim();
   const base = [
     'You are Agenite, a capable local AI agent running on the user\'s own computer.',
@@ -138,8 +154,16 @@ function buildSystemPrompt(config, workspace) {
     'When the user asks you to do something on their machine, use the tools instead of only describing steps.',
     'Prefer relative paths inside the workspace. Take small, verifiable steps and report what you did concisely.',
     'When you write code or files, keep changes minimal and explain them briefly afterwards.'
-  ].join(' ');
-  return extra ? base + '\n\n' + extra : base;
+  ];
+  if (planning) {
+    base.push(
+      'PLAN MODE: First, think through the task and respond with a clear, step-by-step PLAN only. ' +
+      'Do NOT call any tools yet. Use a numbered list and mention which tools/files you expect to touch. ' +
+      'After the user approves the plan, you will be asked to execute it.'
+    );
+  }
+  const text = base.join(' ');
+  return extra ? text + '\n\n' + extra : text;
 }
 
 async function handleChat(req, res) {
@@ -180,7 +204,8 @@ async function handleChat(req, res) {
   // Prepend a system prompt so the model knows it can act on this machine.
   const incoming = Array.isArray(body.messages) ? body.messages.slice() : [];
   const hasSystem = incoming.some((m) => m.role === 'system');
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE) }, ...incoming];
+  const planning = !!body.planning && agentEnabled;
+  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning) }, ...incoming];
 
   const callModel = (msgs, { onDelta }) =>
     callModelStream({ config, messages: msgs, tools, onDelta, signal: ac.signal });

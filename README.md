@@ -11,9 +11,11 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 ## ✨ Features
 
 - **Multi-model / multi-provider**: OpenAI, DeepSeek, Qwen, Moonshot (Kimi), Zhipu (GLM), Groq, Ollama (local), OpenRouter, any OpenAI-compatible endpoint, plus Anthropic (Claude).
-- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 12 built-in tools:
-  - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `read_file`, `list_dir`, `find_files`
-  - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`
+- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 14 built-in tools:
+  - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents)
+  - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `apply_patch` (multi-file unified diff)
+- **Plan Mode** — toggle `Plan` in the header: the agent first returns a step-by-step plan and waits for your **批准并执行** before touching anything. Ideal for risky or multi-step tasks.
+- **Diff preview + one-click undo** — every file mutation (`write_file` / `edit_file` / `apply_patch`) shows a live `diff` in its tool card, with a **↩ 撤销** button that restores the previous content via a server-held snapshot.
 - **Local computer control** — a **workspace sandbox** pins every file operation under one root directory, and a **3-mode approval gate** decides when a human must approve:
   - `ask` — prompt before every write / command (default, recommended)
   - `auto` — no prompts inside the sandbox (fast, use with care)
@@ -42,7 +44,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (79, via node:test)
+npm test       # run core unit tests (86, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

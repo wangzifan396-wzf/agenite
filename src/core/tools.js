@@ -4,6 +4,7 @@
 //   2. approval hook      (a human clicks allow/deny before it runs)
 // All side effects are injectable so the whole file stays testable under node:test.
 import { readFile, writeFile, readdir, mkdir, stat } from 'node:fs/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve, sep, join, relative } from 'node:path';
@@ -150,6 +151,33 @@ export const TOOL_DEFS = [
       required: ['target']
     },
     danger: true
+  },
+  {
+    name: 'grep_files',
+    description: 'Search file CONTENTS in the workspace for a regular expression (case-insensitive by default). Returns matching "file:line: text" hits. Use to locate code or text across the project.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'Regular expression to search for, e.g. "function handleChat" or "TODO".' },
+        path: { type: 'string', description: 'Directory to search in (default ".").' },
+        flags: { type: 'string', description: 'Optional regex flags, e.g. "g" or "" for case-sensitive.' },
+        limit: { type: 'number', description: 'Max hits (default 50).' }
+      },
+      required: ['pattern']
+    },
+    danger: false
+  },
+  {
+    name: 'apply_patch',
+    description: 'Apply a unified diff (patch) to one or more workspace files in a single call. Each file block uses "--- a/path" and "+++ b/path" followed by "@@ -s,c +s,c @@" hunks. Safer than many write_file calls for multi-file edits. Requires user approval.',
+    parameters: {
+      type: 'object',
+      properties: {
+        patch: { type: 'string', description: 'The full unified diff text covering one or more files.' }
+      },
+      required: ['patch']
+    },
+    danger: true
   }
 ];
 
@@ -247,6 +275,10 @@ async function dispatch(name, args, opts) {
         return runCmd(args, opts);
       case 'open_path':
         return openPath(args.target, opts);
+      case 'grep_files':
+        return grepFiles(args, opts);
+      case 'apply_patch':
+        return applyPatchTool(args, opts);
     default:
       return { ok: false, error: `未实现的工具: ${name}` };
   }
@@ -447,6 +479,18 @@ async function readLocalFile(path, maxChars = 20000, opts = {}) {
   const abs = resolveSafePath(path, opts);
   let buf = await readFile(abs, 'utf8');
   const total = buf.length;
+  // Optional 1-based line range: offset/limit slice by lines (handy for big files)
+  const off = Number(opts?.args?.offset);
+  const lim = Number(opts?.args?.limit);
+  const lineBased = Number.isFinite(off) && off > 0;
+  if (lineBased) {
+    const lines = buf.split('\n');
+    const start = off - 1;
+    const end = Number.isFinite(lim) && lim > 0 ? start + lim : lines.length;
+    const slice = lines.slice(start, end).join('\n');
+    const note = `\n\n[行 ${off}${Number.isFinite(lim) && lim > 0 ? '-' + end : ''} / 共 ${lines.length} 行]`;
+    return { ok: true, content: slice + note };
+  }
   if (total > maxChars) buf = buf.slice(0, maxChars) + `\n…(共 ${total} 字符，已截断)`;
   return { ok: true, content: buf };
 }
@@ -513,8 +557,201 @@ async function writeLocalFile(path, content, opts = {}) {
   const abs = resolveSafePath(path, opts);
   const text = String(content == null ? '' : content);
   await mkdir(resolve(abs, '..'), { recursive: true });
+  const snap = snapshotBefore(abs, opts);
   await writeFile(abs, text, 'utf8');
-  return { ok: true, content: `已写入 ${displayPath(abs, opts)}（${text.length} 字符）` };
+  const diff = snap.before == null ? null : unifiedDiff(snap.before, text);
+  return {
+    ok: true,
+    content: `已写入 ${displayPath(abs, opts)}（${text.length} 字符）`,
+    diff,
+    undoToken: snap.token
+  };
+}
+
+// ---- undo support ----
+// An injected key/value store (set by the server) holds { path, before } so a
+// write/edit can later be reverted with a single token. Keeps tools.js pure
+// (no module-global surprises) while still enabling the UI to offer "undo".
+let _undoStore = null;
+export function setUndoStore(store) { _undoStore = store; }
+
+function snapshotBefore(abs, opts) {
+  try {
+    const before = readFileSync(abs, 'utf8');
+    const token = 'undo_' + Math.random().toString(36).slice(2, 10);
+    if (_undoStore) _undoStore.set(token, { path: abs, before });
+    else if (opts && opts.undoStore) opts.undoStore.set(token, { path: abs, before });
+    return { before, token };
+  } catch {
+    return { before: null, token: null };
+  }
+}
+
+// Revert a previous write/edit identified by its undo token.
+export function applyUndo(token, store) {
+  const s = (store || _undoStore) && (store || _undoStore).get(token);
+  if (!s) return { ok: false, error: '撤销令牌已失效（服务可能已重启）。' };
+  try {
+    writeFileSync(s.path, s.before, 'utf8');
+    (store || _undoStore).delete(token);
+    return { ok: true, content: `已撤销对 ${s.path} 的修改` };
+  } catch (e) {
+    return { ok: false, error: '撤销失败: ' + (e && e.message ? e.message : e) };
+  }
+}
+
+// Minimal line-based unified diff (LCS). Good enough for previewing edits.
+export function unifiedDiff(before, after) {
+  const a = String(before == null ? '' : before).split('\n');
+  const b = String(after == null ? '' : after).split('\n');
+  const n = a.length, m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push(' ' + a[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push('-' + a[i]); i++; }
+    else { out.push('+' + b[j]); j++; }
+  }
+  while (i < n) out.push('-' + a[i++]);
+  while (j < m) out.push('+' + b[j++]);
+  return out.join('\n');
+}
+
+// Apply a unified diff to file `content`. Parses `@@` hunks from `patch`
+// (which may cover multiple files) and matches each hunk by its context lines.
+export function applyUnifiedPatch(content, patch) {
+  const fileLines = String(content == null ? '' : content).split('\n');
+  const patchLines = String(patch == null ? '' : patch).split('\n');
+  const hunks = [];
+  let pendingTarget = null;
+  let i = 0;
+  while (i < patchLines.length) {
+    const ln = patchLines[i];
+    const fileHead = /^(\+\+\+)\s+(.+)$/.exec(ln);
+    if (fileHead) { pendingTarget = fileHead[2].trim().replace(/^b\//, ''); i++; continue; }
+    const hm = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(ln);
+    if (hm) {
+      const start = parseInt(hm[1], 10);
+      const search = [], replace = [];
+      i++;
+      while (i < patchLines.length && !patchLines[i].startsWith('@@')) {
+        const raw = patchLines[i];
+        const prefix = raw[0];
+        if (prefix === '+') replace.push(raw.slice(1));
+        else if (prefix === '-') search.push(raw.slice(1));
+        else if (prefix === ' ') { search.push(raw.slice(1)); replace.push(raw.slice(1)); }
+        else break;
+        i++;
+      }
+      hunks.push({ target: pendingTarget, start, search, replace });
+      continue;
+    }
+    i++;
+  }
+  for (const h of hunks) {
+    const from = Math.max(0, h.start - 1 - 2);
+    const to = Math.min(fileLines.length - h.search.length, h.start - 1 + 2);
+    let found = -1;
+    for (let k = from; k <= to; k++) {
+      let okFull = true;
+      for (let s = 0; s < h.search.length; s++) if (fileLines[k + s] !== h.search[s]) { okFull = false; break; }
+      if (okFull) { found = k; break; }
+    }
+    if (found === -1) {
+      for (let k = 0; k <= fileLines.length - h.search.length; k++) {
+        let okFull = true;
+        for (let s = 0; s < h.search.length; s++) if (fileLines[k + s] !== h.search[s]) { okFull = false; break; }
+        if (okFull) { found = k; break; }
+      }
+    }
+    if (found === -1) {
+      throw new Error('无法匹配补丁片段：\n' + h.search.slice(0, 4).join('\n'));
+    }
+    fileLines.splice(found, h.search.length, ...h.replace);
+  }
+  return fileLines.join('\n');
+}
+
+// Recursively search file *contents* in the workspace (ripgrep-lite).
+export async function grepFiles(args, opts = {}) {
+  const pattern = String(args.pattern || '');
+  if (!pattern) return { ok: false, error: 'pattern 不能为空' };
+  let re;
+  try {
+    re = new RegExp(pattern, args.flags || 'i');
+  } catch (e) {
+    return { ok: false, error: '正则无效: ' + e.message };
+  }
+  const rootAbs = resolveSafePath(args.path || '.', opts);
+  const limit = Math.min(Number(args.limit) || 50, 200);
+  const hits = [];
+  async function walk(dir, depth) {
+    if (hits.length >= limit || depth > 8) return;
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (hits.length >= limit) return;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+        await walk(full, depth + 1);
+      } else if (e.isFile() && /\.(txt|md|js|ts|jsx|tsx|mjs|cjs|json|html|css|csv|py|rb|go|rs|java|sh|yml|yaml|toml|xml|sql|log)$/i.test(e.name)) {
+        let text;
+        try { text = await readFile(full, 'utf8'); } catch { continue; }
+        const rel = relative(rootAbs, full).split(sep).join('/');
+        const linesArr = text.split('\n');
+        for (let li = 0; li < linesArr.length; li++) {
+          if (re.test(linesArr[li])) {
+            hits.push(`${rel}:${li + 1}: ${linesArr[li].slice(0, 200)}`);
+            if (hits.length >= limit) return;
+          }
+        }
+      }
+    }
+  }
+  await walk(rootAbs, 0);
+  if (!hits.length) return { ok: true, content: `在 ${args.path || '.'} 中没有匹配 "${pattern}" 的内容。` };
+  return { ok: true, content: `匹配 ${hits.length} 处（正则 /${pattern}/${args.flags || 'i'}）：\n` + hits.join('\n') };
+}
+
+// Apply an uploaded unified diff to one or more workspace files.
+export async function applyPatchTool(args, opts = {}) {
+  const patch = String(args.patch || '');
+  if (!patch.trim()) return { ok: false, error: 'patch 不能为空' };
+  // Split into per-file sections.
+  const fileBlocks = [];
+  const reFile = /^(\+\+\+)\s+(.+)$/gm;
+  let lastIdx = 0;
+  const matches = [...patch.matchAll(reFile)];
+  if (!matches.length) return { ok: false, error: '未在补丁中找到任何 +++ 文件标记。' };
+  for (let k = 0; k < matches.length; k++) {
+    const start = matches[k].index;
+    const end = k + 1 < matches.length ? matches[k + 1].index : patch.length;
+    fileBlocks.push(patch.slice(lastIdx, end));
+    lastIdx = end;
+  }
+  const results = [];
+  for (const block of fileBlocks) {
+    const head = /^(\+\+\+)\s+(.+)$/m.exec(block);
+    if (!head) continue;
+    let target = head[2].trim().replace(/^b\//, '');
+    const abs = resolveSafePath(target, opts);
+    let before;
+    try { before = await readFile(abs, 'utf8'); } catch { return { ok: false, error: `目标文件不存在: ${target}` }; }
+    const snap = snapshotBefore(abs, opts);
+    const after = applyUnifiedPatch(before, block);
+    await mkdir(resolve(abs, '..'), { recursive: true });
+    await writeFile(abs, after, 'utf8');
+    results.push(`✅ ${target}\n${unifiedDiff(before, after)}`);
+  }
+  if (!results.length) return { ok: false, error: '没有可应用的文件块。' };
+  return { ok: true, content: `已应用补丁：\n\n` + results.join('\n\n'), diff: results.join('\n'), undoToken: null };
 }
 
 // Flat index of the workspace, used by the UI's "@" file picker.
@@ -556,8 +793,16 @@ async function editLocalFile(args, opts = {}) {
     return { ok: false, error: '要替换的文本出现多次，请提供更长的唯一片段' };
   }
   const newText = String(args.new_text == null ? '' : args.new_text);
-  await writeFile(abs, src.slice(0, first) + newText + src.slice(first + oldText.length), 'utf8');
-  return { ok: true, content: `已修改 ${displayPath(abs, opts)}（${oldText.length} → ${newText.length} 字符）` };
+  const after = src.slice(0, first) + newText + src.slice(first + oldText.length);
+  const snap = snapshotBefore(abs, opts);
+  await writeFile(abs, after, 'utf8');
+  const diff = snap.before == null ? null : unifiedDiff(snap.before, after);
+  return {
+    ok: true,
+    content: `已修改 ${displayPath(abs, opts)}（${oldText.length} → ${newText.length} 字符）`,
+    diff,
+    undoToken: snap.token
+  };
 }
 
 async function makeLocalDir(path, opts = {}) {

@@ -60,6 +60,8 @@ export async function runAgent({
         args: tc.args,
         result: res.ok ? res.content : res.error,
         ok: res.ok,
+        diff: res.diff,
+        undoToken: res.undoToken,
         ms: Date.now() - started
       });
       messages.push({

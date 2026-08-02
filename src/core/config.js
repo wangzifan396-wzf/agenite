@@ -104,6 +104,7 @@ export function defaultConfig() {
     maxTokens: 2048,
     topP: 1,
     agentEnabled: true,
+    planMode: false,
     dangerTools: false,
     // --- machine control ---
     approvalMode: 'ask',
