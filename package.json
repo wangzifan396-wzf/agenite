@@ -1,0 +1,33 @@
+{
+  "name": "agenite",
+  "version": "0.1.0",
+  "description": "Local-first multi-provider AI agent client with tool-use. Plug in your model API key and chat, with file/web/command tools.",
+  "type": "module",
+  "bin": {
+    "agenite": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "serve": "node server.js",
+    "test": "node --test \"test/*.test.js\"",
+    "build": "node build.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "chat",
+    "openai",
+    "deepseek",
+    "tools",
+    "local-first"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/agenite.git"
+  }
+}
