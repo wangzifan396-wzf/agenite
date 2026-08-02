@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { resolve, sep, join, relative } from 'node:path';
 import os from 'node:os';
 import { sanitizeUrl } from './util.js';
-import { recall as memRecall, saveMemory, logDaily } from './memory.js';
+import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill } from './memory.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -245,6 +245,48 @@ export const TOOL_DEFS = [
       required: []
     },
     danger: false
+  },
+  {
+    name: 'delegate',
+    description: "Spawn an isolated sub-agent to handle a focused side task in its own fresh context window, then return only its final summary. Use it to keep the main conversation clean or to parallelize independent work (e.g. \"research X\", \"investigate the failing tests\"). Pass persona to specialize it, tool_scope to limit which tools it may use, max_turns to cap its steps.",
+    parameters: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'A self-contained description of the sub-agent\'s task. Include all context it needs — it does not see this conversation.' },
+        persona: { type: 'string', description: 'Optional specialty, e.g. "researcher", "code reviewer", "debugger".' },
+        tool_scope: { type: 'array', items: { type: 'string' }, description: 'Optional list of tool names the sub-agent is allowed to use (least privilege).' },
+        max_turns: { type: 'number', description: 'Optional step cap for the sub-agent (default 10).' }
+      },
+      required: ['goal']
+    },
+    danger: false
+  },
+  {
+    name: 'save_skill',
+    description: 'Crystallize a successful workflow into a reusable local skill file (SKILL.md) so future sessions can reuse it — the agent "gets smarter" over time. Call this after you have nailed a non-trivial, repeatable procedure. The skill catalog is auto-injected into future system prompts; the body is fetched on demand via skill_recall.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Short skill name, e.g. "deploy-to-staging".' },
+        description: { type: 'string', description: 'One-line summary of what the skill does.' },
+        when_to_use: { type: 'string', description: 'When to apply this skill, e.g. "after tests pass and before merge".' },
+        body: { type: 'string', description: 'The full playbook: steps, commands, gotchas. Plain markdown.' }
+      },
+      required: ['name', 'description', 'body']
+    },
+    danger: false
+  },
+  {
+    name: 'skill_recall',
+    description: 'Read the full body of a previously saved skill by name or slug, so you can follow its playbook. Use it when a skill from the catalog matches the current task.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Skill name or slug, e.g. "deploy-to-staging".' }
+      },
+      required: ['name']
+    },
+    danger: false
   }
 ];
 
@@ -360,6 +402,15 @@ async function dispatch(name, args, opts) {
         return memoryLog(args, opts);
       case 'plan':
         return planTool(args, opts);
+      case 'delegate':
+        if (typeof opts.runSubAgent !== 'function') {
+          return { ok: false, error: '子代理执行器未配置（需要服务端 runSubAgent）。' };
+        }
+        return opts.runSubAgent(args, opts);
+      case 'save_skill':
+        return skillSave(args, opts);
+      case 'skill_recall':
+        return skillRecall(args, opts);
     default:
       return { ok: false, error: `未实现的工具: ${name}` };
   }
@@ -906,7 +957,10 @@ async function webSearch(args, opts = {}) {
 
 async function memoryRecall(args, opts = {}) {
   if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
-  return memRecall(opts.memoryBase, args.query, { limit: Number(args.limit) || 12 });
+  return memRecall(opts.memoryBase, args.query, {
+    limit: Number(args.limit) || 12,
+    embed: typeof opts.embed === 'function' ? opts.embed : null
+  });
 }
 
 async function memorySave(args, opts = {}) {
@@ -925,6 +979,23 @@ async function planTool(args, opts = {}) {
   if (!steps.length && !text) return { ok: false, error: '请提供 steps 或 text' };
   const lines = steps.length ? steps.map((s, i) => `${i + 1}. ${s}`).join('\n') : text;
   return { ok: true, content: `已记录计划：\n${lines}` };
+}
+
+// ---- self-evolving skills (file-based, under the agent's memory dir) ----
+
+async function skillSave(args, opts = {}) {
+  if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
+  return saveSkill(opts.memoryBase, {
+    name: args.name,
+    description: args.description,
+    whenToUse: args.when_to_use,
+    body: args.body
+  });
+}
+
+async function skillRecall(args, opts = {}) {
+  if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
+  return readSkill(opts.memoryBase, args.name);
 }
 
 // Flat index of the workspace, used by the UI's "@" file picker.

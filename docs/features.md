@@ -216,10 +216,27 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - `GET /api/ollama/models`：抓本机 `http://localhost:11434/api/tags`，列出已 `ollama pull` 的模型，4s 超时容错（Ollama 没装时返回 `{running:false, models:[]}`）；
 - 前端 Provider 选 Ollama 时出现「🔄 刷新本地模型」按钮，自动填充 `<datalist>` 供模型名下拉，并显示「本地模型 · 零成本 · 数据不出本机」标识；
 - 配合内置的零依赖 OpenAI 兼容调用路径，本地模型可直接用工具调用（取决于模型本身的支持度）。
+- **语义记忆（v0.8.0）**：提供方为本地 Ollama 时，`recall()` 会改用 `ollamaEmbed()` 调用本机 `nomic-embed-text`（`POST /api/embeddings`）对查询与每条记忆做余弦相似度排序（完全离线、零成本）；嵌入失败或无模型时自动回退关键词检索，绝不报错。
+
+## 8.6 子代理委派 `delegate`（v0.8.0）
+
+从「单循环助手」迈向「真·智能体」的关键一跳（对标 Claude Code 的 Agent 工具 / "Deep Agents" 第二支柱）：
+
+- 主 Agent 用 `delegate` 工具派发一个**隔离上下文**的子代理；子代理从干净的 `system + goal` 起步（**不继承主对话历史**），在自己的上下文窗口里独立跑工具循环，只把**最终摘要**回传主对话。
+- 设计遵循调研结论（agentsurface.dev / Claude Code）：**子代理不嵌套**（`delegate` 从子代理工具列表里剥除，由主循环统一协调）；**最小权限**（可选 `tool_scope` 限定工具，危险工具若开启则在子代理内自动放行以避免卡在无人审批）；可选 `persona` 让子代理专业化（researcher / debugger / code-reviewer…）。
+- 实现位于 `src/core/subagent.js` 的 `createSubAgentRunner` 工厂（纯函数、可用假模型单测）。子代理的每一步（delta / tool_start / tool / compact / done）通过新的 `subagent` SSE 事件流式回传，前端渲染成可折叠卡片。
+
+## 8.7 自进化技能库 `save_skill` / `skill_recall`（v0.8.0）
+
+借鉴 Hermes / GenericAgent 的「技能复利」——让 Agent **越用越聪明**：
+
+- 完成任务后，Agent 调用 `save_skill` 把成功的工作流沉淀成本机 `skills/<slug>.md`（SKILL.md 风格 frontmatter：`name` / `description` / `when_to_use` + 正文）；
+- 每次对话开始，`injectSkills()` 把技能**目录**（名称 + 描述，不含正文）注入系统提示词；匹配场景时 Agent 再用 `skill_recall` 读取完整步骤照做；
+- 所有技能都是纯本地文件（`~/.agenite/memory/skills/`），你能读、能改、能删；设置里实时显示已沉淀数量（`GET /api/skills`）。
 
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `util`）无 DOM，**159 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `util`）无 DOM，**170 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 技能各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

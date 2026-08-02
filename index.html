@@ -254,6 +254,13 @@
             <input id="set-memoryEnabled" type="checkbox" checked />
           </label>
           <div class="field">
+            <span class="field-title">技能库（自进化）<em class="muted small">agent 把成功的工作流沉淀成可复用技能，越用越聪明</em></span>
+            <div class="ws-box">
+              <code id="skills-info">—</code>
+              <span class="muted small">agent 完成任务后可调用 save_skill 沉淀技能；技能目录会自动注入未来对话。文件位于 ~/.agenite/memory/skills/。</span>
+            </div>
+          </div>
+          <div class="field">
             <span class="field-title">工具白名单<em class="muted small">（审批弹窗里点"始终允许"会加到这里）</em></span>
             <div id="allowlist-box" class="chip-box"></div>
           </div>

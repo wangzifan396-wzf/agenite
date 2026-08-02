@@ -74,3 +74,32 @@ test('injectMemory returns the curated block, empty when nothing remembered', as
   assert.match(block, /长期记忆/);
   assert.match(block, /中文/);
 });
+
+// --- semantic recall (optional embed callback) ---
+
+// Deterministic bag-of-words embedder so we can test ranking without a model.
+function bagEmbed(text) {
+  const vec = {};
+  for (const w of String(text).toLowerCase().split(/\W+/)) if (w) vec[w] = (vec[w] || 0) + 1;
+  return Object.keys(vec).length ? Object.values(vec) : [0];
+}
+
+test('semantic recall ranks by similarity and flags semantic:true', async () => {
+  const dir = base();
+  await saveMemory(dir, 'Deploy', 'staging', '部署流程 包括 构建 与 冒烟测试');
+  await saveMemory(dir, 'Food', 'lunch', '午餐 吃了 拉面');
+  const r = await recall(dir, '部署流程', { embed: bagEmbed });
+  assert.equal(r.ok, true);
+  assert.equal(r.semantic, true);
+  assert.match(r.content, /部署流程/);
+  assert.ok(!/拉面/.test(r.content.split('\n\n')[0] || ''), 'unrelated chunk should not be the top hit');
+});
+
+test('semantic recall falls back to keyword when embed throws', async () => {
+  const dir = base();
+  await saveMemory(dir, 'Food', 'lunch', '午餐 吃了 拉面');
+  const r = await recall(dir, '拉面', { embed: () => { throw new Error('no model'); } });
+  assert.equal(r.semantic, undefined); // keyword path
+  assert.match(r.content, /拉面/);
+});
+

@@ -24,8 +24,11 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 - **Long-term memory (v0.7.0)**: Agenite now **remembers you across sessions** — it writes your preferences, projects and decisions into a local `~/.agenite/memory/MEMORY.md` (plus a daily log), injects that into the system prompt at the start of every chat, and ships three tools — `memory_recall` (search), `memory_save` (persist a fact), `memory_log` (note today) — so the model accumulates and reuses knowledge. Toggle it off in ⚙ Workspace / Permissions.
 - **Local models via Ollama (v0.7.0)**: pick the Ollama provider to run **fully local, zero-cost, data-never-leaves-your-machine** models. In settings, click "🔄 刷新本地模型" to auto-list the models you've already `ollama pull`ed; the API key can stay empty.
 - **Web search — `web_search` (v0.7.0)**: a key-less search tool (DuckDuckGo) so the agent can **research the web on its own** — look up docs, news, or verify facts without you pasting links first.
-- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 19 built-in tools (plus whatever MCP servers you connect):
-  - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `memory_recall`, `memory_save`, `memory_log`, `plan`
+- **Sub-agent delegation — `delegate` (v0.8.0)**: the leap from "single-loop assistant" to "real agent". The main agent can spin up an **isolated-context sub-agent** for a focused side task (e.g. "research X", "investigate the failing tests"); the child runs its own tool loop and returns only a **final summary** — the main thread never gets spammed by intermediate steps, and independent tasks can be fanned out in parallel. Sub-agents don't nest, honor a least-privilege `tool_scope`, and accept a `persona` to specialize. The UI renders each sub-agent's steps as a collapsible card.
+- **Self-evolving skills (v0.8.0)**: borrowed from Hermes / GenericAgent's "skill compounding" — the agent **crystallizes a solved workflow into a reusable local skill file** (`skills/*.md`, SKILL.md-style frontmatter); future sessions auto-inject the skill catalog into the system prompt, and `skill_recall` pulls the full playbook on demand. The more you use it, the smarter it gets, and every skill is a plain local file you can read and edit.
+- **Semantic memory (v0.8.0)**: when the provider is local Ollama, `memory_recall` calls your on-device `nomic-embed-text` for **vector semantic retrieval** (fully offline, zero cost), falling back to keyword search when no embed model is present.
+- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 22 built-in tools (plus whatever MCP servers you connect):
+  - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `memory_recall`, `memory_save`, `memory_log`, `plan`, `delegate`, `save_skill`, `skill_recall`
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `apply_patch` (multi-file unified diff)
 - **Plan Mode** — toggle `Plan` in the header: the agent first returns a step-by-step plan (recorded as an inspectable checklist via the `plan` tool) and waits for your **批准并执行** before touching anything. Ideal for risky or multi-step tasks.
 - **Diff preview + one-click undo** — every file mutation (`write_file` / `edit_file` / `apply_patch`) shows a live `diff` in its tool card, with a **↩ 撤销** button that restores the previous content via a server-held snapshot.
@@ -58,7 +61,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (159, via node:test)
+npm test       # run core unit tests (170, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

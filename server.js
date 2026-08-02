@@ -18,7 +18,8 @@ import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } from './src/core/sessions.js';
-import { defaultMemoryDir, injectMemory } from './src/core/memory.js';
+import { defaultMemoryDir, injectMemory, injectSkills, listSkills } from './src/core/memory.js';
+import { createSubAgentRunner } from './src/core/subagent.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -108,6 +109,7 @@ const server = http.createServer((req, res) => {
   if (url === '/api/sessions' || url.startsWith('/api/sessions/')) return handleSessions(req, res, url);
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
   if (req.method === 'GET' && url === '/api/ollama/models') return handleOllamaModels(req, res);
+  if (req.method === 'GET' && url === '/api/skills') return handleSkillsList(req, res);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -297,7 +299,39 @@ async function handleOllamaModels(req, res) {
   return sendJson(res, 200, await fetchOllamaModels());
 }
 
-function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '') {
+async function handleSkillsList(req, res) {
+  try {
+    return sendJson(res, 200, { skills: await listSkills(MEMORY_DIR) });
+  } catch {
+    return sendJson(res, 200, { skills: [] });
+  }
+}
+
+// Embedding via a local Ollama model — powers fully-on-device semantic memory.
+// Returns a number[] or null on any failure (recall then falls back to keyword).
+const OLLAMA_EMBED_MODEL = process.env.AGENITE_EMBED_MODEL || 'nomic-embed-text';
+async function ollamaEmbed(text) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch('http://localhost:11434/api/embeddings', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: OLLAMA_EMBED_MODEL, prompt: String(text) })
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => ({}));
+    const e = Array.isArray(data.embedding) ? data.embedding : null;
+    return e && e.length ? e : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '', skills = '') {
   const extra = (config.systemPrompt || '').trim();
   const base = [
     'You are Agenite, a capable local AI agent running on the user\'s own computer.',
@@ -321,6 +355,7 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
     );
   }
   if (memory) base.push(memory);
+  if (skills) base.push(skills);
   const text = base.join(' ');
   return extra ? text + '\n\n' + extra : text;
 }
@@ -417,7 +452,8 @@ async function handleChat(req, res) {
   const hasSystem = incoming.some((m) => m.role === 'system');
   const planning = !!(config.planMode || body.planning) && agentEnabled;
   const memoryBlock = config.memoryEnabled !== false ? await injectMemory(MEMORY_DIR) : '';
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock) }, ...incoming];
+  const skillsBlock = config.memoryEnabled !== false ? await injectSkills(MEMORY_DIR) : '';
+  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock) }, ...incoming];
 
   const callModel = (msgs, { onDelta }) =>
     callModelStream({ config, messages: msgs, tools, onDelta, signal: ac.signal });
@@ -440,6 +476,9 @@ async function handleChat(req, res) {
     sse('approval', { id, name, args, description });
   });
 
+  // Semantic memory only when a local Ollama is the provider (zero-cost, on-device).
+  const embedFn = config.provider === 'ollama' ? (q) => ollamaEmbed(q) : null;
+
   const onEvent = (type, payload) => {
     if (type === 'delta') sse('delta', { content: payload });
     else if (type === 'tool_start') sse('tool_start', payload);
@@ -447,6 +486,7 @@ async function handleChat(req, res) {
     else if (type === 'compact') sse('compact', payload);
     else if (type === 'usage') sse('usage', payload);
     else if (type === 'done') sse('done', payload);
+    else if (type === 'subagent') sse('subagent', payload);
   };
 
   // Used by the context compactor to turn dropped turns into a short recap.
@@ -490,6 +530,21 @@ async function handleChat(req, res) {
     return executeTool(name, args, o);
   };
 
+  // Sub-agent runner: the `delegate` tool calls this. It spins a child agent
+  // loop in an isolated context and streams its steps back as `subagent` SSE.
+  const runSubAgent = createSubAgentRunner({
+    callModel,
+    executeTool: executeToolWithMcp,
+    baseConfig: config,
+    tools,
+    memoryBase: MEMORY_DIR,
+    injectMemory,
+    onSubEvent: (id, name, type, payload) => onEvent('subagent', { subId: id, name, event: type, ...payload }),
+    summarize,
+    requestApproval,
+    platform: process.platform
+  });
+
   try {
     const result = await runAgent({
       messages,
@@ -499,7 +554,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, embed: embedFn }
     });
     sse('end', { stopped: result.stopped, turns: result.turns, historyTokens: totalTokens(messages), budget });
     res.end();

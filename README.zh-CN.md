@@ -24,8 +24,11 @@
 - **长期记忆（v0.7.0）**：Agenite 现在会**跨会话记住你**——把关于你的偏好、项目与决策写进本机 `~/.agenite/memory/MEMORY.md`（外加每日日志），每次对话开始时自动注入系统提示词；并配套 `memory_recall`（检索）、`memory_save`（保存事实）、`memory_log`（记今日）三个工具，让模型能主动积累与复用知识。可在「⚙ 工作区 / 权限」关闭。
 - **本地模型 Ollama（v0.7.0）**：选 Ollama 提供方即可跑**完全本地、零成本、数据不出本机**的模型。设置里点「🔄 刷新本地模型」会自动列出你已 `ollama pull` 的模型，API Key 可留空。
 - **联网搜索 web_search（v0.7.0）**：新增免 key 的 `web_search` 工具（DuckDuckGo），让 Agent 能**主动上网调研**——查文档、查新闻、核实事实都不再需要先让你贴链接。
-- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **19 个工具**（再加上你接入的 MCP 工具）：
-  - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`memory_recall`、`memory_save`、`memory_log`、`plan`
+- **子代理委派 delegate（v0.8.0）**：这是从"单循环助手"迈向"真·智能体"的关键一跳。主 Agent 可以用 `delegate` 派发一个**隔离上下文**的子代理去完成聚焦的子任务（如"调研 X"、"审查失败测试"），子代理独立跑自己的工具循环，只把**最终摘要**回传主对话——主线程不会被中间过程刷屏，也能把互不依赖的任务并行拆给多个子代理。子代理**不嵌套**、按 `tool_scope` 最小权限、可指定 `persona` 专业化。前端会把子代理的每一步渲染成可折叠卡片。
+- **自进化技能库（v0.8.0）**：借鉴 Hermes / GenericAgent 的"技能复利"——Agent 把跑通的复杂工作流**沉淀成可复用的本地技能文件**（`skills/*.md`，SKILL.md 风格 frontmatter），后续会话自动把技能目录注入系统提示词；要用时 `skill_recall` 读取完整步骤。越用越聪明，且每个技能都是你能读能改的纯本地文件。
+- **语义记忆（v0.8.0）**：当提供方是本地 Ollama 时，`memory_recall` 会调用本机 `nomic-embed-text` 做**向量语义检索**（完全离线、零成本），无嵌入模型时自动回退关键词。
+- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **22 个工具**（再加上你接入的 MCP 工具）：
+  - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`memory_recall`、`memory_save`、`memory_log`、`plan`、`delegate`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`apply_patch`（一次性打多文件补丁）
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
@@ -67,7 +70,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（159 个，node:test）
+npm test       # 跑核心逻辑单元测试（170 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

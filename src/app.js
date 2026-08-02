@@ -457,6 +457,58 @@ function peekArgs(args) {
 }
 
 // Create the card on tool_start, fill it in on tool completion.
+// Render the streaming steps of a delegated sub-agent as a collapsible card.
+// The server sends one `subagent` SSE per child event, tagged with `subId`.
+function handleSubAgentEvent(el, data) {
+  const holder = el.querySelector('.tools');
+  if (!holder) return;
+  if (!el._subAgents) el._subAgents = {};
+  let card = el._subAgents[data.subId];
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'subagent-card';
+    card.innerHTML =
+      '<div class="sa-head">' +
+      '<span class="sa-caret">▸</span>' +
+      '<span class="sa-name"></span>' +
+      '<span class="sa-status">运行中…</span>' +
+      '</div><div class="sa-body"></div>';
+    card.querySelector('.sa-name').textContent = data.name || '子代理';
+    card.querySelector('.sa-head').addEventListener('click', () => {
+      const open = card.classList.toggle('open');
+      card.querySelector('.sa-caret').textContent = open ? '▾' : '▸';
+    });
+    holder.appendChild(card);
+    el._subAgents[data.subId] = card;
+  }
+  const body = card.querySelector('.sa-body');
+  const status = card.querySelector('.sa-status');
+  const ev = data.event;
+  if (ev === 'tool_start') {
+    const chip = document.createElement('div');
+    chip.className = 'sa-tool running';
+    chip.dataset.tid = String(data.id);
+    chip.innerHTML = '<span class="sa-tool-name"></span>';
+    chip.querySelector('.sa-tool-name').textContent = '⏳ ' + (data.name || 'tool');
+    body.appendChild(chip);
+  } else if (ev === 'tool') {
+    const chip = [...body.querySelectorAll('.sa-tool')].find((c) => c.dataset.tid === String(data.id));
+    if (chip) {
+      chip.classList.remove('running');
+      chip.classList.add(data.ok ? 'ok' : 'fail');
+      chip.querySelector('.sa-tool-name').textContent = (data.ok ? '✓ ' : '✗ ') + (data.name || 'tool');
+    }
+  } else if (ev === 'delta') {
+    let txt = body.querySelector('.sa-text');
+    if (!txt) { txt = document.createElement('div'); txt.className = 'sa-text'; body.appendChild(txt); }
+    txt.textContent += (data.content || '');
+  } else if (ev === 'done') {
+    status.textContent = `完成 · ${data.turns || '?'} 步`;
+    card.classList.add('open');
+    card.querySelector('.sa-caret').textContent = '▾';
+  }
+}
+
 function upsertToolCard(el, t) {
   const holder = el.querySelector('.tools');
   let card = holder.querySelector(`[data-tid="${CSS.escape(String(t.id))}"]`);
@@ -683,6 +735,8 @@ async function runTurn(conv, opts = {}) {
         aMsg.toolCalls.push(data);
         upsertToolCard(el, data);
         if (aMsg.content === '') md.innerHTML = THINKING;
+      } else if (event === 'subagent') {
+        handleSubAgentEvent(el, data);
       } else if (event === 'start') {
         ctxState.window = data.contextWindow || 0;
         ctxState.budget = data.budget || 0;
@@ -1064,6 +1118,20 @@ function openSettings(tab) {
   $('settings-modal').classList.remove('hidden');
   $('settings-msg').textContent = '';
   refreshMcp();
+  refreshSkillsInfo();
+}
+
+async function refreshSkillsInfo() {
+  const el = $('skills-info');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/skills');
+    const j = await r.json();
+    const n = Array.isArray(j.skills) ? j.skills.length : 0;
+    el.textContent = n ? `${n} 条技能已沉淀` : '暂无技能（让 agent 完成复杂任务后沉淀）';
+  } catch {
+    el.textContent = '技能库读取失败';
+  }
 }
 function closeSettings() { $('settings-modal').classList.add('hidden'); }
 

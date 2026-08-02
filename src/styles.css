@@ -475,6 +475,35 @@ button { cursor: pointer; background: none; border: none; }
   box-shadow: var(--shadow-sm);
   animation: rise .22s var(--ease) both;
 }
+/* Delegated sub-agent: a collapsible card nested under the parent's tools */
+.subagent-card {
+  border: 1px dashed var(--accent);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+  margin-top: 8px;
+  overflow: hidden;
+}
+.sa-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 11px; cursor: pointer; user-select: none;
+  font-size: 13px; font-weight: 600;
+}
+.sa-caret { color: var(--accent); width: 12px; }
+.sa-name { flex: 1; }
+.sa-status { color: var(--text-2); font-weight: 500; font-size: 12px; }
+.sa-body { display: none; padding: 4px 11px 10px 26px; border-top: 1px solid var(--border); }
+.subagent-card.open .sa-body { display: block; }
+.sa-text {
+  white-space: pre-wrap; font-size: 13px; color: var(--text);
+  max-height: 220px; overflow: auto; margin: 6px 0; line-height: 1.5;
+}
+.sa-tool {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; padding: 3px 0; color: var(--text-2);
+}
+.sa-tool.ok { color: var(--ok, #2e9e5b); }
+.sa-tool.fail { color: var(--danger, #d9534f); }
+.sa-tool-name { font-family: var(--mono); }
 .tool-head {
   display: flex;
   align-items: center;
