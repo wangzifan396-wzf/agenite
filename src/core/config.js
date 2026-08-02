@@ -112,7 +112,30 @@ export function defaultConfig() {
     workspace: '',
     // Escape hatch: allow the agent outside the workspace root. Off by default.
     allowOutsideWorkspace: false,
-    systemPrompt: ''
+    systemPrompt: '',
+    // --- agent loop ---
+    // How many model round-trips one request may take before we stop and ask.
+    maxTurns: 20,
+    // --- context management ---
+    // 0 = derive from the model name. Set it if you know better than our table.
+    contextWindow: 0,
+    autoCompact: true,
+    // Use a real (cheap) model call to summarize dropped turns instead of a
+    // mechanical digest. Costs one small extra request when it triggers.
+    smartCompact: true,
+    // --- cost accounting (0 = use the built-in price table) ---
+    priceIn: 0,
+    priceOut: 0,
+    priceCurrency: 'CNY',
+    // --- approvals ---
+    // Tools that never need a click again ("始终允许" in the approval dialog).
+    toolAllowlist: [],
+    // Let obviously read-only MCP tools (get_/list_/search_…) run without a
+    // prompt. Anything that can change state still asks.
+    mcpAutoApproveReadonly: true,
+    // Mirror conversations into ~/.agenite/sessions so they survive a browser
+    // change or a cleared cache.
+    syncSessions: true
   };
 }
 
@@ -135,6 +158,18 @@ export function normalizeConfig(input = {}) {
   if (!APPROVAL_MODES.some((m) => m.id === cfg.approvalMode)) cfg.approvalMode = 'ask';
   cfg.workspace = typeof cfg.workspace === 'string' ? cfg.workspace.trim() : '';
   cfg.systemPrompt = typeof cfg.systemPrompt === 'string' ? cfg.systemPrompt : '';
+  cfg.maxTurns = Math.round(clampNum(cfg.maxTurns, 1, 100, 20));
+  cfg.contextWindow = Math.round(clampNum(cfg.contextWindow, 0, 2000000, 0));
+  cfg.autoCompact = cfg.autoCompact !== false;
+  cfg.smartCompact = cfg.smartCompact !== false;
+  cfg.syncSessions = cfg.syncSessions !== false;
+  cfg.mcpAutoApproveReadonly = cfg.mcpAutoApproveReadonly !== false;
+  cfg.priceIn = clampNum(cfg.priceIn, 0, 100000, 0);
+  cfg.priceOut = clampNum(cfg.priceOut, 0, 100000, 0);
+  cfg.priceCurrency = ['CNY', 'USD', 'EUR'].includes(cfg.priceCurrency) ? cfg.priceCurrency : 'CNY';
+  cfg.toolAllowlist = Array.isArray(cfg.toolAllowlist)
+    ? [...new Set(cfg.toolAllowlist.filter((s) => typeof s === 'string' && s))].slice(0, 200)
+    : [];
   return cfg;
 }
 

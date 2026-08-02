@@ -14,7 +14,10 @@ import { normalizeConfig, validateConfig, PROVIDER_PRESETS, APPROVAL_MODES } fro
 import { runAgent } from './src/core/agent.js';
 import { callModelStream } from './src/core/client.js';
 import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
-import { McpManager } from './src/core/mcp.js';
+import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
+import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
+import { priceFor } from './src/core/pricing.js';
+import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } from './src/core/sessions.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -43,6 +46,17 @@ const pendingApprovals = new Map();
 // Undo snapshots: token -> { path, before }. Lets the UI revert a write/edit.
 const undoStore = new Map();
 setUndoStore(undoStore);
+
+// Compaction summaries, keyed by the digest content. The browser re-sends the
+// whole history on every turn, so without this the same old prefix would be
+// summarized (and paid for) again and again. Bounded so it cannot grow forever.
+const summaryCache = new Map();
+const SUMMARY_CACHE_MAX = 60;
+function cacheKey(text) {
+  const s = String(text);
+  // Length + head + tail is enough to identify a prefix without hashing cost.
+  return `${s.length}:${s.slice(0, 96)}:${s.slice(-96)}`;
+}
 
 // MCP client: connects to external tool servers (browser/desktop control,
 // databases, GitHub, file systems…) so the model can actually act on the
@@ -86,9 +100,13 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/mcp/status') return sendJson(res, 200, { ok: true, servers: mcp.status() });
   if (req.method === 'POST' && url === '/api/mcp/servers') return handleMcpServers(req, res);
   if (req.method === 'POST' && url === '/api/mcp/disconnect') return handleMcpDisconnect(req, res);
+  if (req.method === 'POST' && url === '/api/mcp/import') return handleMcpImport(req, res);
+  if (url === '/api/sessions' || url.startsWith('/api/sessions/')) return handleSessions(req, res, url);
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
   if (req.method === 'GET' && url === '/api/health') {
-    return sendJson(res, 200, { ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES });
+    return sendJson(res, 200, {
+      ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
+    });
   }
   if (req.method === 'GET' && url === '/api/files') return handleFiles(req, res);
   if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(url, req, res);
@@ -172,6 +190,52 @@ async function handleMcpDisconnect(req, res) {
     const body = JSON.parse((await readBody(req)) || '{}');
     await mcp.disconnect(body.id);
     return sendJson(res, 200, { ok: true, servers: mcp.status() });
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, error: e.message });
+  }
+}
+
+// Paste a Claude Desktop / Cherry Studio mcp.json and get our server list back.
+// Parsing lives server-side because the parser sits next to the MCP client.
+async function handleMcpImport(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const servers = parseMcpConfigJson(body.text != null ? body.text : body.json);
+    return sendJson(res, 200, { ok: true, servers });
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, error: e.message });
+  }
+}
+
+// Conversations mirrored to ~/.agenite/sessions so they survive the browser.
+//   GET  /api/sessions           -> index
+//   GET  /api/sessions/<id>      -> one conversation
+//   POST /api/sessions           -> upsert  { conv }
+//   POST /api/sessions/delete    -> remove  { id }
+async function handleSessions(req, res, url) {
+  try {
+    if (req.method === 'GET' && url === '/api/sessions') {
+      return sendJson(res, 200, { ok: true, dir: SESSIONS_DIR, sessions: await listSessions() });
+    }
+    if (req.method === 'GET') {
+      const id = decodeURIComponent(url.slice('/api/sessions/'.length));
+      const conv = await readSession(id);
+      return conv ? sendJson(res, 200, { ok: true, conv }) : sendJson(res, 404, { ok: false, error: '未找到' });
+    }
+    if (req.method === 'POST' && url === '/api/sessions/delete') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      return sendJson(res, 200, { ok: await deleteSession(body.id) });
+    }
+    if (req.method === 'POST' && url === '/api/sessions') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const convs = Array.isArray(body.convs) ? body.convs : body.conv ? [body.conv] : [];
+      const saved = [];
+      for (const c of convs.slice(0, 50)) {
+        try { saved.push(await writeSession(c)); } catch (e) { saved.push({ error: e.message }); }
+      }
+      return sendJson(res, 200, { ok: true, saved });
+    }
+    return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: e.message });
   }
@@ -297,7 +361,22 @@ async function handleChat(req, res) {
   };
   req.on('close', () => { closed = true; ac.abort(); cleanup(); });
 
-  sse('start', { model: config.model, provider: config.provider, agent: agentEnabled, toolCount: tools.length, mcp: mcpTools.length, workspace: WORKSPACE });
+  const contextWindow = config.contextWindow || contextWindowFor(config.model);
+  const budget = historyBudget({
+    contextWindow, maxTokens: config.maxTokens, toolTokens: toolsTokens(tools)
+  });
+  sse('start', {
+    model: config.model,
+    provider: config.provider,
+    agent: agentEnabled,
+    toolCount: tools.length,
+    mcp: mcpTools.length,
+    workspace: WORKSPACE,
+    contextWindow,
+    budget,
+    maxTurns: config.maxTurns,
+    price: priceFor(config.model, config)
+  });
 
   // Prepend a system prompt so the model knows it can act on this machine.
   const incoming = Array.isArray(body.messages) ? body.messages.slice() : [];
@@ -330,7 +409,41 @@ async function handleChat(req, res) {
     if (type === 'delta') sse('delta', { content: payload });
     else if (type === 'tool_start') sse('tool_start', payload);
     else if (type === 'tool') sse('tool', payload);
+    else if (type === 'compact') sse('compact', payload);
+    else if (type === 'usage') sse('usage', payload);
     else if (type === 'done') sse('done', payload);
+  };
+
+  // Used by the context compactor to turn dropped turns into a short recap.
+  // A tiny, tool-free, non-streaming call — cheap compared to the 400 error it
+  // prevents. Any failure falls back to the mechanical digest.
+  //
+  // The client re-sends the whole history every turn, so the same prefix would
+  // be summarized again on every message. Cache by content so it happens once.
+  const summarize = async (digestText) => {
+    const key = cacheKey(digestText);
+    if (summaryCache.has(key)) return summaryCache.get(key);
+    const r = await callModelStream({
+      config: { ...config, maxTokens: 700, temperature: 0.2 },
+      messages: [
+        {
+          role: 'system',
+          content:
+            '你是对话压缩器。把下面的智能体执行记录压缩成简洁要点，必须保留：用户的目标、' +
+            '已完成的关键步骤与结论、创建或修改过的文件路径、尚未完成的事项、出现过的重要错误。' +
+            '不要臆造内容，不要客套话，用短句列点。'
+        },
+        { role: 'user', content: digestText }
+      ],
+      tools: [],
+      signal: ac.signal
+    });
+    const text = r && r.content ? r.content : '';
+    if (text) {
+      summaryCache.set(key, text);
+      if (summaryCache.size > SUMMARY_CACHE_MAX) summaryCache.delete(summaryCache.keys().next().value);
+    }
+    return text;
   };
 
   // Route MCP tool calls (names start with mcp__) to the MCP manager, which
@@ -343,16 +456,17 @@ async function handleChat(req, res) {
   };
 
   try {
-    await runAgent({
+    const result = await runAgent({
       messages,
       callModel,
       executeTool: executeToolWithMcp,
       onEvent,
       config,
-      toolContext: { requestApproval, platform: process.platform },
-      maxTurns: 12
+      tools,
+      summarize,
+      toolContext: { requestApproval, platform: process.platform }
     });
-    sse('end', {});
+    sse('end', { stopped: result.stopped, turns: result.turns, historyTokens: totalTokens(messages), budget });
     res.end();
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);

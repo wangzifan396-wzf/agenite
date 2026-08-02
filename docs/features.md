@@ -97,6 +97,30 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - MCP 工具调用**同样经过审批门控**（`ask` / `auto` / `deny`），默认 `ask` 会逐次弹窗；
 - 服务器进程随 Agenite 退出而终止，也可在界面上「停用 / 删除」随时断开。
 
+### 4.5 远程 MCP（HTTP / SSE）与 mcp.json 导入（v0.6.0）
+
+除了本地 stdio，MCP 客户端现在支持两种**远程传输**（写在 `src/core/mcp.js` 的 `HttpTransport` / `SseTransport`，零依赖手写，用 `fetch` 实现）：
+
+- **HTTP（Streamable HTTP）**：连 `https://.../mcp`，自动处理 `Mcp-Session-Id` 会话头，请求失败时（如 502）明确报错而非挂起；
+- **SSE（legacy）**：兼容老式 `type: 'sse'` 服务器。
+
+「手动添加」里把传输切到 HTTP/SSE 并填 `url` + `headers` 即可。此外支持**一键导入**其它客户端的配置：
+
+- 在设置 → MCP 工具底部，粘贴 Claude Desktop / Cursor / Cherry Studio 的 `mcp.json` 内容，或选文件上传，点「导入」即可；
+- 解析兼容三种形态：带 `mcpServers` 包裹、裸服务器 map、以及已 parsed 的对象；远程条目自动识别为 http/sse，`disabled:true` 的只导入不连；空对象会给出可读报错而非静默导入 0 台服务器。
+
+新增接口：
+
+| 接口 | 说明 |
+| --- | --- |
+| `POST /api/mcp/import` | 提交 `mcp.json` 文本，返回解析后的服务器列表 |
+
+### 4.6 只读工具免审与工具白名单（v0.6.0）
+
+- **只读自动放行**：`looksReadOnly(name)` 命中 `get_` / `list_` / `search_` / `read_` / `query_` / `screenshot` 等只读动词的 MCP 工具，可在「⚙ 工作区 / 权限」开启 `mcpAutoApproveReadonly` 后免审直行；`write_` / `delete_` / `create_` / `run_` / `execute_` 等一律仍走审批。模糊名称默认按「需审批」（安全方向）。
+- **工具白名单**：审批弹窗里点「始终允许」，该工具名（含 `mcp__…`）写入 `config.toolAllowlist`，之后永久免审；设置里「⚙ 工作区 / 权限」的 chip 列表可随时移除。白名单优先级低于 `deny`（只读模式仍会拦下一切）。
+- 审批裁决统一走 `approvalDecision(fullName, opts)`，返回 `deny` / `ask` / `allow` 三态。
+
 ## 5. 工作区沙箱与审批模式
 
 - **工作区沙箱**：所有文件工具的路径都解析并锚定在「工作区根目录」下（`list_dir` 的 `.` 即根目录）。越界开关 `allowOutsideWorkspace` 默认关闭，仅在用户明确开启时生效。
@@ -124,15 +148,51 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
     → 直到模型不再请求工具 → 最终回答
 ```
 
-最多 12 轮（防失控）。每一步以 SSE 事件推送给前端：
-- `start`：模型 / Agent 状态
+`maxTurns` **默认 20 轮**（v0.6.0 起可在「⚙ 高级」里设 1–100，防失控也防任务半途而废）。每一步以 SSE 事件推送给前端：
+- `start`：上下文窗口 / 预算 / maxTurns / 单价
 - `delta`：助手文本增量
 - `tool`：工具调用（名称 / 参数 / 结果 / 是否成功 / diff / undoToken）
-- `done` / `end`：结束
+- `compact`：上下文被压缩时推送（`before` / `after` / `dropped` 轮数），前端给出提示而非悄悄丢上下文
+- `usage`：本次请求的**累计** token 与成本（`prompt` / `completion` / `total` / `cost`）
+- `done`（`canContinue`）：若只因撞到 `maxTurns` 而终止，`canContinue: true`，前端显示「▶ 继续执行」
+- `end`：结束（`stopped` / `turns` / `historyTokens` / `budget`）
 
-## 8. 设计原则
+> **续跑**：点「继续执行」只是再发起一轮 `runTurn`，历史里已经带着上一轮的工具结果，因此从断点无缝继续，不必重头。
 
-- **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `util`）无 DOM，95 个单元测试覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证）。
+### 7.1 上下文自动压缩（v0.6.0）
+
+位于 `src/core/context.js`（仅服务端）。每轮开始前估算历史 token（CJK 约 1 token/字、拉丁约 3.6 字 1 token），对照模型上下文窗口（内置规则表，如 `deepseek-chat → 65536`）算预算：
+
+1. **分组**（`groupMessages`）：system 头固定置顶，每个 `assistant + 紧随的 tool 结果` 绑成一个原子组（绝不拆散工具配对，否则会 400）；
+2. **先裁剪工具输出**：把最旧的工具结果截断到保留首尾，省出空间；
+3. **还不够则归纳丢弃**：从最老的组开始，用机械摘要或一次廉价模型调用生成摘要并注入 system 区；摘要本身会**缓存**（`summaryCache`，上限 60）避免对相同文本重复请求；
+4. **降级**：摘要模型调用失败时退回机械摘要，保证压缩一定能完成。
+
+前端 `sanitizeHistory()` 会在发送前修复「assistant 有 tool_calls 但少了对应 tool 结果 / 反之」的孤儿配对（中途 Stop 或关标签页导致），同样防止 400。
+
+### 7.2 成本与 Token 统计（v0.6.0）
+
+位于 `src/core/pricing.js`（仅服务端）。内置 `PRICE_RULES` 价格表按模型名匹配单价（本地模型如 Ollama 算 ¥0、标记 `known:false`），支持在「⚙ 高级」里用 `priceIn` / `priceOut` / `priceCurrency` 覆盖。`normalizeUsage()` 把 OpenAI / Anthropic 两种用量格式统一成 `{prompt, completion, total}`；未知供应商点 `cost.known=false`，前端只显示 token 不显示金额。
+
+## 8. 会话本机镜像（v0.6.0）
+
+位于 `src/core/sessions.js`（仅服务端）。除了浏览器 `localStorage`，活跃对话会以防抖 1.5s 镜像到 `~/.agenite/sessions/<safeId>.json`：
+
+- `safeSessionId()` 过滤非法字符、防目录逃逸（不信任 `../`）、过长 id 截断，避免被恶意会话名写穿目录；
+- 超大对话在写入时截断近尾，避免单文件失控；损坏 / 缺 id 的记录在读取时跳过；
+- 相关接口：
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/sessions` | 列出本机已有会话（倒序），返回目录与数量 |
+| `POST /api/sessions` | 保存当前对话镜像 |
+| `GET /api/sessions/:id` | 读取单个会话详情 |
+
+换浏览器或清缓存后，设置里点「从本机恢复」即可把历史会话拉回（新浏览器无本地数据时也会静默尝试恢复）。
+
+## 9. 设计原则
+
+- **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `util`）无 DOM，**150 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API）。
-- **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`。
+- **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下。

@@ -223,10 +223,14 @@ async function ensureApproval(def, args, opts) {
     return { ok: false, error: `当前为「只读模式」，已拒绝执行 ${def.name}。` };
   }
   if (mode === 'auto') return null;
+  // The user pressed "始终允许" for this tool at some point.
+  if (Array.isArray(opts.toolAllowlist) && opts.toolAllowlist.includes(def.name)) return null;
   // 'ask' — needs a human. Without a hook (CLI/tests) we fall through rather
   // than deadlock, since dangerTools already had to be explicitly enabled.
   if (typeof opts.requestApproval !== 'function') return null;
-  const verdict = await opts.requestApproval({ name: def.name, args, description: def.description });
+  const verdict = await opts.requestApproval({
+    name: def.name, args, description: def.description, readOnly: false
+  });
   if (verdict && verdict.approved) return null;
   return { ok: false, error: (verdict && verdict.reason) || '用户拒绝了这次操作。' };
 }

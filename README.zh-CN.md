@@ -16,6 +16,11 @@
   - 🖥️ **桌面控制** — windows-computer-use-mcp（点击、键入、截屏）
   - ✋ **桌面 + 浏览器** — ScreenHand
   - 也可手动填 `command` / `args` / `env` 接入任意服务器；MCP 工具名以 `mcp__服务器__工具` 形式出现，**同样走审批门控**。
+  - 🔌 **远程 MCP（v0.6.0 新增）**：除了本地 stdio，还支持 **HTTP（Streamable HTTP）** 与 **SSE** 两种远程传输，直接连托管在云端的工具服务器；并能**一键导入 Claude Desktop / Cursor / Cherry Studio 的 `mcp.json`**（粘贴或选文件即可），不用逐条手抄。
+  - 🔓 **只读工具免审（v0.6.0）**：名称命中 `get_` / `list_` / `search_` / `read_` 等只读动词的 MCP 工具，可设为自动放行、不再逐次弹窗；写入类工具仍然走审批。设置里「⚙ 工作区 / 权限」可加 **工具白名单**（点「始终允许」即永久免审，可随时移除）。
+- **上下文自动压缩（v0.6.0）**：长对话逼近模型上下文窗口时，服务端正文**自动压缩**——先裁剪最旧的工具输出，再归纳丢弃最早的几轮对话并注入摘要，避免「对话越长越傻」或突然 400。压缩发生时界面会给出提示，而非悄悄丢上下文。
+- **成本 & Token 统计（v0.6.0）**：顶栏实时显示**上下文占用环 + 累计 token（输入/输出）+ 预估花费**（按内置价格表估算，本地模型算 0，未知单价则只统计 token）；每条助手回复下也显示本次消耗的 token 与轮数。价格表可在「⚙ 高级」里按你的实际账单覆盖。
+- **最大轮次可配 + 续跑（v0.6.0）**：Agent 循环上限 `maxTurns` 默认 20、可在「⚙ 高级」里设 1–100；任务没跑完只是因为撞到上限时，助手消息下方出现 **▶ 继续执行** 按钮，点一下就从上次断点继续，不用重头再来。
 - **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **14 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`apply_patch`（一次性打多文件补丁）
@@ -32,6 +37,7 @@
 - **重命名 + Markdown 导出**：双击标题重命名；`/export` 导出可读的 `.md` 对话记录（区别于完整 JSON 备份）。
 - **键盘快捷键**：Enter 发送、Shift+Enter 换行、`@` / `/` 触发、Ctrl+K、Ctrl+,（设置）、Ctrl+/（快捷键速查）、Esc 关闭浮层。
 - **多会话管理**、**明暗主题**、**XSS 安全的 Markdown 渲染**，以及可安装的 **PWA**。
+- **会话本机镜像（v0.6.0）**：对话除了存浏览器 `localStorage`，还会镜像到本机 `~/.agenite/sessions`（防「清缓存即丢失」）。换浏览器或清缓存后，设置里点「从本机恢复」即可找回历史会话。
 - **单文件构建**：`npm run build` 生成 `dist/agenite.html`，整站内联为一个文件。
 
 ---
@@ -58,7 +64,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（95 个，node:test）
+npm test       # 跑核心逻辑单元测试（150 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口
@@ -82,8 +88,11 @@ agenite/
 │       ├── provider.js   # OpenAI ↔ Anthropic 消息/工具格式互转
 │       ├── client.js     # 用 fetch 流式调用模型（可注入 mock 测试）
 │       ├── tools.js      # 工具定义与执行
-│       ├── mcp.js        # MCP 客户端：stdio 传输 + 多服务器管理 + 工具索引（仅服务端）
-│       ├── agent.js      # 工具调用循环
+│       ├── mcp.js        # MCP 客户端：stdio / HTTP / SSE 传输 + 多服务器管理 + 工具索引（仅服务端）
+│       ├── agent.js      # 工具调用循环（含上下文压缩、成本统计、续跑）
+│       ├── context.js    # 上下文估算与自动压缩（estimateTokens / compactMessages，仅服务端）
+│       ├── pricing.js    # 价格表与成本估算（normalizeUsage / priceFor，仅服务端）
+│       ├── sessions.js   # 会话本机镜像（safeSessionId / read-write，仅服务端）
 │       └── util.js       # 工具函数
 └── test/                # node:test 单元测试（含 mcp-mock-server.mjs 模拟服务器）
 ```

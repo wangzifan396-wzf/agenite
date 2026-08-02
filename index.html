@@ -96,6 +96,9 @@
           <button id="mcp-chip" class="chip" title="已连接的 MCP 工具服务器">
             <span class="chip-dot"></span>MCP <span id="mcp-count">0</span>
           </button>
+          <button id="usage-chip" class="chip usage hidden" title="本对话的上下文占用与花费">
+            <span class="ctx-ring" id="ctx-ring"><i></i></span><span id="usage-text">0</span>
+          </button>
           <button id="theme-toggle" class="icon-btn" title="切换主题" aria-label="切换主题"></button>
           <button id="clear-chat" class="icon-btn" title="清空当前对话" aria-label="清空当前对话">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>
@@ -170,6 +173,7 @@
         <label class="check tiny"><input id="approval-remember" type="checkbox" /> 本次会话内不再询问</label>
         <div class="grow"></div>
         <button id="approval-deny" class="btn-ghost">拒绝</button>
+        <button id="approval-always" class="btn-ghost" title="把这个工具加入白名单，以后不再询问（可在设置里移除）">始终允许</button>
         <button id="approval-allow" class="btn-primary">允许</button>
       </div>
     </div>
@@ -233,6 +237,14 @@
             <span><b>允许访问工作区之外</b><em>关闭时只能操作启动目录内的文件</em></span>
             <input id="set-allowOutside" type="checkbox" />
           </label>
+          <label class="switch-row">
+            <span><b>MCP 只读工具免确认</b><em>截图、读取、查询这类不改动系统的调用直接放行</em></span>
+            <input id="set-mcpReadonly" type="checkbox" />
+          </label>
+          <div class="field">
+            <span class="field-title">工具白名单<em class="muted small">（审批弹窗里点"始终允许"会加到这里）</em></span>
+            <div id="allowlist-box" class="chip-box"></div>
+          </div>
           <div class="ws-box">
             <span class="field-title">当前工作区</span>
             <code id="ws-path">—</code>
@@ -262,17 +274,46 @@
             <label class="field">标识 (id)
               <input id="mcp-id" type="text" placeholder="例如 my-server" spellcheck="false" />
             </label>
-            <label class="field">启动命令 (command)
-              <input id="mcp-command" type="text" placeholder="npx" spellcheck="false" />
+            <label class="field">连接方式
+              <select id="mcp-transport">
+                <option value="stdio">本地进程 (stdio)</option>
+                <option value="http">远程 HTTP (Streamable)</option>
+                <option value="sse">远程 SSE (旧版)</option>
+              </select>
             </label>
-            <label class="field">参数 (args)
-              <input id="mcp-args" type="text" placeholder="例如 -y @playwright/mcp@latest（空格分隔，或 JSON 数组）" spellcheck="false" />
-            </label>
-            <label class="field">环境变量 (env, 可选 JSON)
-              <input id="mcp-env" type="text" placeholder='例如 {"KEY":"value"}' spellcheck="false" />
-            </label>
+            <div id="mcp-stdio-fields">
+              <label class="field">启动命令 (command)
+                <input id="mcp-command" type="text" placeholder="npx" spellcheck="false" />
+              </label>
+              <label class="field">参数 (args)
+                <input id="mcp-args" type="text" placeholder="例如 -y @playwright/mcp@latest（空格分隔，或 JSON 数组）" spellcheck="false" />
+              </label>
+              <label class="field">环境变量 (env, 可选 JSON)
+                <input id="mcp-env" type="text" placeholder='例如 {"KEY":"value"}' spellcheck="false" />
+              </label>
+            </div>
+            <div id="mcp-remote-fields" class="hidden">
+              <label class="field">服务器地址 (url)
+                <input id="mcp-url" type="text" placeholder="https://example.com/mcp" spellcheck="false" />
+              </label>
+              <label class="field">请求头 (headers, 可选 JSON)
+                <input id="mcp-headers" type="text" placeholder='例如 {"Authorization":"Bearer xxx"}' spellcheck="false" />
+              </label>
+            </div>
             <div class="btn-row">
               <button id="mcp-add" class="btn-primary">添加并连接</button>
+            </div>
+          </details>
+
+          <details class="mcp-add">
+            <summary>⇪ 从 mcp.json 导入（兼容 Claude Desktop / Cursor / Cherry Studio）</summary>
+            <label class="field">粘贴配置内容
+              <textarea id="mcp-import-text" rows="7" spellcheck="false" placeholder='{ "mcpServers": { "playwright": { "command": "npx", "args": ["-y","@playwright/mcp@latest"] } } }'></textarea>
+            </label>
+            <div class="btn-row">
+              <button id="mcp-import-file-btn" class="btn-ghost">选择文件…</button>
+              <button id="mcp-import" class="btn-primary">解析并导入</button>
+              <input id="mcp-import-file" type="file" accept=".json,application/json" class="hidden" />
             </div>
           </details>
           <p class="muted small">首次连接会下载/启动服务器（<code>npx</code> 可能需要联网拉取），稍候片刻即可在下方看到工具数量。</p>
@@ -280,15 +321,63 @@
 
         <section class="tab-panel" data-panel="advanced">
           <label class="field">系统提示词（可选）
-            <textarea id="set-systemPrompt" rows="6" placeholder="例如：回答尽量简洁，代码优先给可运行片段。"></textarea>
+            <textarea id="set-systemPrompt" rows="5" placeholder="例如：回答尽量简洁，代码优先给可运行片段。"></textarea>
           </label>
+
+          <div class="field">
+            <span class="field-title">上下文与轮次</span>
+            <p class="muted small">长任务会把对话撑爆模型的上下文窗口，导致直接报错。开启自动压缩后，旧的工具输出会先被裁剪，再不够就把最老的几轮总结成一段摘要保留下来。</p>
+          </div>
+          <label class="switch-row">
+            <span><b>自动压缩上下文</b><em>接近上限时自动裁剪 + 摘要，避免 400 报错</em></span>
+            <input id="set-autoCompact" type="checkbox" checked />
+          </label>
+          <label class="switch-row">
+            <span><b>用模型生成摘要</b><em>关闭则只做机械截断，省钱但信息损失更大</em></span>
+            <input id="set-smartCompact" type="checkbox" checked />
+          </label>
+          <div class="field-row">
+            <label class="field">最大自动轮次
+              <input id="set-maxTurns" type="number" min="1" max="100" value="20" />
+            </label>
+            <label class="field">上下文窗口（0=按模型自动）
+              <input id="set-contextWindow" type="number" min="0" max="2000000" step="1000" value="0" />
+            </label>
+          </div>
+
+          <div class="field">
+            <span class="field-title">成本估算</span>
+            <p class="muted small">内置常见模型的价格表。若你的价格不同（企业折扣、代理转发），在这里填写每百万 token 的单价来覆盖；填 0 表示用内置价格。本地模型恒为 0。</p>
+          </div>
+          <div class="field-row">
+            <label class="field">输入 / 百万 token
+              <input id="set-priceIn" type="number" min="0" step="0.01" value="0" />
+            </label>
+            <label class="field">输出 / 百万 token
+              <input id="set-priceOut" type="number" min="0" step="0.01" value="0" />
+            </label>
+            <label class="field">币种
+              <select id="set-priceCurrency">
+                <option value="CNY">CNY ¥</option>
+                <option value="USD">USD $</option>
+                <option value="EUR">EUR €</option>
+              </select>
+            </label>
+          </div>
+
           <div class="field">
             <span class="field-title">数据</span>
+            <label class="switch-row">
+              <span><b>把会话同步到本机</b><em>镜像一份到 ~/.agenite/sessions，换浏览器/清缓存也能找回</em></span>
+              <input id="set-syncSessions" type="checkbox" checked />
+            </label>
             <div class="btn-row">
               <button id="export-data" class="btn-ghost">导出对话</button>
               <button id="import-data" class="btn-ghost">导入对话</button>
+              <button id="restore-sessions" class="btn-ghost">从本机恢复</button>
               <button id="reset-all" class="btn-ghost danger-text">清空全部数据</button>
             </div>
+            <div id="sessions-info" class="muted small"></div>
             <input id="import-file" type="file" accept="application/json" class="hidden" />
           </div>
         </section>

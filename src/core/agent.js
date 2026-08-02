@@ -9,8 +9,15 @@
 //   'delta'      (text chunk, for streaming UI)
 //   'assistant'  (full assistant message object)
 //   'tool_start' ({ id, name, args })
-//   'tool'       ({ id, name, args, result, ok, ms })
-//   'done'       ({ usage, stopped })
+//   'tool'       ({ id, name, args, result, ok, ms, diff, undoToken })
+//   'compact'    ({ before, after, dropped, trimmed })  history was shrunk
+//   'usage'      ({ turn, prompt, completion, total })  one API call's usage
+//   'done'       ({ usage, cost, stopped, turns, canContinue })
+
+import { compactMessages, contextWindowFor, historyBudget, toolsTokens, totalTokens } from './context.js';
+import { addUsage, costOf, emptyUsage, priceFor } from './pricing.js';
+
+export const DEFAULT_MAX_TURNS = 20;
 
 export async function runAgent({
   messages,
@@ -19,20 +26,62 @@ export async function runAgent({
   onEvent = () => {},
   config = {},
   toolContext = {},
-  maxTurns = 8
+  maxTurns,
+  tools = [],
+  summarize = null
 }) {
   const opts = {
     dangerTools: config.dangerTools,
     approvalMode: config.approvalMode,
     workspace: config.workspace,
     allowOutsideWorkspace: config.allowOutsideWorkspace,
+    toolAllowlist: config.toolAllowlist,
+    autoApproveReadonly: config.mcpAutoApproveReadonly,
     ...toolContext
   };
 
-  for (let turn = 0; turn < maxTurns; turn++) {
-    const { content, toolCalls, usage } = await callModel(messages, {
+  const limit = clampTurns(maxTurns != null ? maxTurns : config.maxTurns);
+  const price = priceFor(config.model, config);
+  const usage = emptyUsage();
+
+  // Budget is computed once: the tool list and the reply reservation do not
+  // change during a run.
+  const budget = historyBudget({
+    contextWindow: config.contextWindow || contextWindowFor(config.model),
+    maxTokens: config.maxTokens,
+    toolTokens: toolsTokens(tools)
+  });
+  const autoCompact = config.autoCompact !== false;
+
+  let turn = 0;
+  for (; turn < limit; turn++) {
+    if (autoCompact) {
+      const before = totalTokens(messages);
+      if (before > budget) {
+        const r = await compactMessages(messages, {
+          budget,
+          keepRecentGroups: 3,
+          toolTrimTo: 1200,
+          summarize: config.smartCompact === false ? null : summarize
+        });
+        if (r.compacted) {
+          messages.length = 0;
+          for (const m of r.messages) messages.push(m);
+          onEvent('compact', {
+            before: r.before, after: r.after, dropped: r.droppedGroups, trimmed: r.trimmed, budget
+          });
+        }
+      }
+    }
+
+    const { content, toolCalls, usage: turnUsage } = await callModel(messages, {
       onDelta: (t) => onEvent('delta', t)
     });
+
+    if (turnUsage) {
+      addUsage(usage, turnUsage);
+      onEvent('usage', { turn: turn + 1, ...usage, cost: costOf(usage, price) });
+    }
 
     const assistantMsg = { role: 'assistant', content: content || '' };
     if (toolCalls && toolCalls.length) {
@@ -46,8 +95,9 @@ export async function runAgent({
     onEvent('assistant', assistantMsg);
 
     if (!toolCalls || !toolCalls.length) {
-      onEvent('done', { usage, stopped: 'done', turns: turn + 1 });
-      return { messages, stopped: 'done', turns: turn + 1 };
+      const payload = finish('done', turn + 1, usage, price, limit);
+      onEvent('done', payload);
+      return { messages, ...payload };
     }
 
     for (const tc of toolCalls) {
@@ -72,6 +122,27 @@ export async function runAgent({
       });
     }
   }
-  onEvent('done', { stopped: 'max_turns', turns: maxTurns });
-  return { messages, stopped: 'max_turns', turns: maxTurns };
+
+  // Hit the ceiling with tools still pending. Say so out loud — silently
+  // truncating a half-finished task is the worst possible failure mode.
+  const payload = finish('max_turns', limit, usage, price, limit);
+  onEvent('done', payload);
+  return { messages, ...payload };
+}
+
+function finish(stopped, turns, usage, price, limit) {
+  return {
+    stopped,
+    turns,
+    usage: { ...usage },
+    cost: costOf(usage, price),
+    limit,
+    canContinue: stopped === 'max_turns'
+  };
+}
+
+export function clampTurns(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return DEFAULT_MAX_TURNS;
+  return Math.min(100, Math.max(1, Math.floor(n)));
 }

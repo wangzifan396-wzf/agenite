@@ -1157,7 +1157,7 @@ kbd {
 #mcp-chip #mcp-count { font-variant-numeric: tabular-nums; opacity: .85; margin-left: 2px; }
 .quick-add { margin: 4px 0 14px; }
 .mcp-add { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--bg-soft); }
-.mcp-add summary { cursor: pointer; font-weight: 600; color: var(--fg); }
+.mcp-add summary { cursor: pointer; font-weight: 600; color: var(--text); }
 .mcp-add .field { margin-top: 10px; }
 .mcp-list { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
 .mcp-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
@@ -1175,14 +1175,90 @@ kbd {
 .mcp-cmd { margin: 6px 0 2px; font-size: 12px; color: var(--muted); overflow-x: auto; }
 .mcp-cmd code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .mcp-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.tool-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); color: var(--fg-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tool-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); color: var(--text-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .mcp-err { margin-top: 6px; font-size: 11px; color: #e03131; white-space: pre-wrap; word-break: break-word; }
-.mini-btn { font-size: 12px; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; }
+.mini-btn { font-size: 12px; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
 .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* MCP tool card badge */
 .tool-card.mcp { border-left: 3px solid #2f9e44; }
 .mcp-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, #2f9e44 16%, var(--bg)); color: #2f9e44; margin-left: 2px; }
+.mcp-transport { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 6px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.tool-chip.ro { border-style: dashed; opacity: .85; }
+
+/* ==========================================================================
+   Token usage, cost and context pressure
+   A long agent run silently eats context and money. These surfaces make both
+   visible while it happens, not after the invoice arrives.
+   ========================================================================== */
+.chip.usage { font-variant-numeric: tabular-nums; }
+.ctx-ring {
+  --pct: 0%;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: conic-gradient(var(--ok) var(--pct), color-mix(in srgb, var(--border-strong) 70%, transparent) 0);
+  box-shadow: inset 0 0 0 2px var(--panel);
+  flex: none;
+  transition: background .3s var(--ease);
+}
+.ctx-ring.warn { background: conic-gradient(var(--warn) var(--pct), color-mix(in srgb, var(--border-strong) 70%, transparent) 0); }
+.ctx-ring.hot { background: conic-gradient(var(--danger) var(--pct), color-mix(in srgb, var(--border-strong) 70%, transparent) 0); }
+
+.msg-usage {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+  opacity: .72;
+}
+.msg-usage:hover { opacity: 1; }
+
+/* Inline notices inside a reply (context compaction, etc.) */
+.notices:empty { display: none; }
+.notice {
+  display: flex; align-items: flex-start; gap: 7px;
+  margin-bottom: 8px; padding: 6px 10px;
+  font-size: 12px; line-height: 1.5;
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-2);
+}
+.notice-ico { flex: none; opacity: .7; }
+.notice.compact { background: color-mix(in srgb, var(--warn) 8%, var(--panel-2)); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+
+/* "Hit the turn ceiling" resume strip */
+.continue-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding: 9px 12px;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  font-size: 12.5px; color: var(--text-2);
+}
+.continue-btn {
+  margin-left: auto;
+  padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent); color: #fff;
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background .15s var(--ease);
+}
+.continue-btn:hover { background: var(--accent-hover); }
+
+/* Permanent tool allowlist chips in settings */
+.chip-box { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.allow-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; padding: 3px 6px 3px 9px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  font-family: var(--mono); color: var(--text-2);
+}
+.allow-chip button {
+  border: none; background: none; cursor: pointer; padding: 0 2px;
+  color: var(--muted); font-size: 12px; line-height: 1;
+}
+.allow-chip button:hover { color: var(--danger); }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
@@ -1277,6 +1353,9 @@ kbd {
           <button id="mcp-chip" class="chip" title="已连接的 MCP 工具服务器">
             <span class="chip-dot"></span>MCP <span id="mcp-count">0</span>
           </button>
+          <button id="usage-chip" class="chip usage hidden" title="本对话的上下文占用与花费">
+            <span class="ctx-ring" id="ctx-ring"><i></i></span><span id="usage-text">0</span>
+          </button>
           <button id="theme-toggle" class="icon-btn" title="切换主题" aria-label="切换主题"></button>
           <button id="clear-chat" class="icon-btn" title="清空当前对话" aria-label="清空当前对话">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>
@@ -1351,6 +1430,7 @@ kbd {
         <label class="check tiny"><input id="approval-remember" type="checkbox" /> 本次会话内不再询问</label>
         <div class="grow"></div>
         <button id="approval-deny" class="btn-ghost">拒绝</button>
+        <button id="approval-always" class="btn-ghost" title="把这个工具加入白名单，以后不再询问（可在设置里移除）">始终允许</button>
         <button id="approval-allow" class="btn-primary">允许</button>
       </div>
     </div>
@@ -1414,6 +1494,14 @@ kbd {
             <span><b>允许访问工作区之外</b><em>关闭时只能操作启动目录内的文件</em></span>
             <input id="set-allowOutside" type="checkbox" />
           </label>
+          <label class="switch-row">
+            <span><b>MCP 只读工具免确认</b><em>截图、读取、查询这类不改动系统的调用直接放行</em></span>
+            <input id="set-mcpReadonly" type="checkbox" />
+          </label>
+          <div class="field">
+            <span class="field-title">工具白名单<em class="muted small">（审批弹窗里点"始终允许"会加到这里）</em></span>
+            <div id="allowlist-box" class="chip-box"></div>
+          </div>
           <div class="ws-box">
             <span class="field-title">当前工作区</span>
             <code id="ws-path">—</code>
@@ -1443,17 +1531,46 @@ kbd {
             <label class="field">标识 (id)
               <input id="mcp-id" type="text" placeholder="例如 my-server" spellcheck="false" />
             </label>
-            <label class="field">启动命令 (command)
-              <input id="mcp-command" type="text" placeholder="npx" spellcheck="false" />
+            <label class="field">连接方式
+              <select id="mcp-transport">
+                <option value="stdio">本地进程 (stdio)</option>
+                <option value="http">远程 HTTP (Streamable)</option>
+                <option value="sse">远程 SSE (旧版)</option>
+              </select>
             </label>
-            <label class="field">参数 (args)
-              <input id="mcp-args" type="text" placeholder="例如 -y @playwright/mcp@latest（空格分隔，或 JSON 数组）" spellcheck="false" />
-            </label>
-            <label class="field">环境变量 (env, 可选 JSON)
-              <input id="mcp-env" type="text" placeholder='例如 {"KEY":"value"}' spellcheck="false" />
-            </label>
+            <div id="mcp-stdio-fields">
+              <label class="field">启动命令 (command)
+                <input id="mcp-command" type="text" placeholder="npx" spellcheck="false" />
+              </label>
+              <label class="field">参数 (args)
+                <input id="mcp-args" type="text" placeholder="例如 -y @playwright/mcp@latest（空格分隔，或 JSON 数组）" spellcheck="false" />
+              </label>
+              <label class="field">环境变量 (env, 可选 JSON)
+                <input id="mcp-env" type="text" placeholder='例如 {"KEY":"value"}' spellcheck="false" />
+              </label>
+            </div>
+            <div id="mcp-remote-fields" class="hidden">
+              <label class="field">服务器地址 (url)
+                <input id="mcp-url" type="text" placeholder="https://example.com/mcp" spellcheck="false" />
+              </label>
+              <label class="field">请求头 (headers, 可选 JSON)
+                <input id="mcp-headers" type="text" placeholder='例如 {"Authorization":"Bearer xxx"}' spellcheck="false" />
+              </label>
+            </div>
             <div class="btn-row">
               <button id="mcp-add" class="btn-primary">添加并连接</button>
+            </div>
+          </details>
+
+          <details class="mcp-add">
+            <summary>⇪ 从 mcp.json 导入（兼容 Claude Desktop / Cursor / Cherry Studio）</summary>
+            <label class="field">粘贴配置内容
+              <textarea id="mcp-import-text" rows="7" spellcheck="false" placeholder='{ "mcpServers": { "playwright": { "command": "npx", "args": ["-y","@playwright/mcp@latest"] } } }'></textarea>
+            </label>
+            <div class="btn-row">
+              <button id="mcp-import-file-btn" class="btn-ghost">选择文件…</button>
+              <button id="mcp-import" class="btn-primary">解析并导入</button>
+              <input id="mcp-import-file" type="file" accept=".json,application/json" class="hidden" />
             </div>
           </details>
           <p class="muted small">首次连接会下载/启动服务器（<code>npx</code> 可能需要联网拉取），稍候片刻即可在下方看到工具数量。</p>
@@ -1461,15 +1578,63 @@ kbd {
 
         <section class="tab-panel" data-panel="advanced">
           <label class="field">系统提示词（可选）
-            <textarea id="set-systemPrompt" rows="6" placeholder="例如：回答尽量简洁，代码优先给可运行片段。"></textarea>
+            <textarea id="set-systemPrompt" rows="5" placeholder="例如：回答尽量简洁，代码优先给可运行片段。"></textarea>
           </label>
+
+          <div class="field">
+            <span class="field-title">上下文与轮次</span>
+            <p class="muted small">长任务会把对话撑爆模型的上下文窗口，导致直接报错。开启自动压缩后，旧的工具输出会先被裁剪，再不够就把最老的几轮总结成一段摘要保留下来。</p>
+          </div>
+          <label class="switch-row">
+            <span><b>自动压缩上下文</b><em>接近上限时自动裁剪 + 摘要，避免 400 报错</em></span>
+            <input id="set-autoCompact" type="checkbox" checked />
+          </label>
+          <label class="switch-row">
+            <span><b>用模型生成摘要</b><em>关闭则只做机械截断，省钱但信息损失更大</em></span>
+            <input id="set-smartCompact" type="checkbox" checked />
+          </label>
+          <div class="field-row">
+            <label class="field">最大自动轮次
+              <input id="set-maxTurns" type="number" min="1" max="100" value="20" />
+            </label>
+            <label class="field">上下文窗口（0=按模型自动）
+              <input id="set-contextWindow" type="number" min="0" max="2000000" step="1000" value="0" />
+            </label>
+          </div>
+
+          <div class="field">
+            <span class="field-title">成本估算</span>
+            <p class="muted small">内置常见模型的价格表。若你的价格不同（企业折扣、代理转发），在这里填写每百万 token 的单价来覆盖；填 0 表示用内置价格。本地模型恒为 0。</p>
+          </div>
+          <div class="field-row">
+            <label class="field">输入 / 百万 token
+              <input id="set-priceIn" type="number" min="0" step="0.01" value="0" />
+            </label>
+            <label class="field">输出 / 百万 token
+              <input id="set-priceOut" type="number" min="0" step="0.01" value="0" />
+            </label>
+            <label class="field">币种
+              <select id="set-priceCurrency">
+                <option value="CNY">CNY ¥</option>
+                <option value="USD">USD $</option>
+                <option value="EUR">EUR €</option>
+              </select>
+            </label>
+          </div>
+
           <div class="field">
             <span class="field-title">数据</span>
+            <label class="switch-row">
+              <span><b>把会话同步到本机</b><em>镜像一份到 ~/.agenite/sessions，换浏览器/清缓存也能找回</em></span>
+              <input id="set-syncSessions" type="checkbox" checked />
+            </label>
             <div class="btn-row">
               <button id="export-data" class="btn-ghost">导出对话</button>
               <button id="import-data" class="btn-ghost">导入对话</button>
+              <button id="restore-sessions" class="btn-ghost">从本机恢复</button>
               <button id="reset-all" class="btn-ghost danger-text">清空全部数据</button>
             </div>
+            <div id="sessions-info" class="muted small"></div>
             <input id="import-file" type="file" accept="application/json" class="hidden" />
           </div>
         </section>
@@ -1874,7 +2039,30 @@ function defaultConfig() {
     workspace: '',
     // Escape hatch: allow the agent outside the workspace root. Off by default.
     allowOutsideWorkspace: false,
-    systemPrompt: ''
+    systemPrompt: '',
+    // --- agent loop ---
+    // How many model round-trips one request may take before we stop and ask.
+    maxTurns: 20,
+    // --- context management ---
+    // 0 = derive from the model name. Set it if you know better than our table.
+    contextWindow: 0,
+    autoCompact: true,
+    // Use a real (cheap) model call to summarize dropped turns instead of a
+    // mechanical digest. Costs one small extra request when it triggers.
+    smartCompact: true,
+    // --- cost accounting (0 = use the built-in price table) ---
+    priceIn: 0,
+    priceOut: 0,
+    priceCurrency: 'CNY',
+    // --- approvals ---
+    // Tools that never need a click again ("始终允许" in the approval dialog).
+    toolAllowlist: [],
+    // Let obviously read-only MCP tools (get_/list_/search_…) run without a
+    // prompt. Anything that can change state still asks.
+    mcpAutoApproveReadonly: true,
+    // Mirror conversations into ~/.agenite/sessions so they survive a browser
+    // change or a cleared cache.
+    syncSessions: true
   };
 }
 
@@ -1897,6 +2085,18 @@ function normalizeConfig(input = {}) {
   if (!APPROVAL_MODES.some((m) => m.id === cfg.approvalMode)) cfg.approvalMode = 'ask';
   cfg.workspace = typeof cfg.workspace === 'string' ? cfg.workspace.trim() : '';
   cfg.systemPrompt = typeof cfg.systemPrompt === 'string' ? cfg.systemPrompt : '';
+  cfg.maxTurns = Math.round(clampNum(cfg.maxTurns, 1, 100, 20));
+  cfg.contextWindow = Math.round(clampNum(cfg.contextWindow, 0, 2000000, 0));
+  cfg.autoCompact = cfg.autoCompact !== false;
+  cfg.smartCompact = cfg.smartCompact !== false;
+  cfg.syncSessions = cfg.syncSessions !== false;
+  cfg.mcpAutoApproveReadonly = cfg.mcpAutoApproveReadonly !== false;
+  cfg.priceIn = clampNum(cfg.priceIn, 0, 100000, 0);
+  cfg.priceOut = clampNum(cfg.priceOut, 0, 100000, 0);
+  cfg.priceCurrency = ['CNY', 'USD', 'EUR'].includes(cfg.priceCurrency) ? cfg.priceCurrency : 'CNY';
+  cfg.toolAllowlist = Array.isArray(cfg.toolAllowlist)
+    ? [...new Set(cfg.toolAllowlist.filter((s) => typeof s === 'string' && s))].slice(0, 200)
+    : [];
   return cfg;
 }
 
@@ -1957,6 +2157,9 @@ let sessionAutoApprove = false;
 let workspacePath = '';
 let workspaceFiles = [];   // [{ path, size }] from /api/files
 let refs = [];             // files the user attached with "@" for the next message
+// Live numbers for the top-right chip: how full the context is and what the
+// conversation has cost so far. Reset whenever you switch conversations.
+let ctxState = { used: 0, budget: 0, window: 0 };
 
 // Slash commands available from the composer.
 const COMMANDS = [
@@ -1998,8 +2201,68 @@ function upsertMcpServer(srv) {
   return list;
 }
 function loadConvs() { try { return JSON.parse(localStorage.getItem(LS.convs) || '[]'); } catch { return []; } }
-function saveConvs() { localStorage.setItem(LS.convs, JSON.stringify(conversations)); }
+function saveConvs() {
+  try {
+    localStorage.setItem(LS.convs, JSON.stringify(conversations));
+  } catch (e) {
+    // Quota exceeded: a few long agent runs with big tool outputs fill the 5MB
+    // localStorage budget, and every later save fails silently. Warn once.
+    if (!saveConvs._warned) { saveConvs._warned = true; toast('浏览器存储已满，旧对话可能无法保存，请导出后清理'); }
+  }
+  scheduleSessionSync();
+}
 function currentConv() { return conversations.find((c) => c.id === currentId) || null; }
+
+// ---------- server-side session mirror ----------
+// localStorage is per-browser and one "clear site data" away from oblivion.
+// Mirror the active conversation into ~/.agenite/sessions so it survives.
+let syncTimer = null;
+function scheduleSessionSync() {
+  if (config.syncSessions === false) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    const c = currentConv();
+    if (!c || !c.messages.length) return;
+    fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conv: c })
+    }).catch(() => { /* offline server is not worth a toast on every keystroke */ });
+  }, 1500);
+}
+
+// Pull conversations back from disk. Used on first run in a fresh browser and
+// from the "从本机恢复" button.
+async function restoreSessions({ silent = false } = {}) {
+  try {
+    const r = await fetch('/api/sessions');
+    const j = await r.json();
+    const list = (j && j.sessions) || [];
+    const have = new Set(conversations.map((c) => c.id));
+    const missing = list.filter((s) => !have.has(s.id));
+    if (!missing.length) {
+      if (!silent) toast('本机没有更多可恢复的会话');
+      return 0;
+    }
+    const loaded = [];
+    for (const s of missing.slice(0, 100)) {
+      try {
+        const rr = await fetch('/api/sessions/' + encodeURIComponent(s.id));
+        const jj = await rr.json();
+        if (jj && jj.conv && Array.isArray(jj.conv.messages)) loaded.push(jj.conv);
+      } catch { /* skip */ }
+    }
+    if (!loaded.length) return 0;
+    conversations = [...conversations, ...loaded].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    localStorage.setItem(LS.convs, JSON.stringify(conversations));
+    renderConvList();
+    if (!silent) toast('已从本机恢复 ' + loaded.length + ' 个会话');
+    return loaded.length;
+  } catch {
+    if (!silent) toast('无法读取本机会话（本地服务未运行？）');
+    return 0;
+  }
+}
 
 function toast(msg, ms = 2200) {
   const el = $('toast');
@@ -2031,23 +2294,27 @@ function toggleTheme() {
 
 // ---------- conversations ----------
 function newConv() {
-  const c = { id: uid('conv'), title: '新对话', messages: [], createdAt: Date.now(), updatedAt: Date.now() };
+  const c = { id: uid('conv'), title: '新对话', messages: [], createdAt: Date.now(), updatedAt: Date.now(), usage: emptyUsage() };
   conversations.unshift(c);
   currentId = c.id;
   localStorage.setItem(LS.cur, currentId);
+  ctxState = { used: 0, budget: 0, window: 0 };
   saveConvs();
   renderConvList();
   renderMessages();
   updateTitle();
+  renderUsageChip();
   $('input').focus();
   return c;
 }
 function selectConv(id) {
   currentId = id;
   localStorage.setItem(LS.cur, currentId);
+  ctxState = { used: 0, budget: 0, window: 0 };
   renderConvList();
   renderMessages();
   updateTitle();
+  renderUsageChip();
   document.body.classList.remove('side-open');
 }
 function deleteConv(id) {
@@ -2088,6 +2355,106 @@ function renderConvList() {
 function updateTitle() {
   const c = currentConv();
   $('chat-title').textContent = (c && c.title) || '新对话';
+}
+
+// ---------- token usage & cost ----------
+// The server does the counting (it is the one talking to the provider); the
+// browser only accumulates and displays. Without this you have no idea what a
+// long agent run actually costs until the bill arrives.
+const CURRENCY_SIGN = { CNY: '¥', USD: '
+</body>
+</html>
+, EUR: '€' };
+
+function fmtTokens(n) {
+  const v = Number(n) || 0;
+  if (v >= 1000000) return (v / 1000000).toFixed(2) + 'M';
+  if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k';
+  return String(v);
+}
+function fmtCost(amount, currency) {
+  const v = Number(amount) || 0;
+  const sign = CURRENCY_SIGN[currency] || '';
+  if (v === 0) return sign + '0';
+  if (v < 0.01) return sign + v.toFixed(4);
+  return sign + v.toFixed(v < 1 ? 3 : 2);
+}
+// Field names mirror the server (src/core/pricing.js) exactly, so an event can
+// be copied across without a translation layer that would silently drift.
+function emptyUsage() {
+  return { prompt: 0, completion: 0, total: 0, cost: 0, currency: 'CNY', known: false };
+}
+function convUsage(c) {
+  if (!c) return emptyUsage();
+  // Old conversations were stored before usage existed, or with the previous
+  // field names — normalise instead of rendering NaN.
+  if (!c.usage || c.usage.total == null) c.usage = emptyUsage();
+  return c.usage;
+}
+// The server streams RUNNING TOTALS for the current request, so a usage event
+// replaces the request tally rather than adding to it.
+function setUsageFrom(target, data) {
+  target.prompt = Number(data.prompt) || 0;
+  target.completion = Number(data.completion) || 0;
+  target.total = Number(data.total) || 0;
+  if (data.cost) {
+    target.cost = Number(data.cost.amount) || 0;
+    target.currency = data.cost.currency || target.currency;
+    target.known = !!data.cost.known;
+  }
+  return target;
+}
+// Conversation-level tally: add one finished request to the running total.
+function addUsageTo(target, u) {
+  target.prompt += Number(u.prompt) || 0;
+  target.completion += Number(u.completion) || 0;
+  target.total += Number(u.total) || 0;
+  target.cost += Number(u.cost) || 0;
+  if (u.currency) target.currency = u.currency;
+  if (u.known) target.known = true;
+  return target;
+}
+
+// Top-right chip: context fill ring + tokens + money.
+function renderUsageChip() {
+  const chip = $('usage-chip');
+  if (!chip) return;
+  const u = convUsage(currentConv());
+  const hasUsage = u.total > 0;
+  const hasCtx = ctxState.used > 0 && ctxState.budget > 0;
+  if (!hasUsage && !hasCtx) { chip.classList.add('hidden'); return; }
+  chip.classList.remove('hidden');
+  const pct = hasCtx ? Math.min(100, Math.round((ctxState.used / ctxState.budget) * 100)) : 0;
+  const ring = $('ctx-ring');
+  if (ring) {
+    ring.style.setProperty('--pct', pct + '%');
+    ring.classList.toggle('warn', pct >= 70 && pct < 90);
+    ring.classList.toggle('hot', pct >= 90);
+  }
+  const money = u.known ? ' · ' + fmtCost(u.cost, u.currency) : '';
+  $('usage-text').textContent = fmtTokens(u.total) + money;
+  chip.title =
+    `上下文 ${fmtTokens(ctxState.used)} / ${fmtTokens(ctxState.budget)}（${pct}%）\n` +
+    `本对话累计：输入 ${fmtTokens(u.prompt)} · 输出 ${fmtTokens(u.completion)}\n` +
+    (u.known ? `预估花费 ${fmtCost(u.cost, u.currency)}（按价格表估算，仅供参考）` : '该模型未知单价，只统计 token');
+}
+
+// Small footer under an assistant reply: what this single answer consumed.
+function renderMsgUsage(el, m) {
+  if (!el || !m || !m.usage || !m.usage.total) return;
+  let line = el.querySelector('.msg-usage');
+  if (!line) {
+    line = document.createElement('div');
+    line.className = 'msg-usage';
+    const bubble = el.querySelector('.bubble');
+    (bubble || el).appendChild(line);
+  }
+  const u = m.usage;
+  const parts = [`↑${fmtTokens(u.prompt)}`, `↓${fmtTokens(u.completion)}`];
+  if (m.turns > 1) parts.push(`${m.turns} 轮`);
+  if (u.known) parts.push(fmtCost(u.cost, u.currency));
+  line.textContent = parts.join(' · ');
+  line.title = `本次回答共消耗 ${fmtTokens(u.total)} tokens`;
 }
 
 // ---------- rendering ----------
@@ -2159,9 +2526,12 @@ function buildMessageEl(m, index) {
     return el;
   }
   el.className = 'msg assistant';
-  el.innerHTML = '<div class="avatar">A</div><div class="bubble"><div class="tools"></div><div class="md"></div></div>';
+  el.innerHTML = '<div class="avatar">A</div><div class="bubble"><div class="notices"></div><div class="tools"></div><div class="md"></div></div>';
   el.querySelector('.md').innerHTML = renderMarkdown(m.content || '') || '';
   if (Array.isArray(m.toolCalls)) for (const t of m.toolCalls) upsertToolCard(el, t);
+  if (Array.isArray(m.notices)) for (const n of m.notices) addNotice(el, n);
+  renderMsgUsage(el, m);
+  if (m.canContinue) addContinueBar(el);
   if (typeof index === 'number') {
     const acts = document.createElement('div');
     acts.className = 'msg-acts';
@@ -2175,6 +2545,33 @@ function buildMessageEl(m, index) {
     el.appendChild(acts);
   }
   return el;
+}
+
+// An inline, low-key strip inside a reply — used for "history was compacted"
+// and similar events the user should know about but not be alarmed by.
+function addNotice(el, n) {
+  const box = el.querySelector('.notices');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = 'notice ' + (n.kind || 'info');
+  div.innerHTML = `<span class="notice-ico">${n.kind === 'compact' ? '⛁' : 'ℹ'}</span><span></span>`;
+  div.lastElementChild.textContent = n.text;
+  if (n.detail) div.title = n.detail;
+  box.appendChild(div);
+  return div;
+}
+
+// Shown when the agent stopped only because it hit the turn ceiling. Without
+// this the run just ends mid-task and looks like the model gave up.
+function addContinueBar(el) {
+  const bubble = el.querySelector('.bubble');
+  if (!bubble || bubble.querySelector('.continue-bar')) return;
+  const bar = document.createElement('div');
+  bar.className = 'continue-bar';
+  bar.innerHTML =
+    '<span>已达到本次最大轮次，任务可能还没做完。</span>' +
+    '<button class="continue-btn" type="button">▶ 继续执行</button>';
+  bubble.appendChild(bar);
 }
 
 const TOOL_ICONS = {
@@ -2263,6 +2660,35 @@ function stripForApi(m) {
   return o;
 }
 
+// Providers reject a history where an assistant `tool_calls` has no matching
+// `tool` reply (and vice versa). That happens for real: hit Stop mid-tool, or
+// close the tab while a call is in flight, and the next message 400s forever
+// with a cryptic error. Repair the history instead of letting that happen.
+function sanitizeHistory(list) {
+  const answered = new Set();
+  for (const m of list) if (m.role === 'tool' && m.tool_call_id) answered.add(m.tool_call_id);
+
+  const out = [];
+  const kept = new Set();
+  for (const m of list) {
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      const live = m.tool_calls.filter((tc) => answered.has(tc.id));
+      for (const tc of live) kept.add(tc.id);
+      // An assistant turn with neither text nor a surviving call is noise.
+      if (!live.length && !String(m.content || '').trim()) continue;
+      out.push(live.length === m.tool_calls.length ? m : { ...m, tool_calls: live });
+      continue;
+    }
+    if (m.role === 'tool') {
+      if (!m.tool_call_id || !kept.has(m.tool_call_id)) continue; // orphan result
+      out.push(m);
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 async function postStream(url, body, onEvent, signal) {
   const res = await fetch(url, {
     method: 'POST',
@@ -2339,7 +2765,7 @@ async function approvePlan() {
 async function runTurn(conv, opts = {}) {
   const planning = !!opts.planning;
   abortCtrl = new AbortController();
-  const aMsg = { role: 'assistant', content: '', tool_calls: [], toolCalls: [] };
+  const aMsg = { role: 'assistant', content: '', tool_calls: [], toolCalls: [], notices: [] };
   conv.messages.push(aMsg);
   const el = buildMessageEl(aMsg);
   el.querySelector('.md').innerHTML = THINKING;
@@ -2348,9 +2774,10 @@ async function runTurn(conv, opts = {}) {
   setBusy(true);
 
   const md = el.querySelector('.md');
+  const turnUsage = emptyUsage();
   try {
     await postStream('/api/chat', {
-      messages: conv.messages.filter((m) => m !== aMsg).map(stripForApi),
+      messages: sanitizeHistory(conv.messages.filter((m) => m !== aMsg)).map(stripForApi),
       config,
       agentEnabled: config.agentEnabled,
       planning,
@@ -2370,11 +2797,40 @@ async function runTurn(conv, opts = {}) {
         aMsg.toolCalls.push(data);
         upsertToolCard(el, data);
         if (aMsg.content === '') md.innerHTML = THINKING;
+      } else if (event === 'start') {
+        ctxState.window = data.contextWindow || 0;
+        ctxState.budget = data.budget || 0;
+        renderUsageChip();
+      } else if (event === 'compact') {
+        // The server had to shrink the history to fit. Say so — silently
+        // losing context is exactly the kind of thing users hate discovering.
+        const saved = Math.max(0, (data.before || 0) - (data.after || 0));
+        const n = {
+          kind: 'compact',
+          text: `上下文已自动压缩：${fmtTokens(data.before)} → ${fmtTokens(data.after)} tokens` +
+            (data.dropped ? `（归纳了较早的 ${data.dropped} 轮）` : '（裁剪了旧的工具输出）'),
+          detail: `节省 ${fmtTokens(saved)} tokens，避免超出模型上下文窗口。`
+        };
+        aMsg.notices.push(n);
+        addNotice(el, n);
+      } else if (event === 'usage') {
+        setUsageFrom(turnUsage, data);
+        aMsg.usage = { ...turnUsage };
+        aMsg.turns = data.turn || aMsg.turns || 1;
+        renderMsgUsage(el, aMsg);
       } else if (event === 'error') {
         aMsg.content += (aMsg.content ? '\n\n' : '') + '⚠️ ' + (data.message || '出错了');
         md.innerHTML = renderMarkdown(aMsg.content);
       } else if (event === 'done' || event === 'end') {
         md.innerHTML = renderMarkdown(aMsg.content) || '<span class="muted small">（没有文本输出）</span>';
+        if (event === 'done' && data.canContinue) {
+          aMsg.canContinue = true;
+          addContinueBar(el);
+        }
+        if (event === 'end') {
+          if (data.historyTokens) ctxState.used = data.historyTokens;
+          if (data.budget) ctxState.budget = data.budget;
+        }
         if (planning) {
           conv.awaitingPlanApproval = true;
           conv.planMsgIndex = conv.messages.indexOf(aMsg);
@@ -2404,9 +2860,22 @@ async function runTurn(conv, opts = {}) {
       renderConvList();
       updateTitle();
     }
+    addUsageTo(convUsage(conv), turnUsage);
+    renderUsageChip();
     conv.updatedAt = Date.now();
     saveConvs();
   }
+}
+
+// "继续执行" — the history already ends with the tool results from the last
+// turn, so simply running another turn resumes exactly where it stopped.
+async function continueRun() {
+  if (abortCtrl) return;
+  const conv = currentConv();
+  if (!conv) return;
+  for (const m of conv.messages) if (m.canContinue) delete m.canContinue;
+  renderMessages();
+  await runTurn(conv);
 }
 
 function setBusy(busy) {
@@ -2528,9 +2997,12 @@ function answerApproval(id, approved) {
   }).catch(() => {});
 }
 
+let pendingApprovalName = '';
+
 function handleApprovalRequest(data) {
   if (sessionAutoApprove) return answerApproval(data.id, true);
   pendingApprovalId = data.id;
+  pendingApprovalName = data.name || '';
   $('approval-title').innerHTML = `执行 <code>${escapeHtml(data.name)}</code>`;
   $('approval-desc').textContent = data.description || '';
   $('approval-args').textContent = JSON.stringify(data.args || {}, null, 2);
@@ -2541,6 +3013,7 @@ function handleApprovalRequest(data) {
 
 function closeApproval() {
   pendingApprovalId = null;
+  pendingApprovalName = '';
   $('approval-modal').classList.add('hidden');
 }
 
@@ -2552,6 +3025,44 @@ function resolveApproval(approved) {
   }
   answerApproval(pendingApprovalId, approved);
   closeApproval();
+}
+
+// Permanent version of "remember": the tool name goes into the config, so it
+// is skipped in every future session too. Reversible from the settings.
+function approveAlways() {
+  if (!pendingApprovalId) return;
+  const name = pendingApprovalName;
+  if (name) {
+    const list = Array.isArray(config.toolAllowlist) ? config.toolAllowlist.slice() : [];
+    if (!list.includes(name)) list.push(name);
+    config.toolAllowlist = list;
+    saveConfig();
+    renderAllowlist();
+    toast(`已把 ${name} 加入白名单，之后不再询问`);
+  }
+  answerApproval(pendingApprovalId, true);
+  closeApproval();
+}
+
+// Chips in the settings so a permanent allow can be taken back.
+function renderAllowlist() {
+  const box = $('allowlist-box');
+  if (!box) return;
+  const list = Array.isArray(config.toolAllowlist) ? config.toolAllowlist : [];
+  if (!list.length) {
+    box.innerHTML = '<span class="muted small">（空）每个危险操作都会弹窗询问。</span>';
+    return;
+  }
+  box.innerHTML = list
+    .map((n) => `<span class="allow-chip">${escapeHtml(n)}<button data-rm="${escapeHtml(n)}" title="移除">✕</button></span>`)
+    .join('');
+  box.querySelectorAll('[data-rm]').forEach((b) => {
+    b.onclick = () => {
+      config.toolAllowlist = list.filter((x) => x !== b.dataset.rm);
+      saveConfig();
+      renderAllowlist();
+    };
+  });
 }
 
 // ---------- settings ----------
@@ -2630,8 +3141,33 @@ function fillSettings() {
   $('set-dangerTools').checked = !!config.dangerTools;
   $('set-allowOutside').checked = !!config.allowOutsideWorkspace;
   $('set-systemPrompt').value = config.systemPrompt || '';
+  $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
+  $('set-autoCompact').checked = config.autoCompact !== false;
+  $('set-smartCompact').checked = config.smartCompact !== false;
+  $('set-maxTurns').value = config.maxTurns || 20;
+  $('set-contextWindow').value = config.contextWindow || 0;
+  $('set-priceIn').value = config.priceIn || 0;
+  $('set-priceOut').value = config.priceOut || 0;
+  $('set-priceCurrency').value = config.priceCurrency || 'CNY';
+  $('set-syncSessions').checked = config.syncSessions !== false;
   $('ws-path').textContent = workspacePath || '（未连接本地服务）';
   renderApprovalModes();
+  renderAllowlist();
+  refreshSessionsInfo();
+}
+
+// A one-line "N conversations on disk" so the mirror is visibly real.
+async function refreshSessionsInfo() {
+  const el = $('sessions-info');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/sessions');
+    const j = await r.json();
+    const n = (j.sessions || []).length;
+    el.textContent = n ? `本机已存 ${n} 个会话 · ${j.dir}` : '本机还没有会话备份。';
+  } catch {
+    el.textContent = '';
+  }
 }
 function openSettings(tab) {
   populateProviders();
@@ -2671,14 +3207,30 @@ function saveSettings() {
     agentEnabled: $('set-agentEnabled').checked,
     dangerTools: $('set-dangerTools').checked,
     allowOutsideWorkspace: $('set-allowOutside').checked,
-    systemPrompt: $('set-systemPrompt').value
+    systemPrompt: $('set-systemPrompt').value,
+    mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
+    autoCompact: $('set-autoCompact').checked,
+    smartCompact: $('set-smartCompact').checked,
+    maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
+    contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
+    priceIn: Math.max(0, Number($('set-priceIn').value) || 0),
+    priceOut: Math.max(0, Number($('set-priceOut').value) || 0),
+    priceCurrency: $('set-priceCurrency').value || 'CNY',
+    syncSessions: $('set-syncSessions').checked
   };
   saveConfig();
   renderPermChip();
   renderAgentChip();
   renderModelChip();
+  renderUsageChip();
   closeSettings();
   toast('已保存');
+}
+
+function clampNum(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
 }
 
 async function testConnection() {
@@ -2745,6 +3297,16 @@ function parseMcpEnv(text) {
   if (!t) return {};
   try { return JSON.parse(t); } catch { toast('env 不是合法 JSON'); return {}; }
 }
+// What a server row says it is: a local process or a remote endpoint.
+function mcpTarget(s) {
+  if (s.url) return s.url;
+  return [s.command, ...(s.args || [])].join(' ');
+}
+function transportLabel(t) {
+  if (t === 'http') return 'HTTP';
+  if (t === 'sse') return 'SSE';
+  return 'stdio';
+}
 function updateMcpChip(servers) {
   const n = (servers || []).reduce((s, x) => s + (x.toolCount || 0), 0);
   const el = $('mcp-count');
@@ -2771,17 +3333,20 @@ function renderMcpList(servers) {
     const row = document.createElement('div');
     row.className = 'mcp-row ' + status;
     const toolsHtml = st && st.tools && st.tools.length
-      ? '<div class="mcp-tools">' + st.tools.map((t) => `<span class="tool-chip" title="${escapeHtml(t.description || '')}">${escapeHtml(t.name)}</span>`).join('') + '</div>'
+      ? '<div class="mcp-tools">' + st.tools.map((t) =>
+        `<span class="tool-chip${t.readOnly ? ' ro' : ''}" title="${escapeHtml(t.description || '')}${t.readOnly ? '\n（只读工具）' : ''}">${escapeHtml(t.name)}</span>`).join('') + '</div>'
       : '';
+    const tp = s.transport || (s.url ? 'http' : 'stdio');
     row.innerHTML =
       `<div class="mcp-row-head">` +
       `<span class="mcp-name">${escapeHtml(s.id)}</span>` +
+      `<span class="mcp-transport">${transportLabel(tp)}</span>` +
       `<span class="mcp-status ${status}">${statusText(status, toolCount)}</span>` +
       `<div class="grow"></div>` +
       `<button class="mini-btn" data-act="toggle" data-id="${escapeHtml(s.id)}">${s.enabled ? '停用' : '启用'}</button>` +
       `<button class="mini-btn" data-act="del" data-id="${escapeHtml(s.id)}">删除</button>` +
       `</div>` +
-      `<div class="mcp-cmd"><code>${escapeHtml([s.command, ...(s.args || [])].join(' '))}</code></div>` +
+      `<div class="mcp-cmd"><code>${escapeHtml(mcpTarget(s))}</code></div>` +
       toolsHtml +
       (err ? `<div class="mcp-err">${escapeHtml(err.slice(0, 300))}</div>` : '');
     box.appendChild(row);
@@ -3045,20 +3610,65 @@ function wire() {
       toast('已添加并连接：' + p.id);
     };
   });
+  $('mcp-transport').onchange = () => {
+    const remote = $('mcp-transport').value !== 'stdio';
+    $('mcp-stdio-fields').classList.toggle('hidden', remote);
+    $('mcp-remote-fields').classList.toggle('hidden', !remote);
+  };
   $('mcp-add').onclick = () => {
     const id = $('mcp-id').value.trim();
     if (!id) return toast('请填写标识 (id)');
-    const srv = {
-      id,
-      command: $('mcp-command').value.trim() || 'npx',
-      args: parseMcpArgs($('mcp-args').value),
-      env: parseMcpEnv($('mcp-env').value),
-      enabled: true
-    };
+    const transport = $('mcp-transport').value || 'stdio';
+    let srv;
+    if (transport === 'stdio') {
+      srv = {
+        id, transport,
+        command: $('mcp-command').value.trim() || 'npx',
+        args: parseMcpArgs($('mcp-args').value),
+        env: parseMcpEnv($('mcp-env').value),
+        enabled: true
+      };
+    } else {
+      const url = $('mcp-url').value.trim();
+      if (!url) return toast('请填写服务器地址 (url)');
+      srv = { id, transport, url, headers: parseMcpEnv($('mcp-headers').value), enabled: true };
+    }
     upsertMcpServer(srv);
-    $('mcp-id').value = ''; $('mcp-command').value = ''; $('mcp-args').value = ''; $('mcp-env').value = '';
+    ['mcp-id', 'mcp-command', 'mcp-args', 'mcp-env', 'mcp-url', 'mcp-headers'].forEach((k) => { $(k).value = ''; });
     refreshMcp();
     toast('已添加：' + id);
+  };
+
+  // Import an existing mcp.json instead of retyping every server by hand.
+  $('mcp-import-file-btn').onclick = () => $('mcp-import-file').click();
+  $('mcp-import-file').onchange = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { $('mcp-import-text').value = String(reader.result); };
+    reader.readAsText(f);
+    e.target.value = '';
+  };
+  $('mcp-import').onclick = async () => {
+    const text = $('mcp-import-text').value.trim();
+    if (!text) return toast('先粘贴 mcp.json 的内容');
+    try {
+      const r = await fetch('/api/mcp/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || '解析失败');
+      const found = j.servers || [];
+      if (!found.length) return toast('没解析出任何服务器');
+      for (const s of found) upsertMcpServer(s);
+      $('mcp-import-text').value = '';
+      refreshMcp();
+      toast(`已导入 ${found.length} 个服务器：` + found.map((s) => s.id).join('、'));
+    } catch (err) {
+      toast('导入失败：' + err.message);
+    }
   };
   $('clear-chat').onclick = () => clearCurrent();
   $('send').onclick = () => sendMessage();
@@ -3098,12 +3708,15 @@ function wire() {
 
   $('approval-allow').onclick = () => resolveApproval(true);
   $('approval-deny').onclick = () => resolveApproval(false);
+  $('approval-always').onclick = () => approveAlways();
 
   document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => switchTab(t.dataset.tab); });
   $('export-data').onclick = exportData;
   $('import-data').onclick = () => $('import-file').click();
   $('import-file').onchange = (e) => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ''; };
+  $('restore-sessions').onclick = () => restoreSessions().then(refreshSessionsInfo);
   $('reset-all').onclick = resetAll;
+  $('usage-chip').onclick = () => openSettings('advanced');
 
   $('sidebar-open').onclick = () => document.body.classList.add('side-open');
   $('sidebar-close').onclick = () => document.body.classList.remove('side-open');
@@ -3123,6 +3736,7 @@ function wire() {
       }
       return;
     }
+    if (e.target.closest('.continue-btn')) { continueRun(); return; }
     const act = e.target.closest('.msg-act');
     if (!act) return;
     if (act.classList.contains('act-plan')) { approvePlan(); return; }
@@ -3179,10 +3793,17 @@ function init() {
   renderAgentChip();
   renderPlanChip();
   renderModelChip();
+  renderUsageChip();
   renderRefs();
   autoGrow();
   pingHealth();
   refreshMcp();
+  // Fresh browser but the machine already has history? Offer it back silently.
+  if (!conversations.length && config.syncSessions !== false) {
+    restoreSessions({ silent: true }).then((n) => {
+      if (n) toast('已从本机恢复 ' + n + ' 个历史会话');
+    });
+  }
   setInterval(pingHealth, 30000);
 }
 
