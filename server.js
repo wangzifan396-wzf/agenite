@@ -49,6 +49,35 @@ setUndoStore(undoStore);
 // machine and the wider world. This is what makes Agenite a real agent.
 const mcp = new McpManager();
 
+// MCP servers are child processes we spawned. If we exit without killing them
+// they linger as orphans (very visible on Windows: node.exe piling up in Task
+// Manager after every Ctrl+C). Tear them down on every exit path.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n  正在关闭（${signal}）… 断开 MCP 服务器`);
+  const done = mcp.disconnectAll();
+  const guard = new Promise((r) => setTimeout(r, 3000));
+  await Promise.race([done, guard]);
+  mcp.killAllSync();
+  try { server.close(); } catch { /* ignore */ }
+  process.exit(0);
+}
+// On Windows only some of these are real: Ctrl+C -> SIGINT, closing the console
+// window -> SIGHUP, Ctrl+Break -> SIGBREAK. A hard TerminateProcess (Task
+// Manager) runs nothing at all — that case is covered by MCP servers exiting on
+// stdin EOF, which the stdio transport spec requires.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+  try { process.on(sig, () => shutdown(sig)); } catch { /* unsupported on this OS */ }
+}
+process.on('exit', () => mcp.killAllSync());
+process.on('uncaughtException', (e) => {
+  console.error('  未捕获异常:', e && e.message ? e.message : e);
+  mcp.killAllSync();
+  process.exit(1);
+});
+
 const server = http.createServer((req, res) => {
   const url = (req.url || '/').split('?')[0];
   if (req.method === 'POST' && url === '/api/chat') return handleChat(req, res);
@@ -241,13 +270,32 @@ async function handleChat(req, res) {
   });
 
   const sse = (event, data) => {
+    if (closed) return;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
   const ac = new AbortController();
   let closed = false;
-  req.on('close', () => { closed = true; ac.abort(); for (const e of pendingApprovals.values()) e.resolve({ approved: false, reason: '连接已关闭' }); });
+  // Approvals belonging to THIS request only. Cancelling every pending
+  // approval on disconnect would kill approvals of other open tabs.
+  const myApprovals = new Set();
+  // A long tool call (MCP allows 120s) or a slow human approval leaves the
+  // stream silent long enough for proxies/browsers to consider it dead.
+  // An SSE comment line keeps it warm without disturbing the client parser.
+  const heartbeat = setInterval(() => {
+    if (closed) return;
+    try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
+  }, 15000);
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    for (const id of myApprovals) {
+      const e = pendingApprovals.get(id);
+      if (e) { pendingApprovals.delete(id); e.resolve({ approved: false, reason: '连接已关闭' }); }
+    }
+    myApprovals.clear();
+  };
+  req.on('close', () => { closed = true; ac.abort(); cleanup(); });
 
   sse('start', { model: config.model, provider: config.provider, agent: agentEnabled, toolCount: tools.length, mcp: mcpTools.length, workspace: WORKSPACE });
 
@@ -265,9 +313,16 @@ async function handleChat(req, res) {
     if (closed) return resolveVote({ approved: false, reason: '连接已关闭' });
     const id = 'apv_' + Math.random().toString(36).slice(2, 10);
     const timer = setTimeout(() => {
-      if (pendingApprovals.has(id)) { pendingApprovals.delete(id); resolveVote({ approved: false, reason: '审批超时（120s）' }); }
+      if (pendingApprovals.has(id)) {
+        pendingApprovals.delete(id);
+        myApprovals.delete(id);
+        resolveVote({ approved: false, reason: '审批超时（120s）' });
+      }
     }, 120000);
-    pendingApprovals.set(id, { resolve: (v) => { clearTimeout(timer); resolveVote(v); } });
+    myApprovals.add(id);
+    pendingApprovals.set(id, {
+      resolve: (v) => { clearTimeout(timer); myApprovals.delete(id); resolveVote(v); }
+    });
     sse('approval', { id, name, args, description });
   });
 
@@ -303,6 +358,8 @@ async function handleChat(req, res) {
     const msg = e && e.message ? e.message : String(e);
     sse('error', { message: msg });
     res.end();
+  } finally {
+    cleanup();
   }
 }
 

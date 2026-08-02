@@ -7,12 +7,19 @@ import { stdin, stdout } from 'node:process';
 const TOOLS = [
   { name: 'echo', description: 'Echo text back', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
   { name: 'add', description: 'Add two numbers', inputSchema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a', 'b'] } },
-  { name: 'boom', description: 'Always returns an error', inputSchema: { type: 'object', properties: {} } }
+  { name: 'boom', description: 'Always returns an error', inputSchema: { type: 'object', properties: {} } },
+  { name: 'flood', description: 'Returns a huge blob (context-window hazard)', inputSchema: { type: 'object', properties: { size: { type: 'number' } } } },
+  { name: 'mixed', description: 'Returns text + image + resource parts', inputSchema: { type: 'object', properties: {} } }
 ];
 
 function send(obj) { stdout.write(JSON.stringify(obj) + '\n'); }
 
 stdin.setEncoding('utf8');
+// Per the MCP stdio transport spec, the server exits when stdin closes. This
+// is what makes children die on their own if the client vanishes, so the
+// behaviour must be modelled here or the orphan tests are meaningless.
+stdin.on('end', () => process.exit(0));
+stdin.on('close', () => process.exit(0));
 let buf = '';
 stdin.on('data', (chunk) => {
   buf += chunk;
@@ -36,6 +43,21 @@ stdin.on('data', (chunk) => {
         send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: String(Number(args.a) + Number(args.b)) }] } });
       } else if (name === 'boom') {
         send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'failed on purpose' }], isError: true } });
+      } else if (name === 'flood') {
+        const size = Number(args && args.size) || 50000;
+        send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'x'.repeat(size) }] } });
+      } else if (name === 'mixed') {
+        send({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: {
+            content: [
+              { type: 'text', text: 'first' },
+              { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+              { type: 'resource', resource: { uri: 'file:///x.txt', text: 'from resource' } }
+            ]
+          }
+        });
       } else {
         send({ jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: 'unknown tool ' + name } });
       }

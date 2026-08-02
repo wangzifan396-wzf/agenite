@@ -10,7 +10,38 @@
 //
 // Pure-ish: `spawn` is injectable so the whole thing is testable under
 // node:test with a mock server script.
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+
+// Killing an MCP server is not as simple as kill(pid). The usual launch form is
+// `npx some-mcp-server`, where npx is merely a launcher that spawns the real
+// server as a grandchild. Killing npx alone orphans the actual server, which
+// then survives forever holding memory/ports. So we kill the whole tree.
+function killTree(pid, force) {
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', ...(force ? ['/F'] : [])], {
+        stdio: 'ignore',
+        timeout: 5000,
+        windowsHide: true
+      });
+      return;
+    } catch { /* process already gone, or taskkill unavailable — fall through */ }
+  }
+  try { process.kill(pid, force ? 'SIGKILL' : 'SIGTERM'); } catch { /* already gone */ }
+}
+
+// MCP servers are third-party and can return enormous payloads (a browser
+// automation tool happily hands back a whole rendered page). Anything that
+// goes into `messages` must be bounded or the next model call blows the
+// context window and the whole run dies with a 400.
+export const MCP_MAX_OUTPUT = 12000;
+
+export function truncateMcpOutput(text, max = MCP_MAX_OUTPUT) {
+  const s = String(text == null ? '' : text);
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `\n…(MCP 输出共 ${s.length} 字符，已截断到 ${max})`;
+}
 
 // A connected MCP server. `pending` holds in-flight JSON-RPC requests keyed by
 // their numeric id so responses can be matched back.
@@ -30,11 +61,15 @@ function makeServer(id) {
 }
 
 export class McpManager {
-  constructor({ spawnFn = spawn } = {}) {
+  constructor({ spawnFn = spawn, maxOutput = MCP_MAX_OUTPUT } = {}) {
     this.spawnFn = spawnFn;
+    this.maxOutput = maxOutput;
     this.servers = new Map();
     // fullName -> { serverId, toolName }  (serverId may itself contain "_")
     this.toolIndex = new Map();
+    // reconcile() spawns/kills processes; running two at once races and can
+    // leave duplicate children behind. Serialise them through this chain.
+    this._reconcileChain = Promise.resolve();
   }
 
   // Connect (or reconnect) a single server. `opts` = { command, args, env, enabled }.
@@ -86,7 +121,7 @@ export class McpManager {
     await this._request(server, 'initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'agenite', version: '0.4.0' }
+      clientInfo: { name: 'agenite', version: '0.5.1' }
     }, 30000);
     // 2) tell the server we are ready
     try {
@@ -212,18 +247,40 @@ export class McpManager {
       return { ok: false, error: e.message };
     }
     const content = (result && result.content) || [];
-    const text = content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n');
+    const parts = [];
+    for (const c of content) {
+      if (!c) continue;
+      if (c.type === 'text') parts.push(String(c.text ?? ''));
+      // Images/audio can't go into a text-only message; describe them instead
+      // of dropping them silently, so the model knows something came back.
+      else if (c.type === 'image') parts.push(`[图片 ${c.mimeType || 'image'}，${(c.data || '').length} 字节 base64，已省略]`);
+      else if (c.type === 'resource' && c.resource) {
+        parts.push(String(c.resource.text ?? `[资源 ${c.resource.uri || ''}]`));
+      }
+    }
+    const text = parts.join('\n');
     const isError = !!(result && result.isError);
     return {
       ok: !isError,
-      content: text || (isError ? '工具返回错误（无文本）' : '（无文本输出）'),
+      content: truncateMcpOutput(text, this.maxOutput) ||
+        (isError ? '工具返回错误（无文本）' : '（无文本输出）'),
       isError
     };
   }
 
   // Make the desired set of servers match reality: connect new/enabled ones,
   // disconnect removed/disabled ones, keep already-connected ones alive.
-  async reconcile(desired = []) {
+  // Public entry point: queued so overlapping chat requests can't race each
+  // other into spawning duplicate child processes.
+  reconcile(desired = []) {
+    const run = () => this._reconcile(desired);
+    const next = this._reconcileChain.then(run, run);
+    // Keep the chain alive even if this reconcile rejects.
+    this._reconcileChain = next.then(() => {}, () => {});
+    return next;
+  }
+
+  async _reconcile(desired = []) {
     const wanted = new Map();
     for (const d of desired) {
       if (d && d.enabled && d.id) wanted.set(d.id, d);
@@ -246,16 +303,51 @@ export class McpManager {
     return this.status();
   }
 
-  async disconnect(id) {
+  // Terminate a server. We wait (briefly) for the child to actually exit and
+  // escalate to SIGKILL, otherwise stubborn `npx`-launched servers survive as
+  // orphans and keep holding ports/memory after Agenite quits.
+  async disconnect(id, { graceMs = 1500 } = {}) {
     const s = this.servers.get(id);
     if (!s) return;
-    try { if (s.proc) s.proc.kill('SIGTERM'); } catch { /* ignore */ }
     this.servers.delete(id);
     this._rebuildIndex();
+    this._failPending(s, 'MCP 服务器已断开');
+    const proc = s.proc;
+    if (!proc || proc.exitCode != null || proc.signalCode != null) return;
+    await new Promise((done) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; clearTimeout(timer); done(); } };
+      const timer = setTimeout(() => {
+        killTree(proc.pid, true);
+        finish();
+      }, graceMs);
+      proc.once('exit', finish);
+      // Closing stdin is the polite MCP shutdown signal; spec-compliant servers
+      // exit on EOF. The tree kill below is the guarantee.
+      try { proc.stdin && proc.stdin.end(); } catch { /* ignore */ }
+      try { killTree(proc.pid, false); } catch { finish(); }
+    });
   }
 
   async disconnectAll() {
-    for (const id of [...this.servers.keys()]) await this.disconnect(id);
+    await Promise.all([...this.servers.keys()].map((id) => this.disconnect(id)));
+  }
+
+  // Best-effort synchronous teardown for process exit handlers, where there is
+  // no time left to await anything.
+  killAllSync() {
+    for (const s of this.servers.values()) {
+      if (s.proc) killTree(s.proc.pid, true);
+    }
+    this.servers.clear();
+    this.toolIndex.clear();
+  }
+
+  // PIDs of every live child — used by the shutdown watchdog.
+  childPids() {
+    return [...this.servers.values()]
+      .map((s) => s.proc && s.proc.pid)
+      .filter((p) => typeof p === 'number');
   }
 
   // Snapshot for the UI.
