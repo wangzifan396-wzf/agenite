@@ -517,6 +517,34 @@ async function writeLocalFile(path, content, opts = {}) {
   return { ok: true, content: `已写入 ${displayPath(abs, opts)}（${text.length} 字符）` };
 }
 
+// Flat index of the workspace, used by the UI's "@" file picker.
+// Read-only, never leaves the sandbox, and hard-capped so huge repos stay snappy.
+export async function scanWorkspaceFiles({ root, limit = 2000, maxDepth = 8 } = {}) {
+  const rootAbs = resolve(root || '.');
+  const out = [];
+  async function walk(dir, depth) {
+    if (out.length >= limit || depth > maxDepth) return;
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= limit) return;
+      if (e.name.startsWith('.')) continue;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue;
+        await walk(full, depth + 1);
+      } else if (e.isFile()) {
+        let size = 0;
+        try { size = (await stat(full)).size; } catch { /* unreadable, still list it */ }
+        out.push({ path: relative(rootAbs, full).split(sep).join('/'), size });
+      }
+    }
+  }
+  await walk(rootAbs, 0);
+  out.sort((a, b) => a.path.localeCompare(b.path));
+  return out;
+}
+
 async function editLocalFile(args, opts = {}) {
   const abs = resolveSafePath(args.path, opts);
   const oldText = String(args.old_text == null ? '' : args.old_text);

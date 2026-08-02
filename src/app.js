@@ -2,7 +2,7 @@
 // and human-in-the-loop approvals, multi-conversation management, theme.
 // Talks to the local server, which is the part that can actually touch the machine.
 import { renderMarkdown } from './core/markdown.js';
-import { uid, escapeHtml } from './core/util.js';
+import { uid, escapeHtml, fuzzyFilter, formatBytes } from './core/util.js';
 import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES } from './core/config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -26,6 +26,19 @@ let currentId = localStorage.getItem(LS.cur) || (conversations[0] && conversatio
 let abortCtrl = null;
 let sessionAutoApprove = false;
 let workspacePath = '';
+let workspaceFiles = [];   // [{ path, size }] from /api/files
+let refs = [];             // files the user attached with "@" for the next message
+
+// Slash commands available from the composer.
+const COMMANDS = [
+  { name: '/new', hint: '开一个新对话', run: () => newConv() },
+  { name: '/clear', hint: '清空当前对话的消息', run: () => clearCurrent() },
+  { name: '/rename', hint: '重命名当前对话', run: () => renameCurrent() },
+  { name: '/export', hint: '把当前对话导出为 Markdown', run: () => exportCurrentMarkdown() },
+  { name: '/model', hint: '打开模型设置', run: () => openSettings('model') },
+  { name: '/workspace', hint: '查看 / 修改工作区与权限', run: () => openSettings('power') },
+  { name: '/help', hint: '显示快捷键速查', run: () => openKeys() }
+];
 
 function loadConfig() {
   try { return { ...defaultConfig(), ...JSON.parse(localStorage.getItem(LS.config) || '{}') }; }
@@ -136,10 +149,10 @@ function renderMessages() {
     box.appendChild(buildEmptyState());
     return;
   }
-  for (const m of c.messages) {
-    if (m.role === 'tool' || m.role === 'system') continue;
-    box.appendChild(buildMessageEl(m));
-  }
+  c.messages.forEach((m, i) => {
+    if (m.role === 'tool' || m.role === 'system') return;
+    box.appendChild(buildMessageEl(m, i));
+  });
   scrollBottom();
 }
 
@@ -165,18 +178,44 @@ function buildEmptyState() {
   return wrap;
 }
 
-function buildMessageEl(m) {
+const ICO_COPY = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const ICO_REDO = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>';
+const ICO_EDIT = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+
+function actionBtn(cls, icon, label, idx) {
+  return `<button class="msg-act ${cls}" data-idx="${idx}" title="${label}" aria-label="${label}">${icon}<span>${label}</span></button>`;
+}
+
+function buildMessageEl(m, index) {
   const el = document.createElement('div');
   if (m.role === 'user') {
     el.className = 'msg user';
     el.innerHTML = '<div class="avatar">你</div><div class="bubble"></div>';
-    el.querySelector('.bubble').textContent = m.content || '';
+    el.querySelector('.bubble').textContent = m.display || m.content || '';
+    if (Array.isArray(m.refs) && m.refs.length) {
+      const tags = document.createElement('div');
+      tags.className = 'msg-refs';
+      tags.innerHTML = m.refs.map((p) => `<span class="ref-chip sm">${escapeHtml(p)}</span>`).join('');
+      el.querySelector('.bubble').appendChild(tags);
+    }
+    if (typeof index === 'number') {
+      const acts = document.createElement('div');
+      acts.className = 'msg-acts';
+      acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) + actionBtn('act-edit', ICO_EDIT, '编辑', index);
+      el.appendChild(acts);
+    }
     return el;
   }
   el.className = 'msg assistant';
   el.innerHTML = '<div class="avatar">A</div><div class="bubble"><div class="tools"></div><div class="md"></div></div>';
   el.querySelector('.md').innerHTML = renderMarkdown(m.content || '') || '';
   if (Array.isArray(m.toolCalls)) for (const t of m.toolCalls) upsertToolCard(el, t);
+  if (typeof index === 'number') {
+    const acts = document.createElement('div');
+    acts.className = 'msg-acts';
+    acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) + actionBtn('act-redo', ICO_REDO, '重新生成', index);
+    el.appendChild(acts);
+  }
   return el;
 }
 
@@ -291,11 +330,23 @@ async function sendMessage(preset) {
     return;
   }
   let conv = currentConv() || newConv();
-  conv.messages.push({ role: 'user', content: text });
+  // Attached files travel with the message so the agent knows what to read.
+  const attached = refs.slice();
+  const content = attached.length
+    ? text + '\n\n' + attached.map((p) => `（请参考工作区文件：${p}）`).join('\n')
+    : text;
+  conv.messages.push({ role: 'user', content, display: text, refs: attached });
   input.value = '';
+  clearRefs();
+  closeAc();
   autoGrow();
   renderMessages();
 
+  await runTurn(conv);
+}
+
+// The streaming turn itself, split out so "regenerate" can reuse it.
+async function runTurn(conv) {
   abortCtrl = new AbortController();
   const aMsg = { role: 'assistant', content: '', tool_calls: [], toolCalls: [] };
   conv.messages.push(aMsg);
@@ -363,6 +414,109 @@ function setBusy(busy) {
   $('send').classList.toggle('hidden', busy);
   $('stop').classList.toggle('hidden', !busy);
 }
+
+// ---------- message actions ----------
+
+// Drop everything from `index` onward, then re-run the model on what's left.
+async function regenerateFrom(index) {
+  if (abortCtrl) return;
+  const conv = currentConv();
+  if (!conv) return;
+  conv.messages = conv.messages.slice(0, index);
+  saveConvs();
+  renderMessages();
+  await runTurn(conv);
+}
+
+// Put a past user message back in the composer and cut the history after it.
+function editUserMessage(index) {
+  if (abortCtrl) return;
+  const conv = currentConv();
+  if (!conv) return;
+  const m = conv.messages[index];
+  if (!m || m.role !== 'user') return;
+  $('input').value = m.display || m.content || '';
+  refs = Array.isArray(m.refs) ? m.refs.slice() : [];
+  renderRefs();
+  conv.messages = conv.messages.slice(0, index);
+  saveConvs();
+  renderMessages();
+  autoGrow();
+  $('input').focus();
+}
+
+function copyText(text, okMsg = '已复制') {
+  navigator.clipboard.writeText(text).then(() => toast(okMsg)).catch(() => toast('复制失败'));
+}
+
+// ---------- conversation utilities ----------
+function clearCurrent() {
+  const c = currentConv();
+  if (!c || !c.messages.length) return toast('当前对话是空的');
+  if (!confirm('清空当前对话的消息？')) return;
+  c.messages = [];
+  saveConvs();
+  renderMessages();
+}
+
+function renameCurrent() {
+  const c = currentConv();
+  if (!c) return toast('还没有对话');
+  const name = prompt('新的对话名称：', c.title || '新对话');
+  if (name == null) return;
+  c.title = name.trim() || '新对话';
+  saveConvs();
+  renderConvList();
+  updateTitle();
+}
+
+// Turn the current conversation into a readable Markdown transcript.
+function conversationToMarkdown(conv) {
+  const lines = [`# ${conv.title || '对话'}`, ''];
+  if (conv.createdAt) lines.push(`> 创建于 ${new Date(conv.createdAt).toLocaleString()}`, '');
+  for (const m of conv.messages) {
+    if (m.role === 'user') {
+      lines.push('## 🧑 我', '', (m.display || m.content || '').trim(), '');
+      if (Array.isArray(m.refs) && m.refs.length) {
+        lines.push('引用文件：' + m.refs.map((p) => '`' + p + '`').join('、'), '');
+      }
+    } else if (m.role === 'assistant') {
+      lines.push('## 🤖 Agenite', '');
+      if (Array.isArray(m.toolCalls) && m.toolCalls.length) {
+        for (const t of m.toolCalls) {
+          const status = t.ok ? '成功' : '失败';
+          lines.push(`<details><summary>🔧 ${t.name} — ${status}</summary>`, '');
+          lines.push('```json', JSON.stringify(t.args || {}, null, 2), '```', '');
+          lines.push('```', String(t.result == null ? '' : t.result).slice(0, 2000), '```', '');
+          lines.push('</details>', '');
+        }
+      }
+      if ((m.content || '').trim()) lines.push(m.content.trim(), '');
+    }
+  }
+  lines.push('---', '', '_由 [Agenite](https://github.com/your-org/agenite) 导出_');
+  return lines.join('\n');
+}
+
+function downloadBlob(name, text, type = 'text/plain;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportCurrentMarkdown() {
+  const c = currentConv();
+  if (!c || !c.messages.length) return toast('当前对话是空的');
+  const safe = (c.title || '对话').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+  downloadBlob(`${safe}.md`, conversationToMarkdown(c), 'text/markdown;charset=utf-8');
+  toast('已导出 Markdown');
+}
+
+function openKeys() { $('keys-modal').classList.remove('hidden'); }
+function closeKeys() { $('keys-modal').classList.add('hidden'); }
 
 // ---------- approvals ----------
 let pendingApprovalId = null;
@@ -576,6 +730,151 @@ function resetAll() {
   location.reload();
 }
 
+// ---------- "@" file refs & "/" commands ----------
+// A single autocomplete popup serves both triggers. `acState` is null when closed.
+let acState = null; // { kind:'file'|'cmd', start:number, query:string, items:[], index:number }
+
+function closeAc() {
+  acState = null;
+  $('ac-pop').classList.add('hidden');
+}
+
+// Look at the text just before the caret and decide whether to open a popup.
+function detectTrigger() {
+  const ta = $('input');
+  const caret = ta.selectionStart;
+  const before = ta.value.slice(0, caret);
+
+  // "/" only counts at the very beginning of the input (like Claude Code / Slack)
+  const cmdMatch = /^\/([a-z]*)$/i.exec(before);
+  if (cmdMatch) return { kind: 'cmd', start: 0, query: cmdMatch[1] };
+
+  // "@" counts after start-of-input or whitespace; query stops at whitespace
+  const atMatch = /(^|\s)@([^\s@]*)$/.exec(before);
+  if (atMatch) {
+    const start = caret - atMatch[2].length - 1;
+    return { kind: 'file', start, query: atMatch[2] };
+  }
+  return null;
+}
+
+function renderAc() {
+  const pop = $('ac-pop');
+  if (!acState || !acState.items.length) {
+    pop.classList.add('hidden');
+    return;
+  }
+  pop.innerHTML = acState.items
+    .map((entry, i) => {
+      const active = i === acState.index ? ' active' : '';
+      if (acState.kind === 'cmd') {
+        return `<div class="ac-item${active}" data-i="${i}" role="option">` +
+          `<span class="ac-main">${escapeHtml(entry.item.name)}</span>` +
+          `<span class="ac-side">${escapeHtml(entry.item.hint)}</span></div>`;
+      }
+      const p = entry.item.path;
+      const slash = p.lastIndexOf('/');
+      const dir = slash === -1 ? '' : p.slice(0, slash + 1);
+      const base = slash === -1 ? p : p.slice(slash + 1);
+      return `<div class="ac-item${active}" data-i="${i}" role="option">` +
+        `<span class="ac-main"><em>${escapeHtml(dir)}</em>${escapeHtml(base)}</span>` +
+        `<span class="ac-side">${escapeHtml(formatBytes(entry.item.size))}</span></div>`;
+    })
+    .join('');
+  pop.classList.remove('hidden');
+  pop.querySelectorAll('.ac-item').forEach((el) => {
+    el.onmousedown = (e) => { e.preventDefault(); applyAc(Number(el.dataset.i)); };
+  });
+  const active = pop.querySelector('.ac-item.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+function updateAc() {
+  const trig = detectTrigger();
+  if (!trig) return closeAc();
+
+  if (trig.kind === 'cmd') {
+    const items = fuzzyFilter(COMMANDS, trig.query, { key: (c) => c.name.slice(1), limit: 8 });
+    acState = { ...trig, items, index: 0 };
+  } else {
+    if (!workspaceFiles.length) { loadWorkspaceFiles(); }
+    const items = fuzzyFilter(workspaceFiles, trig.query, { key: (f) => f.path, limit: 12 });
+    acState = { ...trig, items, index: 0 };
+  }
+  renderAc();
+}
+
+function moveAc(delta) {
+  if (!acState || !acState.items.length) return;
+  const n = acState.items.length;
+  acState.index = (acState.index + delta + n) % n;
+  renderAc();
+}
+
+function applyAc(i) {
+  if (!acState) return;
+  const entry = acState.items[typeof i === 'number' ? i : acState.index];
+  if (!entry) return;
+  const ta = $('input');
+
+  if (acState.kind === 'cmd') {
+    const cmd = entry.item;
+    ta.value = '';
+    closeAc();
+    autoGrow();
+    cmd.run();
+    return;
+  }
+
+  // File: drop the "@query" text and register the file as a ref chip instead.
+  const caret = ta.selectionStart;
+  ta.value = ta.value.slice(0, acState.start) + ta.value.slice(caret);
+  ta.selectionStart = ta.selectionEnd = acState.start;
+  addRef(entry.item.path);
+  closeAc();
+  autoGrow();
+  ta.focus();
+}
+
+async function loadWorkspaceFiles(force) {
+  if (workspaceFiles.length && !force) return workspaceFiles;
+  try {
+    const r = await fetch('/api/files');
+    const j = await r.json();
+    workspaceFiles = Array.isArray(j.files) ? j.files : [];
+  } catch {
+    workspaceFiles = [];
+  }
+  if (acState && acState.kind === 'file') updateAc();
+  return workspaceFiles;
+}
+
+function addRef(path) {
+  if (!path || refs.includes(path)) return;
+  refs.push(path);
+  renderRefs();
+}
+function removeRef(path) {
+  refs = refs.filter((p) => p !== path);
+  renderRefs();
+}
+function clearRefs() {
+  refs = [];
+  renderRefs();
+}
+function renderRefs() {
+  const bar = $('ref-bar');
+  if (!refs.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  bar.classList.remove('hidden');
+  bar.innerHTML =
+    '<span class="ref-label">引用</span>' +
+    refs.map((p) =>
+      `<span class="ref-chip" title="${escapeHtml(p)}">${escapeHtml(p)}` +
+      `<button class="ref-x" data-p="${escapeHtml(p)}" aria-label="移除">✕</button></span>`
+    ).join('');
+  bar.querySelectorAll('.ref-x').forEach((b) => { b.onclick = () => removeRef(b.dataset.p); });
+}
+
 // ---------- misc ----------
 function autoGrow() {
   const ta = $('input');
@@ -601,8 +900,10 @@ async function pingHealth() {
   try {
     const r = await fetch('/api/health');
     const j = await r.json();
+    const firstConnect = !workspacePath && j.workspace;
     workspacePath = j.workspace || '';
     updateWorkspaceChip(!!j.ok);
+    if (firstConnect) loadWorkspaceFiles(true);
   } catch {
     updateWorkspaceChip(false);
   }
@@ -626,19 +927,40 @@ function wire() {
     renderAgentChip();
     toast('Agent 工具调用：' + (config.agentEnabled ? '开' : '关'));
   };
-  $('clear-chat').onclick = () => {
-    const c = currentConv();
-    if (c && c.messages.length && confirm('清空当前对话的消息？')) {
-      c.messages = [];
-      saveConvs();
-      renderMessages();
-    }
-  };
+  $('clear-chat').onclick = () => clearCurrent();
   $('send').onclick = () => sendMessage();
   $('stop').onclick = () => { if (abortCtrl) abortCtrl.abort(); };
-  $('input').addEventListener('input', autoGrow);
+  $('attach-file').onclick = () => {
+    const ta = $('input');
+    const caret = ta.selectionStart;
+    const needSpace = caret > 0 && !/\s$/.test(ta.value.slice(0, caret));
+    ta.value = ta.value.slice(0, caret) + (needSpace ? ' @' : '@') + ta.value.slice(caret);
+    const pos = caret + (needSpace ? 2 : 1);
+    ta.selectionStart = ta.selectionEnd = pos;
+    ta.focus();
+    autoGrow();
+    updateAc();
+  };
+  $('chat-title').ondblclick = () => renameCurrent();
+  $('close-keys').onclick = closeKeys;
+  $('keys-modal').addEventListener('mousedown', (e) => { if (e.target === $('keys-modal')) closeKeys(); });
+
+  $('input').addEventListener('input', () => { autoGrow(); updateAc(); });
+  $('input').addEventListener('blur', () => setTimeout(closeAc, 120));
   $('input').addEventListener('keydown', (e) => {
+    // The autocomplete popup owns the arrow keys / Enter / Tab while it is open.
+    if (acState && acState.items.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); return moveAc(1); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); return moveAc(-1); }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return applyAc(); }
+      if (e.key === 'Escape') { e.preventDefault(); return closeAc(); }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); }
+    // Backspace on an empty composer pops the last attached file
+    if (e.key === 'Backspace' && !$('input').value && refs.length) {
+      e.preventDefault();
+      removeRef(refs[refs.length - 1]);
+    }
   });
 
   $('approval-allow').onclick = () => resolveApproval(true);
@@ -658,23 +980,38 @@ function wire() {
   $('settings-modal').addEventListener('mousedown', (e) => { if (e.target === $('settings-modal')) closeSettings(); });
 
   $('messages').addEventListener('click', (e) => {
-    const btn = e.target.closest('.copy-btn');
-    if (!btn) return;
-    const code = btn.parentElement.querySelector('code');
-    if (code) {
-      navigator.clipboard.writeText(code.textContent);
-      btn.textContent = '已复制';
-      setTimeout(() => { btn.textContent = '复制'; }, 1400);
+    const copyBtn = e.target.closest('.copy-btn');
+    if (copyBtn) {
+      const code = copyBtn.parentElement.querySelector('code');
+      if (code) {
+        navigator.clipboard.writeText(code.textContent);
+        copyBtn.textContent = '已复制';
+        setTimeout(() => { copyBtn.textContent = '复制'; }, 1400);
+      }
+      return;
     }
+    const act = e.target.closest('.msg-act');
+    if (!act) return;
+    const conv = currentConv();
+    if (!conv) return;
+    const idx = Number(act.dataset.idx);
+    const msg = conv.messages[idx];
+    if (!msg) return;
+    if (act.classList.contains('act-copy')) copyText(msg.display || msg.content || '');
+    else if (act.classList.contains('act-edit')) editUserMessage(idx);
+    else if (act.classList.contains('act-redo')) regenerateFrom(idx);
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (pendingApprovalId) resolveApproval(false);
+      if (acState) closeAc();
+      else if (pendingApprovalId) resolveApproval(false);
+      else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }
     if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); openKeys(); }
   });
 }
 
@@ -687,6 +1024,7 @@ function init() {
   renderPermChip();
   renderAgentChip();
   renderModelChip();
+  renderRefs();
   autoGrow();
   pingHealth();
   setInterval(pingHealth, 30000);

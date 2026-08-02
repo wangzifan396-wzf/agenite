@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { normalizeConfig, validateConfig, PROVIDER_PRESETS, APPROVAL_MODES } from './src/core/config.js';
 import { runAgent } from './src/core/agent.js';
 import { callModelStream } from './src/core/client.js';
-import { activeTools, executeTool } from './src/core/tools.js';
+import { activeTools, executeTool, scanWorkspaceFiles } from './src/core/tools.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -47,6 +47,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, { ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES });
   }
+  if (req.method === 'GET' && url === '/api/files') return handleFiles(req, res);
   if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(url, req, res);
   res.writeHead(405, { 'Content-Type': 'text/plain' }).end('Method Not Allowed');
 });
@@ -110,6 +111,21 @@ async function handleApprove(req, res) {
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: e.message });
+  }
+}
+
+// Flat workspace file index for the UI's "@" mention picker.
+// Cached briefly so typing "@" repeatedly does not re-walk the tree every time.
+let filesCache = { at: 0, list: null };
+async function handleFiles(req, res) {
+  try {
+    const fresh = Date.now() - filesCache.at < 5000 && filesCache.list;
+    if (!fresh) {
+      filesCache = { at: Date.now(), list: await scanWorkspaceFiles({ root: WORKSPACE, limit: 2000 }) };
+    }
+    return sendJson(res, 200, { ok: true, workspace: WORKSPACE, files: filesCache.list });
+  } catch (e) {
+    return sendJson(res, 500, { ok: false, error: e.message, files: [] });
   }
 }
 

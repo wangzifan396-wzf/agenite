@@ -102,11 +102,19 @@
       </div>
 
       <div id="composer-wrap">
+        <!-- 被 @ 引用的文件，会随消息一起发给 agent -->
+        <div id="ref-bar" class="ref-bar hidden"></div>
         <div id="composer">
-          <textarea id="input" rows="1" placeholder="让 Agenite 做点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <!-- @ 文件 / 斜杠命令 自动完成浮层 -->
+          <div id="ac-pop" class="ac-pop hidden" role="listbox"></div>
+          <textarea id="input" rows="1" placeholder="让 Agenite 做点什么…（@ 引用文件，/ 唤起命令，Enter 发送）"></textarea>
           <div class="composer-bar">
             <button id="model-chip" class="mini-chip" title="点击配置模型">
               <span class="mini-dot"></span><span id="model-label">未配置模型</span>
+            </button>
+            <button id="attach-file" class="mini-chip ghost" title="引用工作区文件 (@)">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.2 20.2a5.5 5.5 0 0 1-7.8-7.8l9.2-9.1a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.8 1.8 0 0 1-2.6-2.6l8.5-8.5"/></svg>
+              引用
             </button>
             <div class="grow"></div>
             <button id="stop" class="btn-stop hidden" title="停止生成">
@@ -118,9 +126,29 @@
             </button>
           </div>
         </div>
-        <div class="composer-hint">Agenite 在你本机运行，写入与命令默认需要你点击确认。</div>
+        <div class="composer-hint">Agenite 在你本机运行，写入与命令默认需要你点击确认。按 <kbd>Ctrl</kbd>+<kbd>/</kbd> 看全部快捷键。</div>
       </div>
     </main>
+  </div>
+
+  <!-- 快捷键速查 -->
+  <div id="keys-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="drawer-head">
+        <h2>快捷键</h2>
+        <button id="close-keys" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="keys-grid">
+        <div><kbd>Enter</kbd></div><span>发送消息</span>
+        <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><span>换行</span>
+        <div><kbd>@</kbd></div><span>引用工作区文件</span>
+        <div><kbd>/</kbd></div><span>唤起命令（行首输入）</span>
+        <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><span>新建对话</span>
+        <div><kbd>Ctrl</kbd>+<kbd>,</kbd></div><span>打开设置</span>
+        <div><kbd>Ctrl</kbd>+<kbd>/</kbd></div><span>本帮助面板</span>
+        <div><kbd>Esc</kbd></div><span>关闭弹窗 / 取消审批</span>
+      </div>
+    </div>
   </div>
 
   <!-- 审批弹窗：智能体要动你电脑之前必须过这一关 -->

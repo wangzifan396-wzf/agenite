@@ -55,3 +55,74 @@ export function sanitizeUrl(url) {
   if (lower.startsWith('//')) return '#';
   return u;
 }
+
+// ---------- fuzzy matching (used by the "@" file picker and "/" commands) ----------
+
+// Subsequence match with a quality score. Returns null when `query` does not
+// fuzzy-match `text` at all, otherwise { score, hits } where `hits` are the
+// matched character indices so the UI can bold them.
+// Higher score = better. Consecutive runs, word-boundary starts and matches
+// inside the basename (after the last slash) are all rewarded.
+export function fuzzyMatch(text, query) {
+  const str = String(text == null ? '' : text);
+  const q = String(query == null ? '' : query).trim();
+  if (!q) return { score: 0, hits: [] };
+
+  const lowStr = str.toLowerCase();
+  const lowQ = q.toLowerCase();
+  const baseStart = lowStr.lastIndexOf('/') + 1;
+
+  const hits = [];
+  let score = 0;
+  let run = 0;
+  let si = 0;
+
+  for (let qi = 0; qi < lowQ.length; qi++) {
+    const ch = lowQ[qi];
+    const found = lowStr.indexOf(ch, si);
+    if (found === -1) return null;
+    hits.push(found);
+
+    // consecutive characters are much stronger evidence than scattered ones
+    run = found === si && qi > 0 ? run + 1 : 0;
+    score += 1 + run * 4;
+
+    // reward matches in the file name rather than deep in the directory path
+    if (found >= baseStart) score += 3;
+    // reward word-boundary starts: begin of string, or after / - _ . space
+    const prev = found > 0 ? lowStr[found - 1] : '';
+    if (found === 0 || prev === '/' || prev === '-' || prev === '_' || prev === '.' || prev === ' ') score += 5;
+
+    si = found + 1;
+  }
+
+  // prefer shorter candidates when scores are otherwise close
+  score -= Math.min(str.length / 12, 8);
+  // exact substring is the strongest signal of all
+  if (lowStr.includes(lowQ)) score += 12;
+  if (lowStr.slice(baseStart).startsWith(lowQ)) score += 10;
+
+  return { score, hits };
+}
+
+// Rank a list of candidates against a query. `key` extracts the string to match.
+export function fuzzyFilter(items, query, { key = (x) => x, limit = 30 } = {}) {
+  const q = String(query == null ? '' : query).trim();
+  if (!q) return items.slice(0, limit).map((item) => ({ item, score: 0, hits: [] }));
+  const scored = [];
+  for (const item of items) {
+    const m = fuzzyMatch(key(item), q);
+    if (m) scored.push({ item, score: m.score, hits: m.hits });
+  }
+  scored.sort((a, b) => b.score - a.score || String(key(a.item)).length - String(key(b.item)).length);
+  return scored.slice(0, limit);
+}
+
+// Human-readable byte size, e.g. 2048 -> "2 KB".
+export function formatBytes(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num) || num < 0) return '';
+  if (num < 1024) return num + ' B';
+  if (num < 1024 * 1024) return (num / 1024).toFixed(num < 10240 ? 1 : 0) + ' KB';
+  return (num / 1024 / 1024).toFixed(1) + ' MB';
+}

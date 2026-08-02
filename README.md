@@ -11,15 +11,20 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 ## ✨ Features
 
 - **Multi-model / multi-provider**: OpenAI, DeepSeek, Qwen, Moonshot (Kimi), Zhipu (GLM), Groq, Ollama (local), OpenRouter, any OpenAI-compatible endpoint, plus Anthropic (Claude).
-- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming).
-  - `calculator` — safe arithmetic (supports `sqrt / pow / sin / max …`)
-  - `web_fetch` — fetch a URL / API
-  - `read_file` / `list_dir` — read local files / directories
-  - `write_file` / `run_command` — **danger tools** (opt-in only)
-  - `current_datetime` — current time
+- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 12 built-in tools:
+  - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `read_file`, `list_dir`, `find_files`
+  - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`
+- **Local computer control** — a **workspace sandbox** pins every file operation under one root directory, and a **3-mode approval gate** decides when a human must approve:
+  - `ask` — prompt before every write / command (default, recommended)
+  - `auto` — no prompts inside the sandbox (fast, use with care)
+  - `deny` — read-only agent, refuses all danger tools
 - **Streaming**: typewriter output with visualized tool calls (expandable args + results).
-- **Multi-conversation**: rename / delete, persisted in `localStorage`.
-- **Light / dark theme**, **XSS-safe Markdown** rendering.
+- **`@` file references**: type `@` in the composer to fuzzy-search the workspace and attach files; their paths are injected into the next message so the agent knows what to read.
+- **Slash commands**: type `/` for a palette — `/new` `/clear` `/rename` `/export` `/model` `/workspace` `/help`.
+- **Per-message actions**: hover a message to copy, regenerate (assistant), or edit-and-resend (user).
+- **Conversation rename + Markdown export**: double-click the title to rename; `/export` downloads a readable `.md` transcript (separate from the full JSON backup).
+- **Keyboard shortcuts**: Enter to send, Shift+Enter for newline, `@` / `/` triggers, Ctrl+K, Ctrl+, (settings), Ctrl+/ (shortcut cheatsheet), Esc to dismiss.
+- **Multi-conversation**, **light / dark theme**, **XSS-safe Markdown** rendering, and an **installable PWA**.
 - **Single-file build**: `npm run build` → `dist/agenite.html`.
 
 ---
@@ -37,7 +42,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (40, via node:test)
+npm test       # run core unit tests (79, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port
@@ -63,7 +68,8 @@ test/            # node:test unit tests
 ## 🔒 Security
 
 - API keys live only in your browser `localStorage` and are forwarded by the local proxy — never uploaded elsewhere.
-- `write_file` / `run_command` are **danger tools**, off by default, enabled only via the "高级工具" setting.
+- `write_file` / `edit_file` / `make_dir` / `run_command` / `open_path` are **danger tools**, off by default, enabled only via the "高级工具" setting and gated by the approval mode (`ask` / `auto` / `deny`).
+- **Workspace sandbox**: every file path is resolved and pinned under a root directory; an escape hatch (`allowOutsideWorkspace`) is off by default.
 - All Markdown is HTML-escaped; links are filtered against `javascript:` / `data:` schemes.
 
 ## 📄 License

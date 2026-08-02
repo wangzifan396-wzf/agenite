@@ -571,6 +571,7 @@ button { cursor: pointer; background: none; border: none; }
 /* --- composer --- */
 #composer-wrap { padding: 0 20px 14px; }
 #composer {
+  position: relative;
   max-width: var(--read-w);
   margin: 0 auto;
   background: var(--panel);
@@ -651,6 +652,148 @@ button { cursor: pointer; background: none; border: none; }
   font-size: 11.5px;
   color: var(--muted);
 }
+.composer-hint kbd { margin: 0 1px; }
+
+/* ==========================================================================
+   "@" file refs, autocomplete popup, message actions, keyboard help
+   ========================================================================== */
+
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: .88em;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* attached-file chips above the composer */
+.ref-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: var(--read-w);
+  margin: 0 auto 7px;
+  padding: 0 2px;
+}
+.ref-label { font-size: 11.5px; color: var(--muted); margin-right: 2px; }
+.ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 3px 7px 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ref-chip.sm { font-size: 11px; padding: 2px 8px; background: transparent; }
+.ref-x {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 2px;
+  border-radius: 4px;
+}
+.ref-x:hover { background: var(--border); color: var(--text); }
+.msg-refs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+
+/* autocomplete popup shared by "@" and "/" */
+.ac-pop {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  animation: pop .14s var(--ease);
+}
+.ac-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+.ac-item:hover { background: var(--panel-2); }
+.ac-item.active { background: var(--accent-soft); }
+.ac-main {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ac-main em { color: var(--muted); font-style: normal; }
+.ac-side { flex: none; font-size: 11.5px; color: var(--muted); }
+
+/* per-message hover actions */
+.msg { position: relative; }
+.msg-acts {
+  position: absolute;
+  bottom: -9px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity .14s var(--ease);
+  pointer-events: none;
+}
+.msg.assistant .msg-acts { left: 52px; }
+.msg.user .msg-acts { right: 52px; }
+.msg:hover .msg-acts,
+.msg:focus-within .msg-acts { opacity: 1; pointer-events: auto; }
+.msg-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.msg-act:hover { color: var(--text); border-color: var(--accent); }
+.msg-act span { line-height: 1; }
+
+/* keyboard shortcut cheatsheet */
+.keys-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 16px;
+  align-items: center;
+  padding: 4px 2px 2px;
+  font-size: 13px;
+}
+.keys-grid > div { text-align: right; white-space: nowrap; }
+.keys-grid > span { color: var(--muted); }
 
 /* ==========================================================================
    Modals / drawer

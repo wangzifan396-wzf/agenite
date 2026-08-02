@@ -11,16 +11,20 @@
 ## ✨ 功能
 
 - **多模型 / 多运营商**：OpenAI、DeepSeek、通义千问 (Qwen)、Kimi (Moonshot)、智谱 (GLM)、Groq、Ollama（本地）、OpenRouter，以及任意 OpenAI 兼容接口；也支持 Anthropic (Claude)。
-- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。
-  - `calculator` 安全数学表达式计算（支持 `sqrt / pow / sin / max …`）
-  - `web_fetch` 抓取网页 / API 内容
-  - `read_file` / `list_dir` 读取本地文件与目录
-  - `write_file` / `run_command` **高级工具**（需手动开启「高级工具」，有风险）
-  - `current_datetime` 获取当前时间
+- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **12 个工具**：
+  - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`read_file`、`list_dir`、`find_files`
+  - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`
+- **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：
+  - `ask` 每次写文件 / 执行命令前弹窗确认（默认，推荐）
+  - `auto` 沙箱内不再询问，速度最快（请谨慎）
+  - `deny` 只读模式，拒绝一切高危工具
 - **流式输出**：打字机式实时显示，工具调用过程可视化（参数 + 结果可展开）。
-- **多会话管理**：多个对话、重命名、删除，全部存在浏览器 `localStorage`。
-- **明暗主题**：跟随系统，可一键切换。
-- **Markdown 渲染**：代码块、表格、列表、链接（链接做了 XSS 防护）。
+- **`@` 文件引用**：在输入框输入 `@` 模糊搜索工作区文件并附带，文件路径会注入下一条消息，让智能体知道要读什么。
+- **斜杠命令**：输入 `/` 打开命令面板 —— `/new` `/clear` `/rename` `/export` `/model` `/workspace` `/help`。
+- **消息级操作**：鼠标悬停消息可复制、重新生成（助手）或编辑重发（用户）。
+- **重命名 + Markdown 导出**：双击标题重命名；`/export` 导出可读的 `.md` 对话记录（区别于完整 JSON 备份）。
+- **键盘快捷键**：Enter 发送、Shift+Enter 换行、`@` / `/` 触发、Ctrl+K、Ctrl+,（设置）、Ctrl+/（快捷键速查）、Esc 关闭浮层。
+- **多会话管理**、**明暗主题**、**XSS 安全的 Markdown 渲染**，以及可安装的 **PWA**。
 - **单文件构建**：`npm run build` 生成 `dist/agenite.html`，整站内联为一个文件。
 
 ---
@@ -47,7 +51,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（40 个，node:test）
+npm test       # 跑核心逻辑单元测试（79 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口
@@ -83,7 +87,8 @@ agenite/
 ## 🔒 安全说明
 
 - API Key 仅保存在**你本地浏览器** `localStorage`，并在本地代理中转发给对应运营商，**不会上传到任何第三方**。
-- `write_file` 与 `run_command` 属于**高危工具**，默认关闭，必须在设置里手动勾选「高级工具」才会生效。请只在与可信模型对话时开启。
+- `write_file` / `edit_file` / `make_dir` / `run_command` / `open_path` 属于**高危工具**，默认关闭，必须在设置里手动勾选「高级工具」并在审批模式（`ask` / `auto` / `deny`）下才会生效。请只在与可信模型对话时开启。
+- **工作区沙箱**：所有文件路径都会解析并锁定在根目录下；越界开关 `allowOutsideWorkspace` 默认关闭。
 - 所有 Markdown 渲染都做了 HTML 转义，链接做了 `javascript:` / `data:` 协议过滤。
 
 ---
