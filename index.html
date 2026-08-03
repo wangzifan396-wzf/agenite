@@ -258,6 +258,18 @@
             <input id="set-autoSkill" type="checkbox" />
           </label>
           <div class="field">
+            <span class="field-title">角色人格<em class="muted small">切换 agent 的说话与思维方式（默认 / 严厉审查员 / 温柔写手 / 研究员 / 自定义）</em></span>
+            <select id="set-persona"></select>
+          </div>
+          <div class="field">
+            <span class="field-title">另存为角色<em class="muted small">把当前「系统提示词」存成一个可复用角色</em></span>
+            <div class="btn-row">
+              <input id="persona-name" type="text" placeholder="角色名，如「SQL 专家」" />
+              <button id="persona-save" class="btn-primary" type="button">保存</button>
+            </div>
+            <span id="persona-msg" class="muted small"></span>
+          </div>
+          <div class="field">
             <span class="field-title">技能库（自进化）<em class="muted small">agent 把成功的工作流沉淀成可复用技能，越用越聪明</em></span>
             <div class="ws-box">
               <code id="skills-info">—</code>

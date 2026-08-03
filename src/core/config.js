@@ -110,6 +110,8 @@ export function defaultConfig() {
     // Let the agent auto-crystallize complex workflows into reusable SKILL.md
     // files after a run (opt-in: costs one extra tool-free model call).
     autoSkill: false,
+    // Active persona (role) — a built-in name, a saved custom name, or ''.
+    persona: '',
     // --- machine control ---
     approvalMode: 'ask',
     // Empty means "the folder Agenite was started from"; the server fills it in.
@@ -162,6 +164,7 @@ export function normalizeConfig(input = {}) {
   if (!APPROVAL_MODES.some((m) => m.id === cfg.approvalMode)) cfg.approvalMode = 'ask';
   cfg.workspace = typeof cfg.workspace === 'string' ? cfg.workspace.trim() : '';
   cfg.systemPrompt = typeof cfg.systemPrompt === 'string' ? cfg.systemPrompt : '';
+  cfg.persona = typeof cfg.persona === 'string' ? cfg.persona.trim() : '';
   cfg.maxTurns = Math.round(clampNum(cfg.maxTurns, 1, 100, 20));
   cfg.contextWindow = Math.round(clampNum(cfg.contextWindow, 0, 2000000, 0));
   cfg.autoCompact = cfg.autoCompact !== false;

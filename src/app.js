@@ -1129,6 +1129,51 @@ function openSettings(tab) {
   $('settings-msg').textContent = '';
   refreshMcp();
   refreshSkillsInfo();
+  populatePersonaSelect();
+}
+
+async function populatePersonaSelect() {
+  const sel = $('set-persona');
+  if (!sel) return;
+  try {
+    const r = await fetch('/api/personas');
+    const j = await r.json();
+    const builtin = Array.isArray(j.builtin) ? j.builtin : [];
+    const custom = Array.isArray(j.custom) ? j.custom : [];
+    const opts = ['<option value="default">默认（通用智能体）</option>'];
+    for (const p of builtin) {
+      if (p.name === 'default') continue;
+      opts.push(`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)} — ${escapeHtml(p.description || '')}</option>`);
+    }
+    for (const p of custom) {
+      opts.push(`<option value="${escapeHtml(p.slug)}">★ ${escapeHtml(p.name)} — ${escapeHtml(p.description || '')}</option>`);
+    }
+    sel.innerHTML = opts.join('');
+    sel.value = config.persona || 'default';
+  } catch { /* ignore — personas are optional */ }
+}
+
+async function saveNewPersona() {
+  const name = ($('persona-name').value || '').trim();
+  const prompt = ($('set-systemPrompt').value || '').trim();
+  const msg = $('persona-msg');
+  if (!name) { msg.textContent = '请先填写角色名。'; return; }
+  if (!prompt) { msg.textContent = '「系统提示词」为空，没有可保存的指令。'; return; }
+  try {
+    const res = await fetch('/api/personas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: '', system_prompt: prompt })
+    });
+    const j = await res.json();
+    if (!res.ok) { msg.textContent = '保存失败：' + (j.error || res.status); return; }
+    config.persona = j.slug || name;
+    $('set-persona').value = config.persona;
+    saveConfig();
+    msg.textContent = `✅ 已保存角色「${name}」，可在上方下拉切换。`;
+  } catch (e) {
+    msg.textContent = '保存失败：' + e.message;
+  }
 }
 
 async function refreshSkillsInfo() {
@@ -1208,6 +1253,7 @@ function saveSettings() {
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
     memoryEnabled: $('set-memoryEnabled').checked,
     autoSkill: $('set-autoSkill').checked,
+    persona: $('set-persona').value || 'default',
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
@@ -1574,6 +1620,7 @@ function wire() {
   $('open-settings').onclick = () => openSettings();
   $('close-settings').onclick = closeSettings;
   $('save-settings').onclick = saveSettings;
+  $('persona-save').onclick = saveNewPersona;
   $('test-conn').onclick = testConnection;
   $('set-provider').onchange = onProviderChange;
   $('ollama-refresh').onclick = refreshOllamaModels;

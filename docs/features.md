@@ -19,7 +19,7 @@
 
 ## 2. 工具说明
 
-内置 24 个工具，分「安全（默认开启）」与「高危（需开启高级工具 + 审批）」两类（下表列出基础文件 / 命令 / 搜索类，另外还有联网搜索、记忆、计划、委派、并行委派、技能共 10 个工作流类工具，见第 8 节）。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
+内置 25 个工具，分「安全（默认开启）」与「高危（需开启高级工具 + 审批）」两类（下表列出基础文件 / 命令 / 搜索类，另外还有联网搜索、记忆、计划、委派、并行委派、技能、语义代码检索、代码解释器共 11 个工作流类工具，见第 8 节）。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
 
 | 工具 | 类型 | 说明 |
 | --- | --- | --- |
@@ -267,9 +267,27 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - 设置里「技能自动沉淀」开关可开/关（默认关，因为每次会多一次模型调用）；**每一步失败都静默跳过**，保证聊天永不被技能抽取搞崩；
 - 纯函数（`countToolActivity` / `isComplexEnough` / `compactTranscript` / `buildSkillReflectionMessages` / `parseSkillDecision`）与编排函数 `autoSaveSkill` 全部可单测（保存 / 跳过 / 复杂度不足不调模型 / 模型失败 各有断言）。
 
+### 8.9.3 本地代码解释器 `run_code`（v0.11.0）
+
+把 Agent 从"顾问"升级成"执行者"——在工作区沙箱里**执行一段代码**并取回输出（算数、数据处理、验证算法、生成文件、解析日志）。这是"本地优先、真正动手"叙事里最实在的一跃。
+
+- 支持 `language="node"`（本机 Node，**零依赖**直接可用，按 ESM `.mjs` 运行，支持 `import/export`）与 `language="python"`（自动探测 `python3` → `python`，本机未装则友好报错）；
+- 实现（`tools.js` 的 `runCode`）：代码写入工作区 `.agenite-code/` 下的临时文件，用 `execFile` 在 workspace root 下执行（`timeout: 30s`、`maxBuffer: 8MB`），捕获 stdout/stderr/退出码/耗时；**退出码非 0 视为信息而非崩溃**——把输出原样回传让模型自行修正；临时文件无论成败都尽力清理；
+- 高危工具（`danger: true`），走既有的「电脑操作权限 + 审批」双闸门，复用 `execFileAsync` 与 `resolveSafePath` 沙箱；
+- 纯函数友好，已单测：非法语言 / 空代码 / node 真实计算 / ESM `import` / 退出码信息返回 / 危险门闸拦截 / Python 可用性守卫。
+
+### 8.9.4 角色人格库 `persona`（v0.11.0）
+
+一键切换 Agent 的说话与思维方式，是整个"自进化"叙事里的**创意支点**：
+
+- 内置 `default` / `strict-reviewer`（严厉代码审查员）/ `warm-writer`（温柔写作助手）/ `researcher`（严谨研究员），也能把当前「系统提示词」**另存为自定义角色**反复复用；
+- 存储（`memory.js` 的 `savePersona` / `listPersonas` / `readPersona` / `deletePersona`，镜像技能）：自定义角色存于 `~/.agenite/memory/personas/<slug>.md`（frontmatter + 指令正文）；
+- 接线：`config.persona` 经 `body.config` 透传到服务端（`normalizeConfig` 规范化）→ `resolvePersonaText` 解析（内置名直接取、自定义名读文件）→ `buildSystemPrompt` 注入 `ROLE / 角色设定` 块；系统提示词还会主动提示模型"若任务适合某角色，建议用户切换"；前端设置里有下拉 + "另存为角色"表单（`GET`/`POST`/`DELETE /api/personas`）；
+- 子代理已支持 `persona` 参数，主 Agent 的人格可与委派链协同。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `util`）无 DOM，**194 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `util`）无 DOM，**206 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

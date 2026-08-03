@@ -3,7 +3,7 @@
 //   1. workspace sandbox  (paths are pinned under a root directory)
 //   2. approval hook      (a human clicks allow/deny before it runs)
 // All side effects are injectable so the whole file stays testable under node:test.
-import { readFile, writeFile, readdir, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, readdir, mkdir, stat, unlink } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -204,6 +204,19 @@ export const TOOL_DEFS = [
         patch: { type: 'string', description: 'The full unified diff text covering one or more files.' }
       },
       required: ['patch']
+    },
+    danger: true
+  },
+  {
+    name: 'run_code',
+    description: '在本地沙箱里执行一段代码并取回输出——把 agent 从"给建议"变成"真正动手算/跑/验证"。支持 language="node"（本机 Node，零依赖直接可用）与 language="python"（自动探测 python3/python，需本机已装）。在工作区根目录下执行，超时 30s，捕获 stdout/stderr/退出码。适合：算数/数据处理/验证算法/生成文件/解析日志。需要开启「电脑操作权限」并审批。',
+    parameters: {
+      type: 'object',
+      properties: {
+        language: { type: 'string', description: '执行环境："node" 或 "python"。' },
+        code: { type: 'string', description: '要执行的源代码（node 按 ESM .mjs 运行，支持 import/export）。' }
+      },
+      required: ['language', 'code']
     },
     danger: true
   },
@@ -433,6 +446,8 @@ async function dispatch(name, args, opts) {
         return codebaseSearch(args, opts);
       case 'apply_patch':
         return applyPatchTool(args, opts);
+      case 'run_code':
+        return runCode(args, opts);
       case 'web_search':
         return webSearch(args, opts);
       case 'memory_recall':
@@ -1281,6 +1296,76 @@ async function runCmd(args, opts = {}) {
   const out = [stdout, stderr].filter(Boolean).join('\n').trim();
   const ms = Date.now() - started;
   return { ok: true, content: (out || '(无输出)').slice(0, MAX_OUTPUT) + `\n\n[耗时 ${ms}ms · cwd ${displayPath(cwd, opts)}]` };
+}
+
+const CODE_TIMEOUT = 30_000;
+
+// Local code interpreter: run a snippet in a sandboxed temp file under the
+// workspace root. Node is zero-config (uses the very node running this server);
+// Python is auto-detected (python3 -> python) since it isn't guaranteed.
+// A non-zero exit is treated as information (we hand the output back), not a
+// crash, so the model can see and react to errors.
+export async function runCode(args, opts = {}) {
+  const lang = String(args.language || '').toLowerCase();
+  if (lang !== 'node' && lang !== 'python') {
+    return { ok: false, error: `语言必须是 "node" 或 "python"（收到 "${lang || ''}"）。` };
+  }
+  const code = String(args.code || '');
+  if (!code.trim()) return { ok: false, error: 'code 不能为空。' };
+
+  const root = resolveSafePath('.', opts);
+  const dir = join(root, '.agenite-code');
+  await mkdir(dir, { recursive: true });
+  const ext = lang === 'node' ? 'mjs' : 'py';
+  const fname = `run_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  const fpath = join(dir, fname);
+  await writeFile(fpath, code, 'utf8');
+
+  let cmd;
+  if (lang === 'node') {
+    cmd = process.execPath;
+  } else {
+    cmd = (await whichCmd('python3')) || (await whichCmd('python'));
+    if (!cmd) {
+      await safeUnlink(fpath);
+      return { ok: false, error: '未找到 Python（请安装 python3 并将其加入 PATH）。' };
+    }
+  }
+
+  const started = Date.now();
+  const base = { cwd: root, timeout: CODE_TIMEOUT, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
+  try {
+    const { stdout, stderr } = await execFileAsync(cmd, [fpath], base);
+    const out = [stdout, stderr].filter(Boolean).join('\n').trim();
+    const ms = Date.now() - started;
+    await safeUnlink(fpath);
+    return { ok: true, content: (out || '(无输出)').slice(0, MAX_OUTPUT) + `\n\n[语言 ${lang} · 耗时 ${ms}ms]` };
+  } catch (e) {
+    const out = [e.stdout, e.stderr].filter(Boolean).join('\n').trim();
+    const ms = Date.now() - started;
+    await safeUnlink(fpath);
+    return {
+      ok: false,
+      error: `执行退出码 ${e.code == null ? '?' : e.code}` +
+        (e.killed ? '（超时，已在 30s 内终止）' : '') +
+        (out ? '\n' + out.slice(0, MAX_OUTPUT) : '')
+    };
+  }
+}
+
+function whichCmd(name) {
+  return new Promise((resolve) => {
+    const probe = process.platform === 'win32' ? 'where' : 'command';
+    const arg = process.platform === 'win32' ? name : '-v';
+    execFile(probe, [arg], { windowsHide: true }, (err, stdout) => {
+      if (err || !stdout.trim()) return resolve(null);
+      resolve(stdout.trim().split(/\r?\n/)[0].trim());
+    });
+  });
+}
+
+async function safeUnlink(p) {
+  try { await unlink(p); } catch { /* best-effort */ }
 }
 
 async function openPath(target, opts = {}) {

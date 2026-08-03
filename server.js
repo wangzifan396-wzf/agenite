@@ -18,7 +18,7 @@ import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } from './src/core/sessions.js';
-import { defaultMemoryDir, injectMemory, injectSkills, listSkills } from './src/core/memory.js';
+import { defaultMemoryDir, injectMemory, injectSkills, listSkills, savePersona, listPersonas, readPersona, deletePersona } from './src/core/memory.js';
 import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
 import { autoSaveSkill } from './src/core/autoskill.js';
 
@@ -111,6 +111,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
   if (req.method === 'GET' && url === '/api/ollama/models') return handleOllamaModels(req, res);
   if (req.method === 'GET' && url === '/api/skills') return handleSkillsList(req, res);
+  if (req.method === 'GET' && url === '/api/personas') return handlePersonasList(req, res);
+  if (req.method === 'POST' && url === '/api/personas') return handlePersonaSave(req, res);
+  if (req.method === 'DELETE' && url.startsWith('/api/personas/')) return handlePersonaDelete(req, res, url);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -308,6 +311,40 @@ async function handleSkillsList(req, res) {
   }
 }
 
+async function handlePersonasList(req, res) {
+  try {
+    return sendJson(res, 200, { builtin: BUILTIN_PERSONAS, custom: await listPersonas(MEMORY_DIR) });
+  } catch {
+    return sendJson(res, 200, { builtin: BUILTIN_PERSONAS, custom: [] });
+  }
+}
+
+async function handlePersonaSave(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)) || '{}');
+  } catch {
+    return sendJson(res, 400, { error: '请求体解析失败' });
+  }
+  if (!body || !body.name || !String(body.system_prompt || '').trim()) {
+    return sendJson(res, 400, { error: 'name 与 system_prompt 不能为空' });
+  }
+  const r = await savePersona(MEMORY_DIR, {
+    name: body.name,
+    description: body.description || '',
+    system_prompt: body.system_prompt
+  });
+  if (!r.ok) return sendJson(res, 400, { error: r.error });
+  return sendJson(res, 200, r);
+}
+
+async function handlePersonaDelete(req, res, url) {
+  const slug = decodeURIComponent(url.slice('/api/personas/'.length));
+  const r = await deletePersona(MEMORY_DIR, slug);
+  if (!r.ok) return sendJson(res, 404, { error: r.error });
+  return sendJson(res, 200, r);
+}
+
 // Embedding via a local Ollama model — powers fully-on-device semantic memory.
 // Returns a number[] or null on any failure (recall then falls back to keyword).
 const OLLAMA_EMBED_MODEL = process.env.AGENITE_EMBED_MODEL || 'nomic-embed-text';
@@ -332,7 +369,28 @@ async function ollamaEmbed(text) {
   }
 }
 
-function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '', skills = '') {
+// Built-in personas the user can adopt from Settings. Custom ones live as
+// files under ~/.agenite/memory/personas and are merged in via /api/personas.
+const BUILTIN_PERSONAS = [
+  { name: 'default', description: '均衡的通用智能体（默认）', system_prompt: '' },
+  {
+    name: 'strict-reviewer',
+    description: '严厉的资深代码审查员：聚焦正确性、边界、错误、安全与性能',
+    system_prompt: '你是一位严厉的资深代码审查员。审查代码时聚焦：正确性、边界条件、错误处理、安全漏洞、性能与可维护性。先给总体判断（LGTM / 需修改），再逐条列出具体问题，每条给出文件位置与修复建议。不要客套，直接指出问题。'
+  },
+  {
+    name: 'warm-writer',
+    description: '温柔的专业写作助手：把想法写成清晰、有温度的文字',
+    system_prompt: '你是一位温柔而专业的写作助手。帮助用户把想法组织成清晰、有温度、结构分明的文字。多用具体例子，少用 jargon。先理解意图再动笔，必要时反问澄清，而不是替用户做过多假设。'
+  },
+  {
+    name: 'researcher',
+    description: '严谨的研究员：论证要有依据、标注来源、区分事实与推测',
+    system_prompt: '你是一位严谨的研究员。回答要有依据，明确区分「事实 / 推测 / 待验证」。涉及外部信息时优先用 web_search / web_fetch 核实并标注来源。给出结论前先呈现关键证据与可能的反例。'
+  }
+];
+
+function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '', skills = '', persona = '') {
   const extra = (config.systemPrompt || '').trim();
   const base = [
     'You are Agenite, a capable local AI agent running on the user\'s own computer.',
@@ -341,7 +399,8 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
     'When the user asks you to do something on their machine, use the tools instead of only describing steps.',
     'Prefer relative paths inside the workspace. Take small, verifiable steps and report what you did concisely.',
     'When you write code or files, keep changes minimal and explain them briefly afterwards.',
-    'When a request decomposes into several INDEPENDENT sub-tasks (no shared intermediate state), prefer the `fanout` tool to run them in parallel at once — it is much faster than calling `delegate` repeatedly. Use `delegate` for a single focused side task, or when sub-tasks depend on each other.'
+    'When a request decomposes into several INDEPENDENT sub-tasks (no shared intermediate state), prefer the `fanout` tool to run them in parallel at once — it is much faster than calling `delegate` repeatedly. Use `delegate` for a single focused side task, or when sub-tasks depend on each other.',
+    '你可以在设置里切换「角色人格」(persona) 来改变说话与思维方式（如 strict-reviewer / warm-writer / researcher，或自定义）。若当前任务明显更适合某个角色，主动建议用户切换。'
   ];
   if (planning) {
     base.push(
@@ -358,8 +417,25 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
   }
   if (memory) base.push(memory);
   if (skills) base.push(skills);
+  if (persona) base.push('ROLE / 角色设定：\n' + persona);
   const text = base.join(' ');
   return extra ? text + '\n\n' + extra : text;
+}
+
+// Resolve a persona name (built-in or a saved custom file) into its system
+// prompt text so it can be injected into the system message. Unknown names
+// silently fall back to '' (default behaviour) — never breaks a chat.
+async function resolvePersonaText(config, memoryBase) {
+  const name = (config.persona || '').trim();
+  if (!name || name === 'default') return '';
+  const builtin = BUILTIN_PERSONAS.find((p) => p.name === name);
+  if (builtin) return builtin.system_prompt || '';
+  try {
+    const r = await readPersona(memoryBase, name);
+    return r.ok ? r.content : '';
+  } catch {
+    return '';
+  }
 }
 
 async function handleChat(req, res) {
@@ -455,7 +531,8 @@ async function handleChat(req, res) {
   const planning = !!(config.planMode || body.planning) && agentEnabled;
   const memoryBlock = config.memoryEnabled !== false ? await injectMemory(MEMORY_DIR) : '';
   const skillsBlock = config.memoryEnabled !== false ? await injectSkills(MEMORY_DIR) : '';
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock) }, ...incoming];
+  const personaText = await resolvePersonaText(config, MEMORY_DIR);
+  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText) }, ...incoming];
 
   const callModel = (msgs, { onDelta }) =>
     callModelStream({ config, messages: msgs, tools, onDelta, signal: ac.signal });

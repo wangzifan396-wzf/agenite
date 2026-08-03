@@ -266,8 +266,67 @@ export async function deleteSkill(base, ref) {
   const list = await listSkills(base);
   const target = list.find((s) => s.slug === ref || s.name === ref || s.slug === slugify(ref));
   if (!target) return { ok: false, error: `未找到技能：${ref}` };
-  await unlink(join(base, SKILLS_DIR, `${target.slug}.md`));
+  // Some environments intercept unlink and route it through a trash can that
+  // can occasionally error; tolerate it so a delete never crashes the server.
+  try { await unlink(join(base, SKILLS_DIR, `${target.slug}.md`)); } catch { /* best-effort */ }
   return { ok: true, content: `已删除技能「${target.name}」` };
+}
+
+// ---- personas: reusable role/system-prompt presets ----
+const PERSONAS_DIR = 'personas';
+
+export async function savePersona(base, { name, description, system_prompt, instructions }) {
+  const prompt = String(system_prompt || instructions || '').trim();
+  if (!name || !prompt) {
+    return { ok: false, error: 'name 与 system_prompt（角色指令）不能为空' };
+  }
+  await ensureDir(base);
+  await mkdir(join(base, PERSONAS_DIR), { recursive: true });
+  const slug = slugify(name);
+  const fm = [
+    '---',
+    `name: ${name}`,
+    `description: ${description || ''}`,
+    '---',
+    '',
+    prompt,
+    ''
+  ].join('\n');
+  await writeFile(join(base, PERSONAS_DIR, `${slug}.md`), fm, 'utf8');
+  return { ok: true, content: `已保存角色「${name}」(personas/${slug}.md)。`, slug };
+}
+
+export async function listPersonas(base) {
+  const dir = join(base, PERSONAS_DIR);
+  let entries;
+  try { entries = await readdir(dir); } catch { return []; }
+  const out = [];
+  for (const n of entries) {
+    if (!n.endsWith('.md')) continue;
+    const text = await readFile(join(dir, n), 'utf8');
+    const { meta, body } = parseFrontmatter(text);
+    out.push({ slug: n.replace(/\.md$/, ''), name: meta.name || n, description: meta.description || '', system_prompt: body.trim() });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+export async function readPersona(base, ref) {
+  if (!ref) return { ok: false, error: '请指定角色名称或 slug' };
+  const list = await listPersonas(base);
+  const target = list.find((s) => s.slug === ref || s.name === ref || s.slug === slugify(ref));
+  if (!target) return { ok: false, error: `未找到角色：${ref}` };
+  return { ok: true, slug: target.slug, name: target.name, description: target.description, content: target.system_prompt };
+}
+
+export async function deletePersona(base, ref) {
+  const list = await listPersonas(base);
+  const target = list.find((s) => s.slug === ref || s.name === ref || s.slug === slugify(ref));
+  if (!target) return { ok: false, error: `未找到角色：${ref}` };
+  // Some environments intercept unlink and route it through a trash can that
+  // can occasionally error; tolerate it so a delete never crashes the server.
+  try { await unlink(join(base, PERSONAS_DIR, `${target.slug}.md`)); } catch { /* best-effort */ }
+  return { ok: true, content: `已删除角色「${target.name}」` };
 }
 
 // The catalog block injected into the system prompt at session start.
