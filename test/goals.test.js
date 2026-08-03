@@ -19,18 +19,36 @@ function tmpDir() {
 
 // Fake deps: a tool-free model that returns text, a tool executor that says ok,
 // and a runAgent that emits a couple of tool events then finishes with a report.
-function fakeDeps() {
+// opts.verify: array of verdict strings consumed per verify call (defaults to a
+// passing "已完成"). opts.costPerAttempt / turnsPerAttempt / stopped let budget
+// and retry tests drive deterministic scenarios.
+function fakeDeps(opts = {}) {
+  const verifySeq = opts.verify && opts.verify.length ? opts.verify : ['已完成'];
+  let vi = 0;
+  const cost = opts.costPerAttempt != null ? opts.costPerAttempt : 0.001;
+  const turns = opts.turnsPerAttempt != null ? opts.turnsPerAttempt : 1;
   return {
-    callModel: async () => ({ content: 'FAKE PLAN / VERDICT', toolCalls: [] }),
+    callModel: async (msgs) => {
+      const sys = (msgs && msgs[0] && msgs[0].content) || '';
+      if (sys.includes('质量验收员')) {
+        const v = vi < verifySeq.length ? verifySeq[vi] : verifySeq[verifySeq.length - 1];
+        vi++;
+        return { content: v };
+      }
+      if (sys.includes('高级技术规划师')) return { content: 'PLAN' };
+      if (sys.includes('对话压缩器')) return { content: 'SUMMARY' };
+      return { content: 'OK' };
+    },
     executeTool: async () => ({ ok: true, content: 'fake tool result' }),
     createSubAgentRunner: () => async () => ({ ok: true, content: 'sub' }),
     runAgent: async ({ onEvent, messages }) => {
+      if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
       onEvent('tool_start', { id: '1', name: 'run_code', args: { language: 'node', code: '1+1' } });
       onEvent('tool', { id: '1', name: 'run_code', args: {}, result: '2', ok: true, ms: 5 });
-      onEvent('usage', { turn: 1, total: 120, cost: 0.001 });
-      onEvent('done', { turns: 1, stopped: 'done' });
+      onEvent('usage', { turn: 1, total: 120, cost });
+      onEvent('done', { turns: turns, stopped: opts.stopped || 'done' });
       messages.push({ role: 'assistant', content: 'TEST REPORT: implemented and verified.' });
-      return { stopped: 'done', turns: 1, usage: { total: 120 }, cost: 0.001 };
+      return { stopped: opts.stopped || 'done', turns, usage: { total: 120 }, cost };
     }
   };
 }
@@ -142,6 +160,93 @@ test('initGoals marks stale running/queued goals as interrupted', async () => {
     await initGoals(dir);
     const after = await getGoal(id, dir);
     assert.equal(after.status, 'interrupted');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('self-heal retry: re-runs a tighter attempt when verification fails', async () => {
+  const dir = tmpDir();
+  try {
+    // First verification says not-done, second says done.
+    const r = await createGoal(
+      { goal: '让测试通过', config: { provider: 'openai', model: 'x' } },
+      dir,
+      fakeDeps({ verify: ['未完成：测试仍报错', '已完成'] })
+    );
+    assert.equal(r.ok, true);
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.attempt, 2, 'should have retried once');
+    assert.match(done.verdict, /已完成/);
+    assert.ok(done.turns >= 2, 'turns should accumulate across attempts');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('budget: cost cap stops the goal as failed', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '贵任务', config: { provider: 'openai', model: 'x', budget: { maxCostUSD: 0.0005 } } },
+      dir,
+      fakeDeps({ costPerAttempt: 0.001 })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'failed' || g.status === 'done');
+    assert.equal(done.status, 'failed');
+    assert.match(done.error, /成本上限/);
+    assert.equal(done.attempt, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('budget: turn cap stops the goal as failed', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '步数任务', config: { provider: 'openai', model: 'x', budget: { maxTurns: 1 } } },
+      dir,
+      fakeDeps({ turnsPerAttempt: 1 })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'failed' || g.status === 'done');
+    assert.equal(done.status, 'failed');
+    assert.match(done.error, /步数上限/);
+    assert.equal(done.attempt, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('budget: retries=0 means no self-heal on failed verification', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '不重试', config: { provider: 'openai', model: 'x', budget: { retries: 0 } } },
+      dir,
+      fakeDeps({ verify: ['未完成'] })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'failed' || g.status === 'done');
+    assert.equal(done.status, 'failed');
+    assert.match(done.error, /自愈重试上限/);
+    assert.equal(done.attempt, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('budget: timeout cap stops the goal as failed', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '超时任务', config: { provider: 'openai', model: 'x', budget: { timeoutMs: 5 } } },
+      dir,
+      fakeDeps({ delayMs: 10 })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'failed' || g.status === 'done');
+    assert.equal(done.status, 'failed');
+    assert.match(done.error, /时长上限/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

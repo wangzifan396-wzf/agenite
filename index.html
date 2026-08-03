@@ -157,6 +157,15 @@
             <input id="goal-title" class="text-input goal-title" type="text" placeholder="标题（可选）" />
             <button id="goal-assign" class="btn-primary">委派并执行</button>
           </div>
+          <div class="goal-budget">
+            <span class="field-title">预算护栏（可选）</span>
+            <div class="goal-budget-row">
+              <label>最大步数<input id="goal-maxturns" class="text-input num" type="number" min="1" placeholder="60" /></label>
+              <label>成本上限 $<input id="goal-maxcost" class="text-input num" type="number" min="0" step="0.01" placeholder="1.00" /></label>
+              <label>自愈重试<input id="goal-retries" class="text-input num" type="number" min="0" placeholder="2" /></label>
+            </div>
+            <p class="muted small">超出任一上限即停止并标记失败；自验证未通过会自动复盘重试（默认 2 次）。</p>
+          </div>
           <p class="muted small">
             Agent 会<b>自主</b>规划 → 执行 → 自验证，全程在工作区沙箱内自动批准，无需逐步确认。
             你随时可以回来在下方查看进度、日志与报告，或一键停止。最多同时运行 3 个。

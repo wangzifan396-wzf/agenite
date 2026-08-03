@@ -1666,6 +1666,7 @@ function goalCard(g) {
           .join('') || '<span class="muted">（暂无）</span>'
       }</div></div>
       ${g.report ? `<div class="goal-sub"><b>最终报告</b><pre class="goal-pre">${escapeHtml(g.report)}</pre></div>` : ''}
+      ${g.verdict ? `<div class="goal-sub"><b>验收结论</b> ${escapeHtml(g.verdict)}</div>` : ''}
       ${g.error ? `<div class="goal-sub goal-err"><b>说明</b> ${escapeHtml(g.error)}</div>` : ''}
     </div>`;
   return `
@@ -1682,9 +1683,9 @@ function goalCard(g) {
           ${stopBtn}
         </div>
       </div>
-      <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)} · ${new Date(
-    g.updatedAt
-  ).toLocaleString()}</div>
+      <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
+    g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
+  } · ${new Date(g.updatedAt).toLocaleString()}</div>
       ${detail}
     </div>`;
 }
@@ -1727,15 +1728,27 @@ async function assignGoal() {
   $('goal-assign').disabled = true;
   $('goal-msg').textContent = '已委派，Agent 开始自治执行…';
   try {
+    const budget = {};
+    const mt = parseFloat($('goal-maxturns').value);
+    const mc = parseFloat($('goal-maxcost').value);
+    const rt = parseInt($('goal-retries').value, 10);
+    if (Number.isFinite(mt) && mt > 0) budget.maxTurns = mt;
+    if (Number.isFinite(mc) && mc > 0) budget.maxCostUSD = mc;
+    if (Number.isFinite(rt) && rt >= 0) budget.retries = rt;
+    const body = { goal, title, config: Object.assign({}, config) };
+    if (Object.keys(budget).length) body.config.budget = budget;
     const r = await fetch('/api/goals', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goal, title, config })
+      body: JSON.stringify(body)
     }).then((x) => x.json());
     if (!r.ok) $('goal-msg').textContent = '委派失败：' + (r.error || '未知错误');
     else {
       $('goal-input').value = '';
       $('goal-title').value = '';
+      $('goal-maxturns').value = '';
+      $('goal-maxcost').value = '';
+      $('goal-retries').value = '';
       $('goal-msg').textContent = '已创建目标 ' + r.id + '，正在执行（可关闭本面板，进度会自动保存）。';
       refreshGoals();
     }

@@ -82,6 +82,10 @@ function summary(s, isRunning) {
     finalized: !!s.finalized,
     turns: s.turns || 0,
     cost: (s.usage && s.usage.cost) || 0,
+    attempt: s.attempt || 0,
+    retries: (s.budget && s.budget.retries) || 0,
+    verdict: s.verdict || '',
+    budget: s.budget || null,
     running: !!isRunning
   };
 }
@@ -187,6 +191,9 @@ export async function createGoal({ goal, title, config }, dir = GOALS_DIR, deps 
     })(),
     updatedAt: Date.now(),
     config: sanitizeGoalConfig(config),
+    budget: resolveBudget(config),
+    attempt: 0,
+    verdict: '',
     plan: '',
     log: [],
     report: '',
@@ -207,6 +214,27 @@ function sanitizeGoalConfig(config = {}) {
   // a goal can be re-run after a restart; it lives in the user's own home dir.
   const c = normalizeConfig({ ...(config || {}), workspace: config && config.workspace });
   return c;
+}
+
+// A goal may carry a `budget` (from config.budget) capping how much autonomy it
+// is allowed before we stop it — the same safety rails OpenHands/Hermes expose
+// so a delegated goal can never run away. Sensible defaults if unset.
+export function resolveBudget(config = {}) {
+  const b = (config && config.budget) || {};
+  const maxTurns = Number.isFinite(b.maxTurns) && b.maxTurns > 0 ? Math.floor(b.maxTurns) : MAX_TURNS;
+  const maxCostUSD = Number.isFinite(b.maxCostUSD) && b.maxCostUSD > 0 ? b.maxCostUSD : 1.0;
+  const timeoutMs = Number.isFinite(b.timeoutMs) && b.timeoutMs > 0 ? b.timeoutMs : 10 * 60 * 1000;
+  const retries = Number.isFinite(b.retries) && b.retries >= 0 ? Math.floor(b.retries) : 2;
+  return { maxTurns, maxCostUSD, timeoutMs, retries };
+}
+
+// "已完成" passes; "未完成 / 部分完成" triggers a self-heal retry; anything
+// ambiguous (incl. a verification infra error) is treated as done so we never
+// loop forever on a broken verifier. Retries are capped by budget.retries.
+function verdictDone(v) {
+  const s = String(v || '');
+  if (s.includes('未完成') || s.includes('部分完成')) return false;
+  return true;
 }
 
 function makeSummarize(callModel) {
@@ -364,15 +392,26 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
         state.usage = { total: payload.total || 0, cost: payload.cost || 0 };
       } else if (type === 'compact') {
         append('system', '上下文已压缩');
-      } else if (type === 'done') {
-        state.turns = payload.turns;
       }
+      // NOTE: turns are accumulated from runAgent's *return value* (see the loop)
+      // so they sum correctly across self-heal retries — not overridden here.
     };
 
     const realRunAgent = (opts) => runAgent(opts);
     const ra = deps && deps.runAgent ? deps.runAgent : realRunAgent;
 
-    // ── Phase 1: PLAN ───────────────────────────────────────────────
+    // Budget rails: a delegated goal can never run away. Derived from
+    // config.budget with safe defaults (resolveBudget).
+    const budget = state.budget || resolveBudget(state.config);
+    const wallStart = Date.now();
+    const overBudget = () => {
+      if (state.turns >= budget.maxTurns) return '超出步数上限（' + budget.maxTurns + ' 步）。';
+      if (state.usage.cost >= budget.maxCostUSD) return '超出成本上限（$' + budget.maxCostUSD.toFixed(2) + '）。';
+      if (Date.now() - wallStart >= budget.timeoutMs) return '超出时长上限（' + Math.round(budget.timeoutMs / 1000) + 's）。';
+      return '';
+    };
+
+    // ── Phase 1: PLAN (once) ────────────────────────────────────────
     state.status = 'running';
     state.phase = 'plan';
     append('system', '阶段 1/3 · 制定计划');
@@ -382,52 +421,97 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     append('plan', planText);
     flush();
 
-    // ── Phase 2: EXECUTE (autonomous) ───────────────────────────────
-    state.phase = 'execute';
-    append('system', '阶段 2/3 · 自治执行（沙箱内操作自动批准）');
-    flush();
+    // ── Phase 2+3: EXECUTE → VERIFY, with self-heal retries ─────────
+    // If self-verification says the goal is NOT done, we hand the agent its
+    // own verdict and let it re-run a tighter attempt — bounded by budget.retries
+    // and the cumulative turn/cost ceiling. This is the "agent fixes its own
+    // failures" loop that makes delegated goals feel reliable.
     const systemPrompt = buildGoalSystemPrompt(state.goal, planText, workspace);
     const messages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `目标：${state.goal}\n\n请开始执行上面的计划。完成后给出最终总结。` }
     ];
-    const result = await ra({
-      messages,
-      callModel: cm,
-      executeTool: ex,
-      onEvent,
-      config: { ...config, dangerTools: true, approvalMode: 'auto', workspace, maxTurns: MAX_TURNS, autoCompact: true },
-      tools,
-      summarize,
-      toolContext: {
-        requestApproval: autoApprove,
-        platform: process.platform,
-        memoryBase: defaultMemoryDir(),
-        runSubAgent,
-        runFanout
+    const MAX_ATTEMPTS = budget.retries + 1;
+    let verdict = '';
+    let attempt = 0;
+    while (attempt < MAX_ATTEMPTS) {
+      attempt++;
+      state.attempt = attempt;
+      state.phase = attempt === 1 ? 'execute' : 'retry';
+      append('system', attempt === 1 ? '阶段 2/3 · 自治执行（沙箱内操作自动批准）' : `自愈重试 ${attempt - 1}/${budget.retries} · 复盘并修正`);
+      flush();
+      const result = await ra({
+        messages,
+        callModel: cm,
+        executeTool: ex,
+        onEvent,
+        config: {
+          ...config,
+          dangerTools: true,
+          approvalMode: 'auto',
+          workspace,
+          maxTurns: Math.max(1, budget.maxTurns - state.turns),
+          autoCompact: true
+        },
+        tools,
+        summarize,
+        toolContext: {
+          requestApproval: autoApprove,
+          platform: process.platform,
+          memoryBase: defaultMemoryDir(),
+          runSubAgent,
+          runFanout
+        }
+      });
+      state.turns = (state.turns || 0) + (result.turns || 0);
+      state.usage = {
+        total: (state.usage.total || 0) + ((result.usage && result.usage.total) || 0),
+        cost: (state.usage.cost || 0) + (result.cost || 0)
+      };
+      const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && m.content);
+      state.report = lastAssistant ? lastAssistant.content : state.report;
+
+      const breached = overBudget();
+      if (breached) {
+        state.phase = 'report';
+        state.status = 'failed';
+        state.error = breached;
+        append('error', breached);
+        break;
       }
-    });
-    state.turns = result.turns;
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && m.content);
-    state.report = lastAssistant ? lastAssistant.content : '';
-    state.usage = {
-      total: (result.usage && result.usage.total) || state.usage.total,
-      cost: result.cost || state.usage.cost
-    };
 
-    // ── Phase 3: VERIFY (explicit self-check) ───────────────────────
-    state.phase = 'verify';
-    append('system', '阶段 3/3 · 自验证');
-    flush();
-    const verdict = await verify(cm, state.goal, state.report, workspace);
-    append('verify', verdict);
+      // ── VERIFY ──
+      state.phase = 'verify';
+      append('system', '阶段 3/3 · 自验证');
+      flush();
+      verdict = await verify(cm, state.goal, state.report, workspace);
+      append('verify', verdict);
+      state.verdict = verdict;
 
-    state.phase = 'report';
-    state.status = result.stopped === 'max_turns' ? 'failed' : 'done';
-    state.error =
-      result.stopped === 'max_turns'
-        ? '达到最大步数上限，未能在步数内完成（可重试或把目标拆细）。'
-        : '';
+      if (verdictDone(verdict)) {
+        state.phase = 'report';
+        state.status = 'done';
+        state.error = '';
+        break;
+      }
+      if (attempt >= MAX_ATTEMPTS) {
+        state.phase = 'report';
+        state.status = 'failed';
+        state.error = '自验证未通过，且已达自愈重试上限（' + budget.retries + ' 次）。';
+        append('error', state.error);
+        break;
+      }
+      // Not done yet — give the agent its own verdict and let it try again.
+      messages.push({
+        role: 'system',
+        content:
+          '上一轮自验证未通过，验收结论：' +
+          trunc(verdict, 500) +
+          '。请复盘失败原因并修正，重新运行验证（测试/构建/lint）直到通过，再给出最终总结。'
+      });
+      append('system', '自验证未通过，准备复盘重试');
+    }
+
     flush();
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);

@@ -1297,6 +1297,11 @@ kbd {
 .goal-form-row { display: flex; gap: 10px; align-items: stretch; }
 .goal-form-row .goal-title { flex: 1; }
 .goal-form-row .btn-primary { white-space: nowrap; }
+.goal-budget { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 10px; background: color-mix(in srgb, var(--panel) 70%, var(--bg)); }
+.goal-budget .field-title { font-size: 12.5px; }
+.goal-budget-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.goal-budget-row label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--muted); flex: 1; min-width: 90px; }
+.goal-budget-row .num { width: 100%; padding: 6px 8px; font-size: 13px; }
 .goal-divider { height: 1px; background: var(--border); margin: 18px 0 12px; }
 .goal-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
 #goals-list { display: flex; flex-direction: column; gap: 10px; }

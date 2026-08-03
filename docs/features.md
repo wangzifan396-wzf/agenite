@@ -296,9 +296,18 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - 前端「目标任务」看板（侧栏入口 `#open-goals`）：派发表单 + 状态徽章（排队/执行中/已完成/失败/已停止/已中断）+ 展开看计划·日志·报告 + 一键停止；打开时每 1.5s 轮询活动目标。
 - 端点：`POST /api/goals`（派发）、`GET /api/goals`（列表）、`GET /api/goals/:id`（详情）、`POST /api/goals/:id/stop`（停止）、`DELETE /api/goals/:id`（删除）。
 
+### 8.9.6 目标护栏 + 自愈重试（v0.13.0）
+
+让「交办即走」真正**可靠**、不会跑飞——对标 OpenHands / Hermes「自治且可控」的核心体验。
+
+- **三层预算护栏**：每个目标带 `budget = { maxTurns, maxCostUSD, timeoutMs, retries }`，未配置时用安全默认值（步数 60 / 成本 $1.00 / 时长 10min / 重试 2 次）。派发表单里可调（最大步数 / 成本上限 $ / 自愈重试次数）。执行中累计步数与成本，任一触顶即停并标记 `failed`，错误写明「超出步数上限 / 成本上限 / 时长上限」。
+- **自愈重试循环**：`② 执行 → ③ 自验证` 包在一个 `while`（上限 `retries + 1` 次）里。若验收结论是「未完成 / 部分完成」，把该结论回灌成一条 system 消息，让 Agent **复盘、修正、重新跑验证**，直到 `verdictDone`（含「已完成」）或达重试上限。多次尝试的 `messages` 上下文连续保留，步数 / 成本跨尝试**累加计入预算**。验收结论模糊（含验证器自身报错）按「通过」处理，避免无限重试。
+- 状态新增字段：`attempt`（已执行次数）、`verdict`（最终验收结论）、`budget`；看板卡片脚注显示「尝试 N」，详情展开可见「验收结论」。
+- 健壮性：沿用 v0.12.0 的 flush 串行化 + 原子写 + 单调 `createdAt` + `finalized` 契约，`deleteGoal` 等待 `done` 再 unlink。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**212 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**217 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

@@ -1306,6 +1306,11 @@ kbd {
 .goal-form-row { display: flex; gap: 10px; align-items: stretch; }
 .goal-form-row .goal-title { flex: 1; }
 .goal-form-row .btn-primary { white-space: nowrap; }
+.goal-budget { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 10px; background: color-mix(in srgb, var(--panel) 70%, var(--bg)); }
+.goal-budget .field-title { font-size: 12.5px; }
+.goal-budget-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.goal-budget-row label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--muted); flex: 1; min-width: 90px; }
+.goal-budget-row .num { width: 100%; padding: 6px 8px; font-size: 13px; }
 .goal-divider { height: 1px; background: var(--border); margin: 18px 0 12px; }
 .goal-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
 #goals-list { display: flex; flex-direction: column; gap: 10px; }
@@ -1502,6 +1507,15 @@ kbd {
           <div class="goal-form-row">
             <input id="goal-title" class="text-input goal-title" type="text" placeholder="标题（可选）" />
             <button id="goal-assign" class="btn-primary">委派并执行</button>
+          </div>
+          <div class="goal-budget">
+            <span class="field-title">预算护栏（可选）</span>
+            <div class="goal-budget-row">
+              <label>最大步数<input id="goal-maxturns" class="text-input num" type="number" min="1" placeholder="60" /></label>
+              <label>成本上限 $<input id="goal-maxcost" class="text-input num" type="number" min="0" step="0.01" placeholder="1.00" /></label>
+              <label>自愈重试<input id="goal-retries" class="text-input num" type="number" min="0" placeholder="2" /></label>
+            </div>
+            <p class="muted small">超出任一上限即停止并标记失败；自验证未通过会自动复盘重试（默认 2 次）。</p>
           </div>
           <p class="muted small">
             Agent 会<b>自主</b>规划 → 执行 → 自验证，全程在工作区沙箱内自动批准，无需逐步确认。
@@ -3958,6 +3972,7 @@ function goalCard(g) {
           .join('') || '<span class="muted">（暂无）</span>'
       }</div></div>
       ${g.report ? `<div class="goal-sub"><b>最终报告</b><pre class="goal-pre">${escapeHtml(g.report)}</pre></div>` : ''}
+      ${g.verdict ? `<div class="goal-sub"><b>验收结论</b> ${escapeHtml(g.verdict)}</div>` : ''}
       ${g.error ? `<div class="goal-sub goal-err"><b>说明</b> ${escapeHtml(g.error)}</div>` : ''}
     </div>`;
   return `
@@ -3974,9 +3989,9 @@ function goalCard(g) {
           ${stopBtn}
         </div>
       </div>
-      <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)} · ${new Date(
-    g.updatedAt
-  ).toLocaleString()}</div>
+      <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
+    g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
+  } · ${new Date(g.updatedAt).toLocaleString()}</div>
       ${detail}
     </div>`;
 }
@@ -4019,15 +4034,27 @@ async function assignGoal() {
   $('goal-assign').disabled = true;
   $('goal-msg').textContent = '已委派，Agent 开始自治执行…';
   try {
+    const budget = {};
+    const mt = parseFloat($('goal-maxturns').value);
+    const mc = parseFloat($('goal-maxcost').value);
+    const rt = parseInt($('goal-retries').value, 10);
+    if (Number.isFinite(mt) && mt > 0) budget.maxTurns = mt;
+    if (Number.isFinite(mc) && mc > 0) budget.maxCostUSD = mc;
+    if (Number.isFinite(rt) && rt >= 0) budget.retries = rt;
+    const body = { goal, title, config: Object.assign({}, config) };
+    if (Object.keys(budget).length) body.config.budget = budget;
     const r = await fetch('/api/goals', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goal, title, config })
+      body: JSON.stringify(body)
     }).then((x) => x.json());
     if (!r.ok) $('goal-msg').textContent = '委派失败：' + (r.error || '未知错误');
     else {
       $('goal-input').value = '';
       $('goal-title').value = '';
+      $('goal-maxturns').value = '';
+      $('goal-maxcost').value = '';
+      $('goal-retries').value = '';
       $('goal-msg').textContent = '已创建目标 ' + r.id + '，正在执行（可关闭本面板，进度会自动保存）。';
       refreshGoals();
     }
