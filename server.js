@@ -21,6 +21,7 @@ import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } 
 import { defaultMemoryDir, injectMemory, injectSkills, listSkills, savePersona, listPersonas, readPersona, deletePersona } from './src/core/memory.js';
 import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
 import { autoSaveSkill } from './src/core/autoskill.js';
+import { createGoal, listGoals, getGoal, stopGoal, deleteGoal, initGoals } from './src/core/goals.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -114,6 +115,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/personas') return handlePersonasList(req, res);
   if (req.method === 'POST' && url === '/api/personas') return handlePersonaSave(req, res);
   if (req.method === 'DELETE' && url.startsWith('/api/personas/')) return handlePersonaDelete(req, res, url);
+  // Autonomous goal delegation ("fire and forget" + self-verify), see goals.js.
+  if (req.method === 'POST' && url === '/api/goals') return handleGoalCreate(req, res);
+  if (req.method === 'GET' && url === '/api/goals') return handleGoalsList(req, res);
+  if (req.method === 'POST' && url.startsWith('/api/goals/') && url.endsWith('/stop')) return handleGoalStop(req, res, url);
+  if (req.method === 'DELETE' && url.startsWith('/api/goals/')) return handleGoalDelete(req, res, url);
+  if (req.method === 'GET' && url.startsWith('/api/goals/')) return handleGoalGet(req, res, url);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -341,6 +348,49 @@ async function handlePersonaSave(req, res) {
 async function handlePersonaDelete(req, res, url) {
   const slug = decodeURIComponent(url.slice('/api/personas/'.length));
   const r = await deletePersona(MEMORY_DIR, slug);
+  if (!r.ok) return sendJson(res, 404, { error: r.error });
+  return sendJson(res, 200, r);
+}
+
+// ── Autonomous goals ────────────────────────────────────────────────────────
+// These run as independent, long-lived sessions (not tied to an HTTP request),
+// persisting state to ~/.agenite/memory/goals so they survive refreshes/restarts.
+async function handleGoalCreate(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)) || '{}');
+  } catch {
+    return sendJson(res, 400, { error: '请求体解析失败' });
+  }
+  const r = await createGoal({ goal: body.goal, title: body.title, config: body.config });
+  if (!r.ok) return sendJson(res, 400, { error: r.error });
+  return sendJson(res, 200, r);
+}
+
+async function handleGoalsList(req, res) {
+  try {
+    return sendJson(res, 200, { goals: await listGoals() });
+  } catch {
+    return sendJson(res, 200, { goals: [] });
+  }
+}
+
+async function handleGoalGet(req, res, url) {
+  const id = decodeURIComponent(url.slice('/api/goals/'.length));
+  const g = await getGoal(id);
+  if (!g) return sendJson(res, 404, { error: '未找到该目标' });
+  return sendJson(res, 200, g);
+}
+
+async function handleGoalStop(req, res, url) {
+  const id = decodeURIComponent(url.slice('/api/goals/'.length).replace(/\/stop$/, ''));
+  stopGoal(id);
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleGoalDelete(req, res, url) {
+  const id = decodeURIComponent(url.slice('/api/goals/'.length));
+  const r = await deleteGoal(id);
   if (!r.ok) return sendJson(res, 404, { error: r.error });
   return sendJson(res, 200, r);
 }
@@ -705,5 +755,9 @@ function listenOn(port) {
   });
 }
 listenOn(PORT);
+
+// Mark any goal left "running"/"queued" by a previous process as interrupted —
+// there is no cross-process resume yet.
+initGoals().catch(() => {});
 
 export { server };

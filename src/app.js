@@ -1615,9 +1615,161 @@ async function pingHealth() {
   }
 }
 
+// ── Autonomous goals board ("fire and forget" + self-verify) ──────────────────
+let goalsPoll = null;
+
+function openGoals() {
+  $('goals-modal').classList.remove('hidden');
+  $('goal-msg').textContent = '';
+  refreshGoals();
+}
+function closeGoals() {
+  $('goals-modal').classList.add('hidden');
+  if (goalsPoll) {
+    clearInterval(goalsPoll);
+    goalsPoll = null;
+  }
+}
+
+async function refreshGoals() {
+  try {
+    const r = await fetch('/api/goals').then((x) => x.json());
+    renderGoals(r.goals || []);
+  } catch (e) {
+    $('goals-list').innerHTML = `<div class="muted small">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function statusLabel(s) {
+  return (
+    { queued: '排队中', running: '执行中', done: '已完成', failed: '失败', stopped: '已停止', interrupted: '已中断' }[s] ||
+    s
+  );
+}
+
+function goalCard(g) {
+  const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
+  const stopBtn =
+    g.running || g.status === 'running' ? `<button class="mini-btn" data-stop="${g.id}">停止</button>` : '';
+  const detail = `
+    <div id="goal-detail-${g.id}" class="goal-detail hidden">
+      ${g.plan ? `<div class="goal-sub"><b>计划</b><pre class="goal-pre">${escapeHtml(g.plan)}</pre></div>` : ''}
+      <div class="goal-sub"><b>进度日志</b><div class="goal-log">${
+        (g.log || [])
+          .slice(-80)
+          .map(
+            (l) =>
+              `<div class="goal-line ${l.type}"><span class="gl-t">${new Date(l.t).toLocaleTimeString()}</span> ${escapeHtml(
+                l.text
+              )}</div>`
+          )
+          .join('') || '<span class="muted">（暂无）</span>'
+      }</div></div>
+      ${g.report ? `<div class="goal-sub"><b>最终报告</b><pre class="goal-pre">${escapeHtml(g.report)}</pre></div>` : ''}
+      ${g.error ? `<div class="goal-sub goal-err"><b>说明</b> ${escapeHtml(g.error)}</div>` : ''}
+    </div>`;
+  return `
+    <div class="goal-card">
+      <div class="goal-card-head">
+        <div class="goal-meta">
+          <div class="goal-name">${escapeHtml(g.title)}</div>
+          <div class="goal-goal muted small">${escapeHtml(g.goal)}</div>
+        </div>
+        <div class="goal-right">
+          ${badge}
+          <button class="mini-btn" data-toggle="${g.id}">详情</button>
+          <button class="mini-btn" data-del="${g.id}">删除</button>
+          ${stopBtn}
+        </div>
+      </div>
+      <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)} · ${new Date(
+    g.updatedAt
+  ).toLocaleString()}</div>
+      ${detail}
+    </div>`;
+}
+
+function renderGoals(goals) {
+  const list = $('goals-list');
+  $('goals-count').textContent = goals.length ? `${goals.length} 个` : '';
+  if (!goals.length) {
+    list.innerHTML = `<div class="muted small">还没有目标。在上面描述一个目标，交给 Agent 自治执行。</div>`;
+    return;
+  }
+  list.innerHTML = goals.map((g) => goalCard(g)).join('');
+  list.querySelectorAll('[data-stop]').forEach((b) => {
+    b.onclick = () => stopGoal(b.getAttribute('data-stop'));
+  });
+  list.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = () => deleteGoal(b.getAttribute('data-del'));
+  });
+  list.querySelectorAll('[data-toggle]').forEach((b) => {
+    b.onclick = () => {
+      const d = $('goal-detail-' + b.getAttribute('data-toggle'));
+      if (d) d.classList.toggle('hidden');
+    };
+  });
+  const running = goals.some((g) => g.running || g.status === 'running');
+  if (running && !goalsPoll) goalsPoll = setInterval(refreshGoals, 1500);
+  else if (!running && goalsPoll) {
+    clearInterval(goalsPoll);
+    goalsPoll = null;
+  }
+}
+
+async function assignGoal() {
+  const goal = $('goal-input').value.trim();
+  if (!goal) {
+    $('goal-msg').textContent = '请先描述一个目标。';
+    return;
+  }
+  const title = $('goal-title').value.trim();
+  $('goal-assign').disabled = true;
+  $('goal-msg').textContent = '已委派，Agent 开始自治执行…';
+  try {
+    const r = await fetch('/api/goals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, title, config })
+    }).then((x) => x.json());
+    if (!r.ok) $('goal-msg').textContent = '委派失败：' + (r.error || '未知错误');
+    else {
+      $('goal-input').value = '';
+      $('goal-title').value = '';
+      $('goal-msg').textContent = '已创建目标 ' + r.id + '，正在执行（可关闭本面板，进度会自动保存）。';
+      refreshGoals();
+    }
+  } catch (e) {
+    $('goal-msg').textContent = '委派失败：' + e.message;
+  } finally {
+    $('goal-assign').disabled = false;
+  }
+}
+
+async function stopGoal(id) {
+  try {
+    await fetch('/api/goals/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+  } catch {
+    /* ignore */
+  }
+  refreshGoals();
+}
+
+async function deleteGoal(id) {
+  try {
+    await fetch('/api/goals/' + encodeURIComponent(id), { method: 'DELETE' });
+  } catch {
+    /* ignore */
+  }
+  refreshGoals();
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
+  $('open-goals').onclick = openGoals;
+  $('close-goals').onclick = closeGoals;
+  $('goal-assign').onclick = assignGoal;
   $('close-settings').onclick = closeSettings;
   $('save-settings').onclick = saveSettings;
   $('persona-save').onclick = saveNewPersona;
@@ -1771,6 +1923,7 @@ function wire() {
 
   // click-outside to dismiss overlays
   $('settings-modal').addEventListener('mousedown', (e) => { if (e.target === $('settings-modal')) closeSettings(); });
+  $('goals-modal').addEventListener('mousedown', (e) => { if (e.target === $('goals-modal')) closeGoals(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -1822,6 +1975,7 @@ function wire() {
       if (acState) closeAc();
       else if (pendingApprovalId) resolveApproval(false);
       else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
+      else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

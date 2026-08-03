@@ -285,9 +285,20 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - 接线：`config.persona` 经 `body.config` 透传到服务端（`normalizeConfig` 规范化）→ `resolvePersonaText` 解析（内置名直接取、自定义名读文件）→ `buildSystemPrompt` 注入 `ROLE / 角色设定` 块；系统提示词还会主动提示模型"若任务适合某角色，建议用户切换"；前端设置里有下拉 + "另存为角色"表单（`GET`/`POST`/`DELETE /api/personas`）；
 - 子代理已支持 `persona` 参数，主 Agent 的人格可与委派链协同。
 
+### 8.9.5 自治目标委派 + 自验证 · 任务看板（v0.12.0）
+
+这是把 Agenite 从「陪你写代码的聊天 Agent」升级成「**你能交办整个目标、它自治执行并自验证、你随时回来验收**」的关键一跃，直接对齐 OpenHands / Hermes / Codex 后台 Agent 的「交办即走」范式——也是补齐与头部开源 Agent 竞争力落差的主线能力。
+
+- **与既有委派的区别**：`delegate` / `fanout` 是在**一次聊天请求内同步跑完**的子循环；「目标」是一个**独立、长生命周期的自治会话**，脱离单个 HTTP 请求，跑完整个目标后才回报，且刷新浏览器 / 重启服务都不丢。
+- 三阶段：`① 规划`（tool-free 生成计划）→ `② 自治执行`（跑一个独立的 `runAgent` 循环，复用全部内置工具——`run_code` 跑测试、`codebase_search` 找代码、`fanout` 并行子代理；沙箱内 `approvalMode:'auto'` **自动批准**，不再逐步问你）→ `③ 自验证`（系统提示词强制「改完必须跑测试/构建/lint，**不过验证不宣布完成**」，阶段末再做一次验收总结）→ `④ 写报告`。
+- 持久化：每目标一个 `~/.agenite/memory/goals/<id>.json`，记录 `plan` / `log`（每步进度、工具调用、花费）/ `report` / `usage`；启动时会把上次遗留的 `running`/`queued` 标成 `interrupted`（暂不支持断点续跑）。
+- 并发闸门：最多同时运行 **3** 个（`createGoal` 超限返回错误），避免多个自治循环同时打爆 API。
+- 前端「目标任务」看板（侧栏入口 `#open-goals`）：派发表单 + 状态徽章（排队/执行中/已完成/失败/已停止/已中断）+ 展开看计划·日志·报告 + 一键停止；打开时每 1.5s 轮询活动目标。
+- 端点：`POST /api/goals`（派发）、`GET /api/goals`（列表）、`GET /api/goals/:id`（详情）、`POST /api/goals/:id/stop`（停止）、`DELETE /api/goals/:id`（删除）。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `util`）无 DOM，**206 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**212 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

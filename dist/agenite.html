@@ -1298,6 +1298,57 @@ kbd {
 }
 .allow-chip button:hover { color: var(--danger); }
 
+/* ── Autonomous goals board ─────────────────────────────────────────── */
+.goals-card { width: min(760px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+.goals-body { padding: 18px 20px 20px; overflow: auto; }
+.goal-form { display: flex; flex-direction: column; gap: 9px; }
+.goal-form .field-title { margin-bottom: 2px; }
+.goal-form-row { display: flex; gap: 10px; align-items: stretch; }
+.goal-form-row .goal-title { flex: 1; }
+.goal-form-row .btn-primary { white-space: nowrap; }
+.goal-divider { height: 1px; background: var(--border); margin: 18px 0 12px; }
+.goal-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+#goals-list { display: flex; flex-direction: column; gap: 10px; }
+.goal-card {
+  border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px;
+  background: var(--panel); display: flex; flex-direction: column; gap: 7px;
+}
+.goal-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.goal-meta { min-width: 0; }
+.goal-name { font-weight: 600; font-size: 14px; }
+.goal-goal { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.goal-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600;
+  background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+}
+.goal-badge.queued { color: var(--muted); }
+.goal-badge.running { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.goal-badge.done { background: color-mix(in srgb, #16a34a 16%, transparent); color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
+.goal-badge.failed, .goal-badge.interrupted { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+.goal-badge.stopped { background: color-mix(in srgb, #d97706 16%, transparent); color: #d97706; border-color: color-mix(in srgb, #d97706 35%, transparent); }
+.goal-foot { font-size: 11.5px; }
+.goal-detail { border-top: 1px dashed var(--border); padding-top: 9px; display: flex; flex-direction: column; gap: 9px; }
+.goal-sub b { font-size: 12px; color: var(--text-2); }
+.goal-pre {
+  white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
+  font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; margin-top: 5px; max-height: 260px; overflow: auto;
+}
+.goal-log { max-height: 260px; overflow: auto; margin-top: 5px; display: flex; flex-direction: column; gap: 3px; }
+.goal-line { font-size: 11.5px; line-height: 1.45; color: var(--text-2); font-family: var(--mono); }
+.goal-line .gl-t { color: var(--muted); margin-right: 6px; }
+.goal-line.tool { color: var(--text); }
+.goal-line.system { color: var(--accent); }
+.goal-line.error { color: var(--danger); }
+.goal-line.verify, .goal-line.plan { color: var(--text-2); opacity: .92; }
+.goal-err { color: var(--danger); font-size: 12px; }
+.mini-btn {
+  font-size: 12px; padding: 3px 9px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text-2);
+}
+.mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
@@ -1369,6 +1420,7 @@ kbd {
           <span class="ws-text" id="workspace-label">未连接本地服务</span>
         </button>
         <button id="open-settings" class="side-link">设置</button>
+        <button id="open-goals" class="side-link">目标任务</button>
       </div>
     </aside>
 
@@ -1433,6 +1485,35 @@ kbd {
         <div class="composer-hint">Agenite 在你本机运行，写入与命令默认需要你点击确认。按 <kbd>Ctrl</kbd>+<kbd>/</kbd> 看全部快捷键。</div>
       </div>
     </main>
+  </div>
+
+  <!-- 目标任务看板：把整个目标委派给自治 Agent -->
+  <div id="goals-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card goals-card">
+      <div class="drawer-head">
+        <h2>目标任务 · 自治执行</h2>
+        <button id="close-goals" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="goals-body">
+        <div class="goal-form">
+          <label class="field-title" for="goal-input">委派一个目标</label>
+          <textarea id="goal-input" class="text-input" rows="3"
+            placeholder="例如：给 agenite 的 server.js 加一套请求速率限制中间件，并补上测试。"></textarea>
+          <div class="goal-form-row">
+            <input id="goal-title" class="text-input goal-title" type="text" placeholder="标题（可选）" />
+            <button id="goal-assign" class="btn-primary">委派并执行</button>
+          </div>
+          <p class="muted small">
+            Agent 会<b>自主</b>规划 → 执行 → 自验证，全程在工作区沙箱内自动批准，无需逐步确认。
+            你随时可以回来在下方查看进度、日志与报告，或一键停止。最多同时运行 3 个。
+          </p>
+          <div id="goal-msg" class="muted small"></div>
+        </div>
+        <div class="goal-divider"></div>
+        <div class="goal-list-head"><span class="field-title">目标列表</span><span id="goals-count" class="muted small"></span></div>
+        <div id="goals-list"></div>
+      </div>
+    </div>
   </div>
 
   <!-- 快捷键速查 -->
@@ -3826,9 +3907,161 @@ async function pingHealth() {
   }
 }
 
+// ── Autonomous goals board ("fire and forget" + self-verify) ──────────────────
+let goalsPoll = null;
+
+function openGoals() {
+  $('goals-modal').classList.remove('hidden');
+  $('goal-msg').textContent = '';
+  refreshGoals();
+}
+function closeGoals() {
+  $('goals-modal').classList.add('hidden');
+  if (goalsPoll) {
+    clearInterval(goalsPoll);
+    goalsPoll = null;
+  }
+}
+
+async function refreshGoals() {
+  try {
+    const r = await fetch('/api/goals').then((x) => x.json());
+    renderGoals(r.goals || []);
+  } catch (e) {
+    $('goals-list').innerHTML = `<div class="muted small">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function statusLabel(s) {
+  return (
+    { queued: '排队中', running: '执行中', done: '已完成', failed: '失败', stopped: '已停止', interrupted: '已中断' }[s] ||
+    s
+  );
+}
+
+function goalCard(g) {
+  const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
+  const stopBtn =
+    g.running || g.status === 'running' ? `<button class="mini-btn" data-stop="${g.id}">停止</button>` : '';
+  const detail = `
+    <div id="goal-detail-${g.id}" class="goal-detail hidden">
+      ${g.plan ? `<div class="goal-sub"><b>计划</b><pre class="goal-pre">${escapeHtml(g.plan)}</pre></div>` : ''}
+      <div class="goal-sub"><b>进度日志</b><div class="goal-log">${
+        (g.log || [])
+          .slice(-80)
+          .map(
+            (l) =>
+              `<div class="goal-line ${l.type}"><span class="gl-t">${new Date(l.t).toLocaleTimeString()}</span> ${escapeHtml(
+                l.text
+              )}</div>`
+          )
+          .join('') || '<span class="muted">（暂无）</span>'
+      }</div></div>
+      ${g.report ? `<div class="goal-sub"><b>最终报告</b><pre class="goal-pre">${escapeHtml(g.report)}</pre></div>` : ''}
+      ${g.error ? `<div class="goal-sub goal-err"><b>说明</b> ${escapeHtml(g.error)}</div>` : ''}
+    </div>`;
+  return `
+    <div class="goal-card">
+      <div class="goal-card-head">
+        <div class="goal-meta">
+          <div class="goal-name">${escapeHtml(g.title)}</div>
+          <div class="goal-goal muted small">${escapeHtml(g.goal)}</div>
+        </div>
+        <div class="goal-right">
+          ${badge}
+          <button class="mini-btn" data-toggle="${g.id}">详情</button>
+          <button class="mini-btn" data-del="${g.id}">删除</button>
+          ${stopBtn}
+        </div>
+      </div>
+      <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)} · ${new Date(
+    g.updatedAt
+  ).toLocaleString()}</div>
+      ${detail}
+    </div>`;
+}
+
+function renderGoals(goals) {
+  const list = $('goals-list');
+  $('goals-count').textContent = goals.length ? `${goals.length} 个` : '';
+  if (!goals.length) {
+    list.innerHTML = `<div class="muted small">还没有目标。在上面描述一个目标，交给 Agent 自治执行。</div>`;
+    return;
+  }
+  list.innerHTML = goals.map((g) => goalCard(g)).join('');
+  list.querySelectorAll('[data-stop]').forEach((b) => {
+    b.onclick = () => stopGoal(b.getAttribute('data-stop'));
+  });
+  list.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = () => deleteGoal(b.getAttribute('data-del'));
+  });
+  list.querySelectorAll('[data-toggle]').forEach((b) => {
+    b.onclick = () => {
+      const d = $('goal-detail-' + b.getAttribute('data-toggle'));
+      if (d) d.classList.toggle('hidden');
+    };
+  });
+  const running = goals.some((g) => g.running || g.status === 'running');
+  if (running && !goalsPoll) goalsPoll = setInterval(refreshGoals, 1500);
+  else if (!running && goalsPoll) {
+    clearInterval(goalsPoll);
+    goalsPoll = null;
+  }
+}
+
+async function assignGoal() {
+  const goal = $('goal-input').value.trim();
+  if (!goal) {
+    $('goal-msg').textContent = '请先描述一个目标。';
+    return;
+  }
+  const title = $('goal-title').value.trim();
+  $('goal-assign').disabled = true;
+  $('goal-msg').textContent = '已委派，Agent 开始自治执行…';
+  try {
+    const r = await fetch('/api/goals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, title, config })
+    }).then((x) => x.json());
+    if (!r.ok) $('goal-msg').textContent = '委派失败：' + (r.error || '未知错误');
+    else {
+      $('goal-input').value = '';
+      $('goal-title').value = '';
+      $('goal-msg').textContent = '已创建目标 ' + r.id + '，正在执行（可关闭本面板，进度会自动保存）。';
+      refreshGoals();
+    }
+  } catch (e) {
+    $('goal-msg').textContent = '委派失败：' + e.message;
+  } finally {
+    $('goal-assign').disabled = false;
+  }
+}
+
+async function stopGoal(id) {
+  try {
+    await fetch('/api/goals/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+  } catch {
+    /* ignore */
+  }
+  refreshGoals();
+}
+
+async function deleteGoal(id) {
+  try {
+    await fetch('/api/goals/' + encodeURIComponent(id), { method: 'DELETE' });
+  } catch {
+    /* ignore */
+  }
+  refreshGoals();
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
+  $('open-goals').onclick = openGoals;
+  $('close-goals').onclick = closeGoals;
+  $('goal-assign').onclick = assignGoal;
   $('close-settings').onclick = closeSettings;
   $('save-settings').onclick = saveSettings;
   $('persona-save').onclick = saveNewPersona;
@@ -3982,6 +4215,7 @@ function wire() {
 
   // click-outside to dismiss overlays
   $('settings-modal').addEventListener('mousedown', (e) => { if (e.target === $('settings-modal')) closeSettings(); });
+  $('goals-modal').addEventListener('mousedown', (e) => { if (e.target === $('goals-modal')) closeGoals(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -4033,6 +4267,7 @@ function wire() {
       if (acState) closeAc();
       else if (pendingApprovalId) resolveApproval(false);
       else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
+      else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

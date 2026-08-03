@@ -74,6 +74,7 @@
           <span class="ws-text" id="workspace-label">未连接本地服务</span>
         </button>
         <button id="open-settings" class="side-link">设置</button>
+        <button id="open-goals" class="side-link">目标任务</button>
       </div>
     </aside>
 
@@ -138,6 +139,35 @@
         <div class="composer-hint">Agenite 在你本机运行，写入与命令默认需要你点击确认。按 <kbd>Ctrl</kbd>+<kbd>/</kbd> 看全部快捷键。</div>
       </div>
     </main>
+  </div>
+
+  <!-- 目标任务看板：把整个目标委派给自治 Agent -->
+  <div id="goals-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card goals-card">
+      <div class="drawer-head">
+        <h2>目标任务 · 自治执行</h2>
+        <button id="close-goals" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="goals-body">
+        <div class="goal-form">
+          <label class="field-title" for="goal-input">委派一个目标</label>
+          <textarea id="goal-input" class="text-input" rows="3"
+            placeholder="例如：给 agenite 的 server.js 加一套请求速率限制中间件，并补上测试。"></textarea>
+          <div class="goal-form-row">
+            <input id="goal-title" class="text-input goal-title" type="text" placeholder="标题（可选）" />
+            <button id="goal-assign" class="btn-primary">委派并执行</button>
+          </div>
+          <p class="muted small">
+            Agent 会<b>自主</b>规划 → 执行 → 自验证，全程在工作区沙箱内自动批准，无需逐步确认。
+            你随时可以回来在下方查看进度、日志与报告，或一键停止。最多同时运行 3 个。
+          </p>
+          <div id="goal-msg" class="muted small"></div>
+        </div>
+        <div class="goal-divider"></div>
+        <div class="goal-list-head"><span class="field-title">目标列表</span><span id="goals-count" class="muted small"></span></div>
+        <div id="goals-list"></div>
+      </div>
+    </div>
   </div>
 
   <!-- 快捷键速查 -->
