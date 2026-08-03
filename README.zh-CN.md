@@ -43,6 +43,11 @@
   - 🔁 **对话结束自动建图**：对话完成后（设置「对话结束自动建图」开启，默认关，与"技能自动沉淀"同款安全策略）静默把最近 40 条用户/助手消息交给模型抽取实体/关系灌入图谱，不用你手动点；任何失败都静默跳过，绝不打断对话。
   - 🧭 **图谱注入推理**：每次 Agent 跑之前（设置「记忆图谱注入推理」默认开），把图谱压成一段紧凑文本（节点按连接度排序、截断上限保护 token、只展示两端都可见的关系）注入系统提示词——模型从此"脑子里有这张地图"，能主动引用"你之前说的那个项目 / 那个人"，不必反复追问。
   - 🔌 复用已有 `atlas` 引擎、`/api/atlas/extract` 抽取核心与记忆注入范式，**零架构债**；手动「从对话构建」与自动建图共用同一抽取函数（按 `type+label` 去重合并）。
+- **Atlas 记忆工作台：双向同步 + 节点下钻 + 默认 landing（v0.16.0）**：把图谱从「一个漂亮面板」做成**真正可用的第二大脑工作台**，质量（可精修）+ 潜力（图谱变成导航入口）双收。包含：
+  - 🔗 **双向 Markdown 同步**：图谱可一键**导出**成人类可读、可手改的 `atlas.md`（按类型分组、实体带说明、关系用 `A ->(type) B` 形式）；改完再**导入**即按 `type+label` 去重合并回图谱——手改的描述会覆盖旧值。记忆从此既可视化、又能当纯文本精修。
+  - 🔍 **节点下钻 + 回忆对话**：点任一节点弹出详情（类型、说明、连接数、邻居关系），并能一键「回忆相关对话」——去历史会话里捞出该实体出现过的真实片段（含会话标题 / 角色 / 时间），图谱从此是**导航入口**而非终点。
+  - 🚪 **默认 landing**：启动后若图谱非空，自动打开「记忆图谱」面板作为首页（设置「打开时自动展示记忆图谱」默认开，可关）——打开 Agenite 先看到你的活记忆，而不是空白聊天框。更直接地「改头换面」。
+  - 🔌 新增 4 个 atlas 纯函数（`exportAtlasMarkdown` / `importAtlasMarkdown` / `mergeGraph` / 复用 `graphToContext`）+ `searchSessionsForLabel`，端点 `GET/POST /api/atlas/markdown` 与 `GET /api/atlas/recall`，**零架构债**。
 - **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **26 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
@@ -86,7 +91,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（232 个，node:test）
+npm test       # 跑核心逻辑单元测试（239 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

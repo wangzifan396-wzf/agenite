@@ -150,7 +150,11 @@ export function defaultConfig() {
     // Silently extract entities/relations from the last stretch of a finished
     // conversation into the graph (one extra model call per completion — like
     // autoSkill). Off by default; you can also build manually from the panel.
-    atlasAutoBuild: false
+    atlasAutoBuild: false,
+    // On app launch, if the memory graph has content, open the Atlas panel
+    // automatically so the user lands on their living memory (the "second
+    // brain" landing). On by default; turn off if the auto-modal annoys you.
+    atlasAutoOpen: true
   };
 }
 
@@ -188,6 +192,7 @@ export function normalizeConfig(input = {}) {
     : [];
   cfg.atlasInject = cfg.atlasInject !== false;
   cfg.atlasAutoBuild = !!cfg.atlasAutoBuild;
+  cfg.atlasAutoOpen = cfg.atlasAutoOpen !== false;
   return cfg;
 }
 

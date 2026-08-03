@@ -259,6 +259,110 @@ export function graphToContext(graph, { maxNodes = 140, maxEdges = 90, maxDesc =
   return parts.join('\n');
 }
 
+// --- bidirectional markdown sync ---
+//
+// The graph is great as a picture, but a picture you can't edit is fragile.
+// These two functions let the graph round-trip to a human-readable, hand-
+// editable Markdown file — so the user can curate memory as text and merge it
+// back (dedup by type+label). This is what turns Atlas from "a viz panel" into
+// a real second-brain surface.
+
+const TYPE_LABELS = {
+  person: '人物',
+  project: '项目',
+  concept: '概念',
+  file: '文件',
+  tool: '工具',
+  preference: '偏好',
+  fact: '事实',
+  event: '事件'
+};
+
+export function exportAtlasMarkdown(graph) {
+  if (!graph || !graph.nodes) return '# 记忆图谱 Atlas\n\n（空）\n';
+  const nodes = Object.values(graph.nodes).filter((n) => n && n.label);
+  if (!nodes.length) return '# 记忆图谱 Atlas\n\n（空）\n';
+  const byType = {};
+  for (const n of nodes) {
+    const t = n.type || 'concept';
+    (byType[t] = byType[t] || []).push(n);
+  }
+  const order = Object.keys(byType).sort();
+  const parts = [
+    '# 记忆图谱 Atlas',
+    '',
+    '> 由 Agenite 本地生成。可手改后通过「导入 Markdown」合并回图谱（按 类型 + 名称 去重）。',
+    '',
+    '## 节点'
+  ];
+  for (const t of order) {
+    const label = TYPE_LABELS[t] || t;
+    parts.push('', `### ${t} · ${label}`);
+    for (const n of byType[t].sort((a, b) => a.label.localeCompare(b.label))) {
+      const desc = n.description ? ' ' + n.description : '';
+      parts.push(`- [${n.label}]${desc}`);
+    }
+  }
+  const edges = Array.isArray(graph.edges) ? graph.edges : [];
+  parts.push('', '## 关系');
+  if (!edges.length) parts.push('（无）');
+  for (const e of edges) {
+    const a = graph.nodes[e.from];
+    const b = graph.nodes[e.to];
+    if (!a || !b) continue;
+    const lbl = e.label ? ` （${e.label}）` : '';
+    parts.push(`- ${a.label} ->(${e.type})${lbl} ${b.label}`);
+  }
+  return parts.join('\n') + '\n';
+}
+
+// Parse an Atlas Markdown file back into { nodes, edges } (best-effort).
+// Node headings set the current type; edges use the `A ->(type) B` form.
+export function importAtlasMarkdown(text) {
+  const out = { nodes: [], edges: [] };
+  if (!text) return out;
+  let curType = 'concept';
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const heading = /^#{3,4}\s*([a-zA-Z0-9_-]+)/.exec(line);
+    if (heading) { curType = heading[1].toLowerCase(); continue; }
+    if (/^#{1,2}\s/.test(line)) continue; // # / ## section headers
+    const edge = /^- (.+?)\s*->\(([a-zA-Z0-9_-]+)\)\s*(?:（(.+?)）\s*)?(.+?)\s*$/.exec(line);
+    if (edge) {
+      out.edges.push({ from: edge[1].trim(), type: edge[2], label: (edge[3] || '').trim(), to: edge[4].trim() });
+      continue;
+    }
+    const node = /^- \[(.+?)\]\s*(.*)$/.exec(line);
+    if (node) {
+      out.nodes.push({ type: curType, label: node[1].trim(), description: node[2].trim() });
+      continue;
+    }
+  }
+  return out;
+}
+
+// Merge a parsed extraction (e.g. from Markdown) into a target graph. New nodes
+// are added, existing ones keep their id but a non-empty, differing description
+// in the source wins (so a hand-edited Markdown file overrides the stored one).
+// Edges are deduped by from/to/type. Returns { added, linked, updated }.
+export function mergeGraph(target, parsed) {
+  let added = 0, linked = 0, updated = 0;
+  for (const n of parsed.nodes || []) {
+    const r = addNode(target, n);
+    if (!r.ok) continue;
+    if (r.existed === false) { added++; continue; }
+    const node = target.nodes[nodeId(n.type, n.label)];
+    if (node && n.description && node.description !== n.description) { node.description = n.description; updated++; }
+    if (node && n.provenance && node.provenance !== n.provenance) node.provenance = n.provenance;
+  }
+  for (const e of parsed.edges || []) {
+    const r = linkNodes(target, e);
+    if (r.ok && r.existed === false) linked++;
+  }
+  return { added, linked, updated };
+}
+
 // --- persistence (injected directory) ---
 
 export async function loadAtlas(dir = ATLAS_DIR) {

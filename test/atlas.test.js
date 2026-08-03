@@ -17,7 +17,10 @@ import {
   loadAtlas,
   saveAtlas,
   nodeId,
-  graphToContext
+  graphToContext,
+  exportAtlasMarkdown,
+  importAtlasMarkdown,
+  mergeGraph
 } from '../src/core/atlas.js';
 
 function tmpDir() {
@@ -220,4 +223,62 @@ test('graphToContext only shows edges whose endpoints are visible', () => {
   // only the visible edge (Agenite -> OpenHands) should be rendered
   assert.match(ctx, /Agenite —competes_with→ OpenHands/);
   assert.ok(!ctx.includes('hidden'));
+});
+
+// --- bidirectional markdown sync ---
+
+test('exportAtlasMarkdown groups nodes by type and lists edges', () => {
+  const g = emptyGraph();
+  addNode(g, { type: 'project', label: 'Agenite', description: '本地智能体' });
+  addNode(g, { type: 'person', label: '张三' });
+  linkNodes(g, { from: 'Agenite', to: '张三', type: 'maintained_by', label: '由张三维护' });
+  const md = exportAtlasMarkdown(g);
+  assert.match(md, /### project · 项目/);
+  assert.match(md, /- \[Agenite\] 本地智能体/);
+  assert.match(md, /- \[张三\]/);
+  assert.match(md, /Agenite ->\(maintained_by\) （由张三维护） 张三/);
+});
+
+test('exportAtlasMarkdown emits an empty marker for an empty graph', () => {
+  assert.match(exportAtlasMarkdown(emptyGraph()), /（空）/);
+});
+
+test('importAtlasMarkdown parses node headings and edge lines', () => {
+  const md = [
+    '# 记忆图谱 Atlas',
+    '## 节点',
+    '### person · 人物',
+    '- [张三] 团队负责人',
+    '### project · 项目',
+    '- [Agenite] 本地智能体',
+    '## 关系',
+    '- 张三 ->(maintained_by) （维护） Agenite'
+  ].join('\n');
+  const ext = importAtlasMarkdown(md);
+  assert.equal(ext.nodes.length, 2);
+  const z = ext.nodes.find((n) => n.label === '张三');
+  assert.equal(z.type, 'person');
+  assert.equal(z.description, '团队负责人');
+  assert.equal(ext.edges.length, 1);
+  assert.equal(ext.edges[0].from, '张三');
+  assert.equal(ext.edges[0].to, 'Agenite');
+  assert.equal(ext.edges[0].type, 'maintained_by');
+});
+
+test('markdown round-trips: export -> import -> merge keeps entities (dedup by type+label)', () => {
+  const g = emptyGraph();
+  addNode(g, { type: 'project', label: 'Agenite', description: '本地智能体' });
+  addNode(g, { type: 'person', label: '张三' });
+  linkNodes(g, { from: 'Agenite', to: '张三', type: 'maintained_by' });
+  const md = exportAtlasMarkdown(g);
+  // hand-edit: tweak a description and add a brand-new node
+  const edited = md.replace('本地智能体', '本地零依赖智能体') + '\n### concept · 概念\n- [记忆图谱] 把记忆画成活的图谱\n';
+  const ext = importAtlasMarkdown(edited);
+  const r = mergeGraph(g, ext);
+  // "Agenite" existed -> not counted as newly added; new concept added once
+  assert.equal(r.added, 1, 'one new node merged');
+  assert.equal(r.updated, 1, 'edited description applied to existing node');
+  const a = g.nodes[nodeId('project', 'Agenite')];
+  assert.equal(a.description, '本地零依赖智能体', 'edited description merged back');
+  assert.ok(g.nodes[nodeId('concept', '记忆图谱')], 'new concept present');
 });

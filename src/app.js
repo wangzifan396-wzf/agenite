@@ -1096,6 +1096,7 @@ function fillSettings() {
   $('set-autoSkill').checked = config.autoSkill === true;
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
+  $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
   $('set-autoCompact').checked = config.autoCompact !== false;
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
@@ -1258,6 +1259,7 @@ function saveSettings() {
     autoSkill: $('set-autoSkill').checked,
     atlasInject: $('set-atlasInject').checked,
     atlasAutoBuild: $('set-atlasAutoBuild').checked,
+    atlasAutoOpen: $('set-atlasAutoOpen').checked,
     persona: $('set-persona').value || 'default',
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
@@ -1995,9 +1997,12 @@ function atlasShowDetail(id) {
     ${n.description ? `<div class="ad-desc">${escapeHtml(n.description)}</div>` : ''}
     <div class="ad-row">连接数：<b>${n.degree || 0}</b></div>
     ${rels}
+    <button class="mini-btn ad-recall" id="atlas-recall">回忆相关对话</button>
+    <div id="atlas-recall-res" class="ad-recall-res"></div>
     <button class="mini-btn danger-text ad-del" id="atlas-del-node">删除该节点</button>`;
   panel.classList.remove('hidden');
   $('atlas-del-node').onclick = () => atlasRemoveNode(id);
+  $('atlas-recall').onclick = () => atlasRecall(n.label);
   renderAtlas(); // refresh selection ring
 }
 
@@ -2061,6 +2066,68 @@ async function atlasBuild() {
     }
   } catch (e) { $('atlas-msg').textContent = '抽取失败：' + e.message; }
   finally { $('atlas-build').disabled = false; }
+}
+
+// Export the current graph as a downloadable, hand-editable Markdown file.
+async function atlasExport() {
+  try {
+    const r = await fetch('/api/atlas/markdown').then((x) => x.json());
+    if (!r.ok) { $('atlas-msg').textContent = '导出失败：' + (r.error || ''); return; }
+    const blob = new Blob([r.markdown || ''], { type: 'text/markdown;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'atlas.md';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    $('atlas-msg').textContent = '已导出 atlas.md（可手改后导入合并）。';
+  } catch (e) { $('atlas-msg').textContent = '导出失败：' + e.message; }
+}
+
+// Import a (possibly hand-edited) Markdown file and merge it back into the graph.
+async function atlasImportFile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  $('atlas-msg').textContent = '导入中…';
+  try {
+    const md = await file.text();
+    const r = await fetch('/api/atlas/markdown', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ markdown: md })
+    }).then((x) => x.json());
+    if (!r.ok) $('atlas-msg').textContent = '导入失败：' + (r.error || '');
+    else {
+      const a = r.applied || { added: 0, linked: 0 };
+      $('atlas-msg').textContent = `已合并：新增 ${a.added} 节点、${a.linked} 关系。`;
+      refreshAtlas();
+    }
+  } catch (err) { $('atlas-msg').textContent = '导入失败：' + err.message; }
+  finally { e.target.value = ''; }
+}
+
+// Recall where this entity appeared across past conversations.
+async function atlasRecall(label) {
+  const box = $('atlas-recall-res');
+  if (!box) return;
+  box.innerHTML = '<div class="muted small">检索历史对话中…</div>';
+  try {
+    const r = await fetch('/api/atlas/recall?label=' + encodeURIComponent(label)).then((x) => x.json());
+    const ms = r.matches || [];
+    if (!ms.length) { box.innerHTML = '<div class="muted small">历史对话中没有找到相关片段。</div>'; return; }
+    box.innerHTML = ms.map((m) => {
+      const date = m.updatedAt ? new Date(m.updatedAt).toLocaleDateString() : '';
+      return `<div class="ad-snip"><div class="ad-snip-meta">${escapeHtml(m.title || '会话')} · ${escapeHtml(m.role || '')} · ${date}</div><div class="ad-snip-text">${escapeHtml(m.snippet || '')}</div></div>`;
+    }).join('');
+  } catch (err) { box.innerHTML = '<div class="muted small">检索失败：' + err.message + '</div>'; }
+}
+
+// Landing: if the graph already has content, open Atlas automatically so the
+// user lands on their living memory rather than an empty chat box.
+async function maybeOpenAtlasOnBoot() {
+  if (config.atlasAutoOpen === false) return;
+  try {
+    const r = await fetch('/api/atlas').then((x) => x.json());
+    if (r && r.stats && r.stats.nodes > 0) setTimeout(openAtlas, 350);
+  } catch { /* ignore — atlas stays closed */ }
 }
 
 // --- interactions (attached once) ---
@@ -2143,6 +2210,9 @@ function wire() {
   $('atlas-build').onclick = atlasBuild;
   $('atlas-reset').onclick = atlasReset;
   $('atlas-fit').onclick = atlasFit;
+  $('atlas-export').onclick = atlasExport;
+  $('atlas-import').onclick = () => $('atlas-import-file').click();
+  $('atlas-import-file').onchange = atlasImportFile;
   $('atlas-search').addEventListener('input', atlasApplySearch);
   $('close-goals').onclick = closeGoals;
   $('goal-assign').onclick = assignGoal;
@@ -2384,6 +2454,7 @@ function init() {
     });
   }
   setInterval(pingHealth, 30000);
+  maybeOpenAtlasOnBoot();
 }
 
 init();

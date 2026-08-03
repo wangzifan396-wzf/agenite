@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { safeSessionId, listSessions, readSession, writeSession, deleteSession } from '../src/core/sessions.js';
+import { safeSessionId, listSessions, readSession, writeSession, deleteSession, searchSessionsForLabel } from '../src/core/sessions.js';
 
 async function tempDir() {
   return mkdtemp(join(tmpdir(), 'agenite-sessions-'));
@@ -103,4 +103,33 @@ test('deleteSession removes the file and is safe to repeat', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('searchSessionsForLabel finds an entity across sessions with context', () => {
+  const sessions = [
+    { id: 's1', title: '关于 Agenite', updatedAt: 100, messages: [
+      { role: 'user', content: '我们聊聊 Agenite 这个项目' },
+      { role: 'assistant', content: 'Agenite 是个本地智能体' }
+    ] },
+    { id: 's2', title: '别的', updatedAt: 200, messages: [{ role: 'user', content: '今天天气不错' }] }
+  ];
+  const hits = searchSessionsForLabel(sessions, 'Agenite', { limit: 12, ctx: 40 });
+  assert.ok(hits.length >= 1, 'found at least one match');
+  assert.ok(hits.every((h) => h.sessionId === 's1'), 'matches come from the right session');
+  assert.ok(hits[0].snippet.includes('Agenite'), 'snippet contains the entity');
+  assert.ok(hits[0].snippet.length > 'Agenite'.length, 'snippet carries surrounding context');
+});
+
+test('searchSessionsForLabel is case-insensitive and empty when absent', () => {
+  const sessions = [{ id: 's', title: 't', updatedAt: 1, messages: [{ role: 'user', content: 'Xyz 项目' }] }];
+  assert.equal(searchSessionsForLabel(sessions, 'xyz').length, 1, 'case-insensitive');
+  assert.deepEqual(searchSessionsForLabel(sessions, ''), [], 'empty query -> no matches');
+  assert.deepEqual(searchSessionsForLabel(sessions, 'missing'), [], 'no match -> empty');
+});
+
+test('searchSessionsForLabel respects the limit', () => {
+  const messages = [];
+  for (let i = 0; i < 20; i++) messages.push({ role: 'user', content: '提到 Foobar 第 ' + i + ' 次' });
+  const sessions = [{ id: 's', title: 't', updatedAt: 1, messages }];
+  assert.equal(searchSessionsForLabel(sessions, 'Foobar', { limit: 5 }).length, 5);
 });

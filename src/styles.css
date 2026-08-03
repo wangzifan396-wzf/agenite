@@ -1462,6 +1462,11 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .atlas-detail .ad-rel .rel-type { color: var(--accent); font-size: 10.5px; }
 .atlas-detail .ad-rel .rel-name { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atlas-detail .ad-del { margin-top: 9px; width: 100%; }
+.atlas-detail .ad-recall { margin-top: 11px; width: 100%; }
+.atlas-detail .ad-recall-res { margin-top: 8px; display: flex; flex-direction: column; gap: 7px; max-height: 230px; overflow: auto; }
+.atlas-detail .ad-snip { font-size: 11.5px; padding: 7px 9px; border-radius: 8px; background: var(--panel-2); border-left: 2px solid var(--accent-2); }
+.atlas-detail .ad-snip-meta { color: var(--muted); font-size: 10px; margin-bottom: 3px; letter-spacing: .02em; }
+.atlas-detail .ad-snip-text { color: var(--text-2); line-height: 1.5; word-break: break-word; }
 
 .atlas-side {
   border-left: 1px solid var(--border); padding-left: 14px;

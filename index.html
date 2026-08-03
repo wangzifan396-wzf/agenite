@@ -194,6 +194,9 @@
           <div class="grow"></div>
           <button id="atlas-build" class="mini-btn" title="用模型从当前对话抽取实体与关系">从对话构建</button>
           <button id="atlas-fit" class="mini-btn" title="复位视图">适配</button>
+          <button id="atlas-export" class="mini-btn" title="导出为 Markdown 文件（可手改后导入合并）">导出 MD</button>
+          <button id="atlas-import" class="mini-btn" title="从 Markdown 文件导入并合并回图谱">导入 MD</button>
+          <input id="atlas-import-file" type="file" accept=".md,.markdown,.txt" class="hidden" />
           <button id="atlas-reset" class="mini-btn danger-text" title="清空整张图谱">清空</button>
         </div>
         <div class="atlas-stage">
@@ -352,6 +355,10 @@
           <label class="switch-row">
             <span><b>对话结束自动建图</b><em>对话完成后静默抽取实体 / 关系灌入记忆图谱（多一次模型调用；也可在「记忆图谱」面板手动「从对话构建」）</em></span>
             <input id="set-atlasAutoBuild" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span><b>打开时自动展示记忆图谱</b><em>启动后若图谱非空，自动打开「记忆图谱」面板作为首页 landing（关闭则保持空白聊天框）</em></span>
+            <input id="set-atlasAutoOpen" type="checkbox" checked />
           </label>
           <div class="field">
             <span class="field-title">角色人格<em class="muted small">切换 agent 的说话与思维方式（默认 / 严厉审查员 / 温柔写手 / 研究员 / 自定义）</em></span>

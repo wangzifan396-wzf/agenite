@@ -371,9 +371,31 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - `handleChat` 在 `finally` 里、对话 `stopped==='done'` 且开启 `config.atlasAutoBuild`（默认关）时，**fire-and-forget** 抽取最近 40 条用户/助手消息灌图：独立发起模型调用（不复用 `ac.signal`，避免连接断开时 abort），`res.end()` 后才在事件循环上跑，`catch` 静默吞错，绝不打断聊天；
 - `config.js` 新增 `atlasInject`(默认 true) 与 `atlasAutoBuild`(默认 false)，`normalizeConfig` 做布尔归一；前端设置面板加两个开关（记忆图谱注入推理 / 对话结束自动建图），与「技能自动沉淀」同款安全策略。
 
+### 8.9.9 Atlas 记忆工作台：双向同步 + 节点下钻 + 默认 landing（v0.16.0）
+
+把图谱从「一个漂亮面板」做成**真正可用的第二大脑工作台**。质量（记忆可精修）+ 潜力（图谱成为导航入口）双收。
+
+#### 8.9.9.1 双向 Markdown 同步
+
+`atlas.js` 新增三个纯函数：
+- `exportAtlasMarkdown(graph)`：节点按类型分组（`### type · 中文标签`），每个 `- [label] 说明`；关系区 `- A ->(type) （中文说明） B`；空图输出「（空）」标记。格式稳定、可被手改。
+- `importAtlasMarkdown(text)`：容错解析——`###` 标题切换当前类型，`- [label] desc` 解析为节点，`- A ->(type) B` 解析为边（best-effort，忽略无法识别的行）。
+- `mergeGraph(target, parsed)`：复用 `addNode` / `linkNodes` 去重合并；**新建**节点计入 `added`，**已存在且手改了非空说明**的计入 `updated`（手改覆盖旧说明），边按 `from/to/type` 去重计入 `linked`。返回 `{ added, linked, updated }`。
+
+端点：`GET /api/atlas/markdown`（导出）、`POST /api/atlas/markdown`（导入合并，body `{markdown}`）；前端「导出 MD」触发浏览器下载 `atlas.md`，「导入 MD」用隐藏 `<input type=file>` 读本地文件后合并。
+
+#### 8.9.9.2 节点下钻 + 回忆对话
+
+- 点节点弹 `#atlas-detail`：类型、说明、连接数、邻居关系列表；
+- 「回忆相关对话」按钮调 `GET /api/atlas/recall?label=X`，服务端 `searchSessionsForLabel(sessions, label)`（纯函数，定义在 `sessions.js`）扫描本机 `~/.agenite/sessions` 所有会话，返回该实体出现过的片段（含 `sessionId/title/updatedAt/role/snippet`，上下文字数 `ctx=60`，最多 12 条）；前端把结果渲染成带标题/角色/日期的片段卡。
+
+#### 8.9.9.3 默认 landing
+
+`config.atlasAutoOpen`(默认 true) + 设置开关「打开时自动展示记忆图谱」；`init()` 末尾 `maybeOpenAtlasOnBoot()`：若 `config.atlasAutoOpen !== false` 且 `/api/atlas` 返回 `stats.nodes > 0`，延迟 350ms 自动 `openAtlas()`——打开 Agenite 先看到活记忆，而非空白聊天框。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**232 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**239 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

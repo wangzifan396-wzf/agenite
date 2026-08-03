@@ -93,6 +93,29 @@ export async function deleteSession(id, dir = SESSIONS_DIR) {
   }
 }
 
+// Pure recall: scan already-loaded session objects for a label (entity name)
+// and return up to `limit` matching snippets with surrounding context. Used by
+// the Atlas "remember related conversations" feature. Best-effort and safe.
+export function searchSessionsForLabel(sessions, label, { limit = 12, ctx = 60 } = {}) {
+  const q = String(label || '').toLowerCase();
+  if (!q) return [];
+  const out = [];
+  for (const s of sessions || []) {
+    const msgs = Array.isArray(s.messages) ? s.messages : [];
+    for (const m of msgs) {
+      const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+      const idx = c.toLowerCase().indexOf(q);
+      if (idx === -1) continue;
+      const start = Math.max(0, idx - ctx);
+      const end = Math.min(c.length, idx + q.length + ctx);
+      const snip = (start > 0 ? '…' : '') + c.slice(start, end) + (end < c.length ? '…' : '');
+      out.push({ sessionId: s.id, title: s.title, updatedAt: s.updatedAt, role: m.role, snippet: snip });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
 // Cap the folder so a runaway client cannot fill the disk.
 async function pruneOldest(dir) {
   try {
