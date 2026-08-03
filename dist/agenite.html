@@ -1835,6 +1835,14 @@ select.text-input { appearance: auto; padding-right: 8px; }
             <span><b>技能自动沉淀</b><em>复杂任务跑完后，让 agent 自动判断并沉淀成可复用技能（多一次反思调用，可在技能库查看）</em></span>
             <input id="set-autoSkill" type="checkbox" />
           </label>
+          <label class="switch-row">
+            <span><b>记忆图谱注入推理</b><em>每次对话把本地知识图谱压成摘要注入系统提示词，让 agent 主动引用已知的人物 / 项目 / 关系（关闭则图谱只作可视化，不参与推理）</em></span>
+            <input id="set-atlasInject" type="checkbox" checked />
+          </label>
+          <label class="switch-row">
+            <span><b>对话结束自动建图</b><em>对话完成后静默抽取实体 / 关系灌入记忆图谱（多一次模型调用；也可在「记忆图谱」面板手动「从对话构建」）</em></span>
+            <input id="set-atlasAutoBuild" type="checkbox" />
+          </label>
           <div class="field">
             <span class="field-title">角色人格<em class="muted small">切换 agent 的说话与思维方式（默认 / 严厉审查员 / 温柔写手 / 研究员 / 自定义）</em></span>
             <select id="set-persona"></select>
@@ -2424,7 +2432,16 @@ function defaultConfig() {
     mcpAutoApproveReadonly: true,
     // Mirror conversations into ~/.agenite/sessions so they survive a browser
     // change or a cleared cache.
-    syncSessions: true
+    syncSessions: true,
+    // --- Atlas memory graph ---
+    // Inject the local knowledge graph (nodes + typed edges) into the system
+    // prompt so the agent "knows the map" and can reference known people /
+    // projects / relations. On by default; cheap (bounded text, read-only).
+    atlasInject: true,
+    // Silently extract entities/relations from the last stretch of a finished
+    // conversation into the graph (one extra model call per completion — like
+    // autoSkill). Off by default; you can also build manually from the panel.
+    atlasAutoBuild: false
   };
 }
 
@@ -2460,6 +2477,8 @@ function normalizeConfig(input = {}) {
   cfg.toolAllowlist = Array.isArray(cfg.toolAllowlist)
     ? [...new Set(cfg.toolAllowlist.filter((s) => typeof s === 'string' && s))].slice(0, 200)
     : [];
+  cfg.atlasInject = cfg.atlasInject !== false;
+  cfg.atlasAutoBuild = !!cfg.atlasAutoBuild;
   return cfg;
 }
 
@@ -3588,6 +3607,8 @@ function fillSettings() {
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
   $('set-memoryEnabled').checked = config.memoryEnabled !== false;
   $('set-autoSkill').checked = config.autoSkill === true;
+  $('set-atlasInject').checked = config.atlasInject !== false;
+  $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-autoCompact').checked = config.autoCompact !== false;
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
@@ -3748,6 +3769,8 @@ function saveSettings() {
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
     memoryEnabled: $('set-memoryEnabled').checked,
     autoSkill: $('set-autoSkill').checked,
+    atlasInject: $('set-atlasInject').checked,
+    atlasAutoBuild: $('set-atlasAutoBuild').checked,
     persona: $('set-persona').value || 'default',
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,

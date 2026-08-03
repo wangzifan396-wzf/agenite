@@ -23,7 +23,7 @@ import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js
 import { autoSaveSkill } from './src/core/autoskill.js';
 import { createGoal, listGoals, getGoal, stopGoal, deleteGoal, initGoals } from './src/core/goals.js';
 import {
-  loadAtlas, saveAtlas, addNode, linkNodes, removeNode, removeEdge, atlasStats, parseAtlasExtraction, applyExtraction
+  loadAtlas, saveAtlas, addNode, linkNodes, removeNode, removeEdge, atlasStats, parseAtlasExtraction, applyExtraction, graphToContext
 } from './src/core/atlas.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -406,6 +406,33 @@ async function handleGoalDelete(req, res, url) {
 
 // ---------- Agenite Atlas handlers ----------
 
+// Shared system prompt for knowledge extraction — used by both the manual
+// "build from conversation" endpoint and the fire-and-forget auto-build.
+const ATLAS_EXTRACT_SYSTEM =
+  '你是一个知识抽取器。阅读用户提供的对话/资料，抽取其中的实体与关系，只输出一个 JSON 对象（不要任何解释、不要 markdown 代码块），形如：\n' +
+  '{"nodes":[{"type":"person|project|concept|file|tool|preference|fact|event","label":"名称","description":"一句话说明"}],' +
+  '"edges":[{"from":"源实体名称","to":"目标实体名称","type":"关系类型(英文，如 competes_with/part_of/uses/maintained_by/located_in/related_to)","label":"中文说明"}]}\n' +
+  '只抽取确凿出现的信息；node 的 label 要简洁唯一；edge 的 from/to 必须是前面 nodes 里出现过的 label。';
+
+// Extract entities/relations from a text blob into the persistent graph.
+// Reused by handleAtlasExtract (manual) and the auto-build path. Never throws —
+// extraction is best-effort everywhere it is used.
+async function buildAtlasFromText(text, config) {
+  const out = await callModelStream({
+    config,
+    messages: [
+      { role: 'system', content: ATLAS_EXTRACT_SYSTEM },
+      { role: 'user', content: text }
+    ],
+    onDelta: () => {}
+  });
+  const ext = parseAtlasExtraction(out.content || '');
+  const g = await loadAtlas(MEMORY_DIR);
+  const applied = applyExtraction(g, ext);
+  await saveAtlas(g, MEMORY_DIR);
+  return { ext, applied, stats: atlasStats(g) };
+}
+
 async function handleAtlasGet(req, res) {
   const g = await loadAtlas(MEMORY_DIR);
   return sendJson(res, 200, { ok: true, graph: g, stats: atlasStats(g) });
@@ -442,29 +469,12 @@ async function handleAtlasExtract(req, res) {
   if (!validation.ok || !config.apiKey || !config.model) {
     return sendJson(res, 400, { ok: false, error: '未配置模型或 API Key，无法自动抽取（可手动添加节点）。' });
   }
-  const messages = [
-    {
-      role: 'system',
-      content:
-        '你是一个知识抽取器。阅读用户提供的对话/资料，抽取其中的实体与关系，只输出一个 JSON 对象（不要任何解释、不要 markdown 代码块），形如：\n' +
-        '{"nodes":[{"type":"person|project|concept|file|tool|preference|fact|event","label":"名称","description":"一句话说明"}],' +
-        '"edges":[{"from":"源实体名称","to":"目标实体名称","type":"关系类型(英文，如 competes_with/part_of/uses/maintained_by/located_in/related_to)","label":"中文说明"}]}\n' +
-        '只抽取确凿出现的信息；node 的 label 要简洁唯一；edge 的 from/to 必须是前面 nodes 里出现过的 label。'
-    },
-    { role: 'user', content: text }
-  ];
-  let content = '';
   try {
-    const out = await callModelStream({ config, messages, onDelta: () => {} });
-    content = out.content || '';
+    const r = await buildAtlasFromText(text, config);
+    return sendJson(res, 200, { ok: true, extracted: r.ext, applied: r.applied, stats: r.stats });
   } catch (e) {
     return sendJson(res, 502, { ok: false, error: '模型调用失败：' + (e.message || e) });
   }
-  const ext = parseAtlasExtraction(content);
-  const g = await loadAtlas(MEMORY_DIR);
-  const applied = applyExtraction(g, ext);
-  await saveAtlas(g, MEMORY_DIR);
-  return sendJson(res, 200, { ok: true, extracted: ext, applied, stats: atlasStats(g) });
 }
 
 async function handleAtlasReset(req, res) {
@@ -521,7 +531,7 @@ const BUILTIN_PERSONAS = [
   }
 ];
 
-function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '', skills = '', persona = '') {
+function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '', skills = '', persona = '', atlas = '') {
   const extra = (config.systemPrompt || '').trim();
   const base = [
     'You are Agenite, a capable local AI agent running on the user\'s own computer.',
@@ -549,6 +559,7 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
   if (memory) base.push(memory);
   if (skills) base.push(skills);
   if (persona) base.push('ROLE / 角色设定：\n' + persona);
+  if (atlas) base.push(atlas);
   const text = base.join(' ');
   return extra ? text + '\n\n' + extra : text;
 }
@@ -663,7 +674,11 @@ async function handleChat(req, res) {
   const memoryBlock = config.memoryEnabled !== false ? await injectMemory(MEMORY_DIR) : '';
   const skillsBlock = config.memoryEnabled !== false ? await injectSkills(MEMORY_DIR) : '';
   const personaText = await resolvePersonaText(config, MEMORY_DIR);
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText) }, ...incoming];
+  // Local knowledge graph, compressed into the system prompt so the agent
+  // "knows the map" and can reference known people/projects/relations instead
+  // of asking again. Off when disabled or when the graph is still empty.
+  const atlasBlock = config.atlasInject !== false ? graphToContext(await loadAtlas(MEMORY_DIR)) : '';
+  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText, atlasBlock) }, ...incoming];
 
   const callModel = (msgs, { onDelta }) =>
     callModelStream({ config, messages: msgs, tools, onDelta, signal: ac.signal });
@@ -760,6 +775,11 @@ async function handleChat(req, res) {
   // streams its own `subagent` SSE (with a distinct subId) for the UI.
   const runFanout = createFanoutRunner(runSubAgent);
 
+  // Auto-build the memory graph at the end of a completed chat. Set before the
+  // try so finally can read it even on early throws.
+  const doAtlasAutoBuild = config.atlasAutoBuild === true;
+  let chatStopped = null;
+
   try {
     const result = await runAgent({
       messages,
@@ -771,6 +791,7 @@ async function handleChat(req, res) {
       summarize,
       toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn }
     });
+    chatStopped = result.stopped;
 
     // Self-evolving skills, part 2: after a successful complex run, ask the
     // model once (tool-free) whether to crystallize the workflow into a SKILL.
@@ -799,6 +820,18 @@ async function handleChat(req, res) {
     res.end();
   } finally {
     cleanup();
+    // Fire-and-forget: don't block the SSE response or reuse ac.signal (which
+    // aborts on disconnect). Runs its own model call + atomic save off the
+    // event loop; any failure is swallowed so it never breaks the chat.
+    if (doAtlasAutoBuild && chatStopped === 'done' && incoming.length) {
+      const recent = incoming
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-40)
+        .map((m) => (m.role === 'user' ? '用户: ' : '助手: ') + (typeof m.content === 'string' ? m.content : ''))
+        .join('\n')
+        .trim();
+      if (recent) void buildAtlasFromText(recent, config).catch(() => {});
+    }
   }
 }
 

@@ -141,7 +141,16 @@ export function defaultConfig() {
     mcpAutoApproveReadonly: true,
     // Mirror conversations into ~/.agenite/sessions so they survive a browser
     // change or a cleared cache.
-    syncSessions: true
+    syncSessions: true,
+    // --- Atlas memory graph ---
+    // Inject the local knowledge graph (nodes + typed edges) into the system
+    // prompt so the agent "knows the map" and can reference known people /
+    // projects / relations. On by default; cheap (bounded text, read-only).
+    atlasInject: true,
+    // Silently extract entities/relations from the last stretch of a finished
+    // conversation into the graph (one extra model call per completion — like
+    // autoSkill). Off by default; you can also build manually from the panel.
+    atlasAutoBuild: false
   };
 }
 
@@ -177,6 +186,8 @@ export function normalizeConfig(input = {}) {
   cfg.toolAllowlist = Array.isArray(cfg.toolAllowlist)
     ? [...new Set(cfg.toolAllowlist.filter((s) => typeof s === 'string' && s))].slice(0, 200)
     : [];
+  cfg.atlasInject = cfg.atlasInject !== false;
+  cfg.atlasAutoBuild = !!cfg.atlasAutoBuild;
   return cfg;
 }
 

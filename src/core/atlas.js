@@ -218,6 +218,47 @@ export function applyExtraction(graph, ext) {
   return { added: added.length, linked: linked.length };
 }
 
+// Turn the graph into a compact, bounded text block suitable for injecting
+// into a system prompt — this is what makes the graph a *working* second
+// memory layer (vs a pretty-but-passive panel). Most-connected entities come
+// first; edges are only shown when both endpoints are in the visible set so
+// the summary stays coherent. Returns '' when the graph is empty.
+export function graphToContext(graph, { maxNodes = 140, maxEdges = 90, maxDesc = 80 } = {}) {
+  if (!graph || !graph.nodes) return '';
+  const all = Object.values(graph.nodes);
+  if (all.length === 0) return '';
+  const sorted = all.slice().sort((a, b) => (b.degree || 0) - (a.degree || 0));
+  const shown = sorted.slice(0, maxNodes);
+  const shownIds = new Set(shown.map((n) => n.id));
+  const nodeLines = shown.map((n) => {
+    const desc = n.description ? '：' + String(n.description).slice(0, maxDesc) : '';
+    return `- [${n.type || '?'}] ${n.label}${desc}`;
+  });
+  const edgesRaw = Array.isArray(graph.edges) ? graph.edges : [];
+  const edgeLines = edgesRaw
+    .filter((e) => shownIds.has(e.from) && shownIds.has(e.to))
+    .slice(0, maxEdges)
+    .map((e) => {
+      const a = graph.nodes[e.from];
+      const b = graph.nodes[e.to];
+      if (!a || !b) return null;
+      const rel = e.label ? `（${e.label}）` : '';
+      return `- ${a.label} —${e.type || 'relates_to'}→ ${b.label}${rel}`;
+    })
+    .filter(Boolean);
+  const parts = [
+    '记忆图谱上下文（来自本机 ~/.agenite/memory/atlas.json，跨会话保留；若回答涉及其中人物 / 项目 / 概念 / 关系，可直接引用，不必再次追问）：'
+  ];
+  parts.push(...nodeLines);
+  if (edgeLines.length) {
+    parts.push('关系（部分）：');
+    parts.push(...edgeLines);
+  }
+  const truncated = all.length > shown.length ? `，仅展示其中最相关的 ${shown.length} 个` : '';
+  parts.push(`（共 ${all.length} 个实体，${edgesRaw.length} 条关系${truncated}）`);
+  return parts.join('\n');
+}
+
 // --- persistence (injected directory) ---
 
 export async function loadAtlas(dir = ATLAS_DIR) {

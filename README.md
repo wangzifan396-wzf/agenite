@@ -39,6 +39,10 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   - 🗺️ **Visual graph panel**: the sidebar "记忆图谱" (memory graph) opens a force-directed canvas — color-coded by entity type, wheel-zoom, drag nodes / pan the canvas, one-click fit. Click a node for details; the search box highlights matching entities and edges in real time.
   - ⚡ **Build from conversation**: feed the recent stretch of the current chat to the model and it auto-extracts entities and relations into the graph (friendly message instead of an error when no key is set); you can also add nodes / edges manually from the side form.
   - 🎨 **Studio dark visual language (default)**: a deeper ambient radial background + frosted-glass panels + a single accent (warm orange `#ff7a59` + auxiliary blue `#6ea8ff`), matching the "spatial, visual, visible reasoning" trend of BrainFlow / tldraw; the light theme gets the same upgrade. `<html>` ships dark by default to avoid a first-paint flash.
+- **Atlas auto-memory + graph-driven reasoning (v0.15.0)**: upgrades v0.14.0's "manual graph" into a **genuinely-used second memory layer** — left manual, the model almost never draws the graph on its own, so it stays a showpiece. Includes:
+  - 🔁 **Auto-build on conversation end**: when a chat finishes (toggle "对话结束自动建图", off by default, same safe policy as auto-skill), it silently feeds the last 40 user/assistant messages to the model to extract entities/relations into the graph — no manual clicking; any failure is swallowed so it never interrupts the chat.
+  - 🧭 **Graph-driven reasoning**: before every agent run (toggle "记忆图谱注入推理", on by default), the graph is compressed into a compact text block (nodes ranked by degree, truncated to bound tokens, edges shown only when both endpoints are visible) and injected into the system prompt — the model now "has the map in its head" and can reference "that project / person you mentioned before" instead of re-asking.
+  - 🔌 Reuses the existing `atlas` engine, the `/api/atlas/extract` extraction core, and the memory-injection pattern — **zero architectural debt**; manual "build from conversation" and auto-build share one extraction function (dedup-merged by `type+label`).
 - **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 26 built-in tools (plus whatever MCP servers you connect):
   - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `codebase_search` (semantic search the project), `memory_recall`, `memory_save`, `memory_log`, `atlas` (memory graph), `plan`, `delegate`, `fanout`, `save_skill`, `skill_recall`
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `run_code` (local code interpreter), `apply_patch` (multi-file unified diff)
@@ -73,7 +77,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (228, via node:test)
+npm test       # run core unit tests (232, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

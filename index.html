@@ -345,6 +345,14 @@
             <span><b>技能自动沉淀</b><em>复杂任务跑完后，让 agent 自动判断并沉淀成可复用技能（多一次反思调用，可在技能库查看）</em></span>
             <input id="set-autoSkill" type="checkbox" />
           </label>
+          <label class="switch-row">
+            <span><b>记忆图谱注入推理</b><em>每次对话把本地知识图谱压成摘要注入系统提示词，让 agent 主动引用已知的人物 / 项目 / 关系（关闭则图谱只作可视化，不参与推理）</em></span>
+            <input id="set-atlasInject" type="checkbox" checked />
+          </label>
+          <label class="switch-row">
+            <span><b>对话结束自动建图</b><em>对话完成后静默抽取实体 / 关系灌入记忆图谱（多一次模型调用；也可在「记忆图谱」面板手动「从对话构建」）</em></span>
+            <input id="set-atlasAutoBuild" type="checkbox" />
+          </label>
           <div class="field">
             <span class="field-title">角色人格<em class="muted small">切换 agent 的说话与思维方式（默认 / 严厉审查员 / 温柔写手 / 研究员 / 自定义）</em></span>
             <select id="set-persona"></select>

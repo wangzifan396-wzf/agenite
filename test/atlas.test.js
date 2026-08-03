@@ -16,7 +16,8 @@ import {
   applyExtraction,
   loadAtlas,
   saveAtlas,
-  nodeId
+  nodeId,
+  graphToContext
 } from '../src/core/atlas.js';
 
 function tmpDir() {
@@ -172,4 +173,51 @@ test('saveAtlas + loadAtlas round-trips atomically', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('graphToContext returns empty string for an empty graph', () => {
+  assert.equal(graphToContext(emptyGraph()), '');
+  assert.equal(graphToContext(null), '');
+});
+
+test('graphToContext lists nodes with type labels and a summary line', () => {
+  const g = emptyGraph();
+  addNode(g, { type: 'project', label: 'Agenite', description: '本地智能体' });
+  addNode(g, { type: 'person', label: '张三', description: '贡献者' });
+  const ctx = graphToContext(g);
+  assert.match(ctx, /\[project\] Agenite/);
+  assert.match(ctx, /\[person\] 张三/);
+  assert.match(ctx, /共 2 个实体/);
+});
+
+test('graphToContext sorts by degree and truncates to maxNodes', () => {
+  const g = emptyGraph();
+  // hub: linked to many leaves (degree 5); isolated nodes (degree 0)
+  addNode(g, { type: 'person', label: 'hub' });
+  for (let i = 0; i < 5; i++) {
+    addNode(g, { type: 'concept', label: 'leaf' + i });
+    linkNodes(g, { from: 'hub', to: 'leaf' + i, type: 'related_to' });
+  }
+  for (let i = 0; i < 10; i++) addNode(g, { type: 'concept', label: 'iso' + i }); // degree 0
+  // total 16 nodes; maxNodes 6 keeps the hub + its 5 leaves, drops all iso*
+  const ctx = graphToContext(g, { maxNodes: 6, maxEdges: 5 });
+  // hub and its leaves are present, isolated nodes are dropped
+  assert.match(ctx, /\[person\] hub/);
+  assert.match(ctx, /\[concept\] leaf0/);
+  assert.ok(!ctx.includes('iso0'));
+  // summary notes truncation (16 > 6)
+  assert.match(ctx, /仅展示其中最相关的 6 个/);
+});
+
+test('graphToContext only shows edges whose endpoints are visible', () => {
+  const g = emptyGraph();
+  addNode(g, { type: 'project', label: 'Agenite' });
+  addNode(g, { type: 'project', label: 'OpenHands' });
+  addNode(g, { type: 'concept', label: 'hidden' });
+  linkNodes(g, { from: 'Agenite', to: 'OpenHands', type: 'competes_with' });
+  linkNodes(g, { from: 'Agenite', to: 'hidden', type: 'relates_to' });
+  const ctx = graphToContext(g, { maxNodes: 2, maxEdges: 10 });
+  // only the visible edge (Agenite -> OpenHands) should be rendered
+  assert.match(ctx, /Agenite —competes_with→ OpenHands/);
+  assert.ok(!ctx.includes('hidden'));
 });

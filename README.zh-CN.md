@@ -39,6 +39,10 @@
   - 🗺️ **可视化图谱面板**：侧栏「记忆图谱」打开一个力导向画布——按实体类型配色、滚轮缩放、拖拽节点 / 平移画布、一键适配视图；点节点看详情，搜素框实时高亮匹配的实体与关系。
   - ⚡ **从对话构建**：把当前对话最近一段丢给模型，自动抽取实体与关系并灌进图谱（未配置 key 时给出友好提示而非报错）；也支持手动在侧栏表单里加节点 / 连边。
   - 🎨 **Studio 暗色视觉语言（默认）**：更深的环境光径向背景 + 毛玻璃面板 + 单点点缀色（暖橙 `#ff7a59` + 辅助蓝 `#6ea8ff`），对标 BrainFlow / tldraw 的"空间化、可视化、visible reasoning"趋势；明色主题同步升级。`<html>` 默认暗色以避免首屏闪烁。
+- **Atlas 自动记忆 + 图谱驱动推理（v0.15.0）**：把 v0.14.0 的"手动图谱"升级成**真正在用的第二记忆层**——否则模型几乎不会主动去画图谱，图谱就成了花瓶。包含：
+  - 🔁 **对话结束自动建图**：对话完成后（设置「对话结束自动建图」开启，默认关，与"技能自动沉淀"同款安全策略）静默把最近 40 条用户/助手消息交给模型抽取实体/关系灌入图谱，不用你手动点；任何失败都静默跳过，绝不打断对话。
+  - 🧭 **图谱注入推理**：每次 Agent 跑之前（设置「记忆图谱注入推理」默认开），把图谱压成一段紧凑文本（节点按连接度排序、截断上限保护 token、只展示两端都可见的关系）注入系统提示词——模型从此"脑子里有这张地图"，能主动引用"你之前说的那个项目 / 那个人"，不必反复追问。
+  - 🔌 复用已有 `atlas` 引擎、`/api/atlas/extract` 抽取核心与记忆注入范式，**零架构债**；手动「从对话构建」与自动建图共用同一抽取函数（按 `type+label` 去重合并）。
 - **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **26 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
@@ -82,7 +86,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（228 个，node:test）
+npm test       # 跑核心逻辑单元测试（232 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

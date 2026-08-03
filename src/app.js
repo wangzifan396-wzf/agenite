@@ -1094,6 +1094,8 @@ function fillSettings() {
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
   $('set-memoryEnabled').checked = config.memoryEnabled !== false;
   $('set-autoSkill').checked = config.autoSkill === true;
+  $('set-atlasInject').checked = config.atlasInject !== false;
+  $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-autoCompact').checked = config.autoCompact !== false;
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
@@ -1254,6 +1256,8 @@ function saveSettings() {
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
     memoryEnabled: $('set-memoryEnabled').checked,
     autoSkill: $('set-autoSkill').checked,
+    atlasInject: $('set-atlasInject').checked,
+    atlasAutoBuild: $('set-atlasAutoBuild').checked,
     persona: $('set-persona').value || 'default',
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,

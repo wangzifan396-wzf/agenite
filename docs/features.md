@@ -348,9 +348,32 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 
 `styles.css` 的 `[data-theme="dark"]` 升级为 studio 调色板：更深的环境光径向背景（`body::before` fixed 层）、毛玻璃面板 `--glass: rgba(21,25,34,.62)`、单点点缀色 `--accent:#ff7a59` 与辅助蓝 `--accent-2:#6ea8ff`、发光阴影 `--glow` / `--glow-2`；明色主题同步补齐 `--accent-2` / `--glow` / `--glass`。`index.html` 的 `<html data-theme="dark">` 默认暗色，`getInitialTheme()` 仍尊重 localStorage 记忆与切换，避免首屏闪烁。
 
+### 8.9.8 Atlas 自动记忆 + 图谱驱动推理（v0.15.0）
+
+把 v0.14.0 的"手动图谱"升级成**真正在用的第二记忆层**。痛点：图谱是被动工具，模型几乎不会主动调 `atlas`，导致图谱基本靠手动点、等于花瓶。本版让图谱"活"起来且"被用上"，直接对标 Graphiti / MemGraph 的"持续记忆"卖点，但本地零依赖还能可视化。
+
+#### 8.9.8.1 `graphToContext`（注入文本生成器）
+
+`atlas.js` 新增纯函数 `graphToContext(graph, { maxNodes=140, maxEdges=90, maxDesc=80 })`：
+- 空图返回 `''`（不污染系统提示词）；
+- 节点按 `degree` 降序，连接度高的实体优先出现（最相关的先被模型看到）；
+- 边只在「两端都在可见节点集」时才渲染，保证描述的连贯；
+- 截断上限保护 token；末尾附「共 N 个实体、M 条关系（仅展示最相关的 K 个）」摘要；
+- 纯函数、可单测（空图 / 列表 / 按 degree 排序 / 截断 / 边端点可见性 各有断言）。
+
+#### 8.9.8.2 图谱注入推理
+
+`server.js` 的 `buildSystemPrompt` 新增 `atlas` 段：当 `config.atlasInject !== false`（默认开）时，`handleChat` 在拼系统提示词前 `loadAtlas` → `graphToContext` 注入，模型从此"脑子里有这张地图"。与 `memory_*` 文件式记忆互补：MEMORY.md 是策展式散文，图谱是结构化关系，且可可视化。
+
+#### 8.9.8.3 对话结束自动建图
+
+- 抽取逻辑从 `handleAtlasExtract` 抽成可复用 `buildAtlasFromText(text, config)`（共享 `ATLAS_EXTRACT_SYSTEM` 提示词），手动「从对话构建」与自动建图共用，按 `type+label` 去重合并；
+- `handleChat` 在 `finally` 里、对话 `stopped==='done'` 且开启 `config.atlasAutoBuild`（默认关）时，**fire-and-forget** 抽取最近 40 条用户/助手消息灌图：独立发起模型调用（不复用 `ac.signal`，避免连接断开时 abort），`res.end()` 后才在事件循环上跑，`catch` 静默吞错，绝不打断聊天；
+- `config.js` 新增 `atlasInject`(默认 true) 与 `atlasAutoBuild`(默认 false)，`normalizeConfig` 做布尔归一；前端设置面板加两个开关（记忆图谱注入推理 / 对话结束自动建图），与「技能自动沉淀」同款安全策略。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**228 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**232 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。
