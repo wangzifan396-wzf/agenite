@@ -19,7 +19,7 @@ import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } from './src/core/sessions.js';
 import { defaultMemoryDir, injectMemory, injectSkills, listSkills } from './src/core/memory.js';
-import { createSubAgentRunner } from './src/core/subagent.js';
+import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -339,7 +339,8 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
     `Your workspace (the folder you may read, write and run commands in) is: ${workspace}`,
     'When the user asks you to do something on their machine, use the tools instead of only describing steps.',
     'Prefer relative paths inside the workspace. Take small, verifiable steps and report what you did concisely.',
-    'When you write code or files, keep changes minimal and explain them briefly afterwards.'
+    'When you write code or files, keep changes minimal and explain them briefly afterwards.',
+    'When a request decomposes into several INDEPENDENT sub-tasks (no shared intermediate state), prefer the `fanout` tool to run them in parallel at once — it is much faster than calling `delegate` repeatedly. Use `delegate` for a single focused side task, or when sub-tasks depend on each other.'
   ];
   if (planning) {
     base.push(
@@ -545,6 +546,11 @@ async function handleChat(req, res) {
     platform: process.platform
   });
 
+  // Fan-out scheduler: runs several independent sub-agents concurrently and
+  // merges their summaries. Built on top of runSubAgent so every child still
+  // streams its own `subagent` SSE (with a distinct subId) for the UI.
+  const runFanout = createFanoutRunner(runSubAgent);
+
   try {
     const result = await runAgent({
       messages,
@@ -554,7 +560,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, embed: embedFn }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn }
     });
     sse('end', { stopped: result.stopped, turns: result.turns, historyTokens: totalTokens(messages), budget });
     res.end();

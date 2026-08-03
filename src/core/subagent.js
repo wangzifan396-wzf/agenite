@@ -125,3 +125,65 @@ export function createSubAgentRunner({
     };
   };
 }
+
+// Fan-out: decompose one big request into N INDEPENDENT sub-tasks and run them
+// concurrently in their own isolated loops, then merge every child's summary
+// into a single result. This is the multi-agent orchestration primitive — the
+// parent gets all results back at once instead of waiting for each `delegate`
+// call serially (research angles, file batches, parallel investigations…).
+//
+// Isolation guarantees carry over from `delegate`:
+//   - every child runs in a fresh context (no shared intermediate state),
+//   - `delegate` is stripped inside each child (no nested fan-out),
+//   - a single child failing never aborts the others (failure isolation).
+//
+// Each child still streams its steps as `subagent` SSE tagged with its own
+// subId, so the UI renders N live cards at the same time. `runFanout` is a
+// thin scheduler built on top of an existing `runSubAgent` runner.
+export function createFanoutRunner(runSubAgent, { maxTasks = 8 } = {}) {
+  if (typeof runSubAgent !== 'function') {
+    throw new Error('createFanoutRunner 需要一个 runSubAgent 函数');
+  }
+  return async function runFanout(args = {}, opts = {}) {
+    const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+    if (!tasks.length) return { ok: false, error: 'fanout 需要 tasks 数组' };
+    const batch = tasks.slice(0, maxTasks);
+
+    // Concurrency is real: Promise.all lets every child loop progress on its
+    // own microtask chain. They share no mutable state, so this is safe.
+    const results = await Promise.all(
+      batch.map((t, i) => {
+        const goal = t && String(t.goal || '').trim();
+        if (!goal) {
+          return Promise.resolve({ ok: false, index: i, error: `task[${i}] 缺少 goal` });
+        }
+        return runSubAgent({ ...t, goal }, opts)
+          .then((r) => ({ ...r, index: i }))
+          .catch((e) => ({
+            ok: false,
+            index: i,
+            error: String(e && e.message ? e.message : e)
+          }));
+      })
+    );
+
+    const parts = results.map((r, i) => {
+      const meta = batch[i] || {};
+      const tag = `### 子任务 ${i + 1}${meta.persona ? ' · ' + meta.persona : ''}`;
+      const body = r.ok ? r.content : '（失败：' + (r.error || '未知错误') + '）';
+      return `${tag}\n${body}`;
+    });
+    const succeeded = results.filter((r) => r.ok).length;
+    return {
+      ok: true,
+      content:
+        `并行完成了 ${results.length} 个独立子任务（${succeeded} 成功）：\n\n` +
+        parts.join('\n\n'),
+      fanout: {
+        total: results.length,
+        succeeded,
+        failed: results.length - succeeded
+      }
+    };
+  };
+}

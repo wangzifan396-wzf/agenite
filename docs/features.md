@@ -19,7 +19,7 @@
 
 ## 2. 工具说明
 
-内置 14 个工具，分「安全（默认开启）」与「高危（需开启高级工具 + 审批）」两类。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
+内置 23 个工具，分「安全（默认开启）」与「高危（需开启高级工具 + 审批）」两类（下表列出基础文件 / 命令 / 搜索类，另外还有联网搜索、记忆、计划、委派、并行委派、技能共 9 个工作流类工具，见第 8 节）。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
 
 | 工具 | 类型 | 说明 |
 | --- | --- | --- |
@@ -234,9 +234,21 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - 每次对话开始，`injectSkills()` 把技能**目录**（名称 + 描述，不含正文）注入系统提示词；匹配场景时 Agent 再用 `skill_recall` 读取完整步骤照做；
 - 所有技能都是纯本地文件（`~/.agenite/memory/skills/`），你能读、能改、能删；设置里实时显示已沉淀数量（`GET /api/skills`）。
 
+## 8.8 并行多智能体委派 `fanout`（v0.9.0）
+
+把 v0.8.0 的串行 `delegate` 升级为**一次性并行派发多个隔离子代理**，是 Agenite 从「单智能体」走向「多智能体编排」的质变一跳（对标 Claude Code 的 subagents / OpenAI 的 swarm 思路）：
+
+- 当一条请求能拆成若干**互不依赖**的子任务（分头调研 A/B/C 三个角度、并行处理多个文件批次、同时排查若干独立问题）时，主 Agent 用 `fanout` 一次传入 `tasks` 数组（每项与 `delegate` 同构：`goal` / `persona` / `tool_scope` / `max_turns`），服务端用 `Promise.all` **并发**跑 N 个独立上下文的子循环，最后把每个子代理的摘要聚合成一条结果一次性回传。
+- **真并发**：子代理之间不共享可变状态，调度器让它们在同一事件循环批次里并行推进——3 个各耗时 40ms 的子任务，总耗时约 40ms 而非 120ms（测试里有专门的重叠时间线断言）。
+- **失败隔离**：单个子代理抛错不会中断其他子代理，聚合结果里会明确标注「成功 N / 失败 M」并把失败原因列在对应子任务下，而非整体崩溃。
+- **上限保护**：单次最多 8 个并行子代理，超出部分自动截断，避免失控。
+- 实现位于 `src/core/subagent.js` 的 `createFanoutRunner(runSubAgent)` 工厂（薄调度层，建立在 `createSubAgentRunner` 之上），纯函数、可用假 runner 单测（并发 / 聚合 / 失败隔离 / 上限各有断言）。每个子代理仍通过 `subagent` SSE 事件（各自独立的 `subId`）流式回传，前端 `handleSubAgentEvent` 按 `subId` 区分，**同时渲染多张并行卡片**——无需任何前端改动即可复用。
+
+> 何时用哪个：`fanout` 处理**独立**子任务（一次性并行、最快）；`delegate` 处理**单个**聚焦子任务，或子任务之间有**依赖**（后一个需要前一个的输出）时必须串行。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `util`）无 DOM，**170 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 技能各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `util`）无 DOM，**177 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 技能各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

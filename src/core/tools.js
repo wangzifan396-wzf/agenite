@@ -262,6 +262,31 @@ export const TOOL_DEFS = [
     danger: false
   },
   {
+    name: 'fanout',
+    description: "并行派出多个隔离子代理，同时处理一批相互独立、彼此无依赖的子任务，最后一次性聚合所有子代理的摘要返回。当一条请求能拆成多个角度（如分别调研 A/B/C、分别处理多个文件批次、并行排查若干独立问题）时，用 fanout 比反复串行调用 delegate 快得多。每个子任务的参数与 delegate 完全相同（goal / persona / tool_scope / max_turns）。最多 8 个。注意：子任务之间不能有依赖（某个子任务需要另一个的输出），有依赖时请改用串行 delegate。",
+    parameters: {
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              goal: { type: 'string', description: '该子任务的完整、自包含描述（子代理看不到主对话，必须包含全部上下文）。' },
+              persona: { type: 'string', description: '可选，专业方向，如 "researcher"、"code reviewer"、"debugger"。' },
+              tool_scope: { type: 'array', items: { type: 'string' }, description: '可选，限定该子代理可用工具（最小权限）。' },
+              max_turns: { type: 'number', description: '可选，该子代理步数上限（默认 10）。' }
+            },
+            required: ['goal']
+          },
+          description: '要并行执行的子任务列表，每个元素是一个独立的子代理目标。'
+        }
+      },
+      required: ['tasks']
+    },
+    danger: false
+  },
+  {
     name: 'save_skill',
     description: 'Crystallize a successful workflow into a reusable local skill file (SKILL.md) so future sessions can reuse it — the agent "gets smarter" over time. Call this after you have nailed a non-trivial, repeatable procedure. The skill catalog is auto-injected into future system prompts; the body is fetched on demand via skill_recall.',
     parameters: {
@@ -407,6 +432,11 @@ async function dispatch(name, args, opts) {
           return { ok: false, error: '子代理执行器未配置（需要服务端 runSubAgent）。' };
         }
         return opts.runSubAgent(args, opts);
+      case 'fanout':
+        if (typeof opts.runFanout !== 'function') {
+          return { ok: false, error: '并行委派执行器未配置（需要服务端 runFanout）。' };
+        }
+        return opts.runFanout(args, opts);
       case 'save_skill':
         return skillSave(args, opts);
       case 'skill_recall':
