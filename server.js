@@ -22,6 +22,9 @@ import { defaultMemoryDir, injectMemory, injectSkills, listSkills, savePersona, 
 import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
 import { autoSaveSkill } from './src/core/autoskill.js';
 import { createGoal, listGoals, getGoal, stopGoal, deleteGoal, initGoals } from './src/core/goals.js';
+import {
+  loadAtlas, saveAtlas, addNode, linkNodes, removeNode, removeEdge, atlasStats, parseAtlasExtraction, applyExtraction
+} from './src/core/atlas.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -121,6 +124,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.startsWith('/api/goals/') && url.endsWith('/stop')) return handleGoalStop(req, res, url);
   if (req.method === 'DELETE' && url.startsWith('/api/goals/')) return handleGoalDelete(req, res, url);
   if (req.method === 'GET' && url.startsWith('/api/goals/')) return handleGoalGet(req, res, url);
+
+  // ---- Agenite Atlas: local-first memory graph ----
+  if (req.method === 'GET' && url === '/api/atlas') return handleAtlasGet(req, res);
+  if (req.method === 'POST' && url === '/api/atlas') return handleAtlasPost(req, res);
+  if (req.method === 'POST' && url === '/api/atlas/extract') return handleAtlasExtract(req, res);
+  if (req.method === 'DELETE' && url === '/api/atlas') return handleAtlasReset(req, res);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -393,6 +402,78 @@ async function handleGoalDelete(req, res, url) {
   const r = await deleteGoal(id);
   if (!r.ok) return sendJson(res, 404, { error: r.error });
   return sendJson(res, 200, r);
+}
+
+// ---------- Agenite Atlas handlers ----------
+
+async function handleAtlasGet(req, res) {
+  const g = await loadAtlas(MEMORY_DIR);
+  return sendJson(res, 200, { ok: true, graph: g, stats: atlasStats(g) });
+}
+
+async function handleAtlasPost(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return sendJson(res, 400, { ok: false, error: '无效的 JSON' }); }
+  const g = await loadAtlas(MEMORY_DIR);
+  const a = body.action;
+  let r;
+  if (a === 'add') r = addNode(g, { type: body.type, label: body.label, description: body.description, provenance: body.provenance });
+  else if (a === 'link') r = linkNodes(g, { from: body.from, to: body.to, type: body.edge_type, label: body.edge_label });
+  else if (a === 'note') {
+    if (!body.text) return sendJson(res, 400, { ok: false, error: 'note 需要提供 text' });
+    const n = addNode(g, { type: body.type || 'fact', label: String(body.text).slice(0, 60), description: body.text });
+    if (body.from) linkNodes(g, { from: body.from, to: n.node.id, type: body.edge_type || 'related_to' });
+    r = { ok: true, node: n.node };
+  } else if (a === 'remove_node') r = removeNode(g, body.id || body.label);
+  else if (a === 'remove_edge') r = removeEdge(g, body.id);
+  else return sendJson(res, 400, { ok: false, error: '未知 action' });
+  if (!r.ok) return sendJson(res, 400, { ok: false, error: r.error });
+  await saveAtlas(g, MEMORY_DIR);
+  return sendJson(res, 200, { ok: true, stats: atlasStats(g), node: r.node, edge: r.edge });
+}
+
+async function handleAtlasExtract(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return sendJson(res, 400, { ok: false, error: '无效的 JSON' }); }
+  const text = String(body.text || '').trim();
+  if (!text) return sendJson(res, 400, { ok: false, error: '请提供要抽取的文本' });
+  const config = normalizeConfig({ ...body.config, workspace: WORKSPACE });
+  const validation = validateConfig(config);
+  if (!validation.ok || !config.apiKey || !config.model) {
+    return sendJson(res, 400, { ok: false, error: '未配置模型或 API Key，无法自动抽取（可手动添加节点）。' });
+  }
+  const messages = [
+    {
+      role: 'system',
+      content:
+        '你是一个知识抽取器。阅读用户提供的对话/资料，抽取其中的实体与关系，只输出一个 JSON 对象（不要任何解释、不要 markdown 代码块），形如：\n' +
+        '{"nodes":[{"type":"person|project|concept|file|tool|preference|fact|event","label":"名称","description":"一句话说明"}],' +
+        '"edges":[{"from":"源实体名称","to":"目标实体名称","type":"关系类型(英文，如 competes_with/part_of/uses/maintained_by/located_in/related_to)","label":"中文说明"}]}\n' +
+        '只抽取确凿出现的信息；node 的 label 要简洁唯一；edge 的 from/to 必须是前面 nodes 里出现过的 label。'
+    },
+    { role: 'user', content: text }
+  ];
+  let content = '';
+  try {
+    const out = await callModelStream({ config, messages, onDelta: () => {} });
+    content = out.content || '';
+  } catch (e) {
+    return sendJson(res, 502, { ok: false, error: '模型调用失败：' + (e.message || e) });
+  }
+  const ext = parseAtlasExtraction(content);
+  const g = await loadAtlas(MEMORY_DIR);
+  const applied = applyExtraction(g, ext);
+  await saveAtlas(g, MEMORY_DIR);
+  return sendJson(res, 200, { ok: true, extracted: ext, applied, stats: atlasStats(g) });
+}
+
+async function handleAtlasReset(req, res) {
+  const g = await loadAtlas(MEMORY_DIR);
+  // keep meta timestamps; wipe content
+  g.nodes = {};
+  g.edges = [];
+  await saveAtlas(g, MEMORY_DIR);
+  return sendJson(res, 200, { ok: true, stats: atlasStats(g) });
 }
 
 // Embedding via a local Ollama model — powers fully-on-device semantic memory.

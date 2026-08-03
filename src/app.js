@@ -151,7 +151,8 @@ const MOON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke
 function getInitialTheme() {
   const t = localStorage.getItem(LS.theme);
   if (t) return t;
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  // Agenite Atlas ships with a studio dark look as the signature default.
+  return 'dark';
 }
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -1777,10 +1778,368 @@ async function deleteGoal(id) {
   refreshGoals();
 }
 
+// ---------- Agenite Atlas: the living memory graph ----------
+
+const ATLAS_COLORS = {
+  person: '#ff7a59', project: '#6ea8ff', concept: '#c879ff', file: '#46c8a0',
+  tool: '#f5c451', preference: '#ff8fb3', fact: '#7fd1ff', event: '#9aa7ff'
+};
+const ATLAS_TYPE_LABELS = {
+  person: '人物', project: '项目', concept: '概念', file: '文件',
+  tool: '工具', preference: '偏好', fact: '事实', event: '事件'
+};
+const atlasState = { graph: null, pos: {}, k: 1, tx: 0, ty: 0, drag: null, pan: null, sel: null };
+
+function openAtlas() {
+  $('atlas-modal').classList.remove('hidden');
+  atlasInitEvents();
+  refreshAtlas();
+}
+function closeAtlas() {
+  $('atlas-modal').classList.add('hidden');
+}
+
+async function refreshAtlas() {
+  try {
+    const r = await fetch('/api/atlas').then((x) => x.json());
+    atlasState.graph = r.graph || { nodes: {}, edges: [] };
+    renderAtlas();
+  } catch (e) {
+    $('atlas-stats').textContent = '加载失败：' + e.message;
+  }
+}
+
+// Lightweight force-directed layout (synchronous; fine for personal graphs).
+function atlasLayout(graph) {
+  const ids = Object.keys(graph.nodes);
+  const N = ids.length;
+  const pos = {};
+  const cx = 0, cy = 0;
+  ids.forEach((id, i) => {
+    const a = (i / Math.max(1, N)) * Math.PI * 2;
+    pos[id] = { x: Math.cos(a) * 230 + (Math.random() - 0.5) * 30, y: Math.sin(a) * 230 + (Math.random() - 0.5) * 30, vx: 0, vy: 0 };
+  });
+  if (!N) return pos;
+  const iters = N > 140 ? 120 : 260;
+  const W = 130;
+  for (let it = 0; it < iters; it++) {
+    for (let i = 0; i < N; i++) {
+      const pa = pos[ids[i]];
+      for (let j = i + 1; j < N; j++) {
+        const pb = pos[ids[j]];
+        let dx = pa.x - pb.x, dy = pa.y - pb.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 0.01) { d2 = 0.01; dx = Math.random() - 0.5; dy = Math.random() - 0.5; }
+        const d = Math.sqrt(d2);
+        const f = 2600 / d2;
+        const fx = (dx / d) * f, fy = (dy / d) * f;
+        pa.vx += fx; pa.vy += fy; pb.vx -= fx; pb.vy -= fy;
+      }
+    }
+    for (const e of graph.edges) {
+      const pa = pos[e.from], pb = pos[e.to];
+      if (!pa || !pb) continue;
+      const dx = pb.x - pa.x, dy = pb.y - pa.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = (d - W) * 0.045;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      pa.vx += fx; pa.vy += fy; pb.vx -= fx; pb.vy -= fy;
+    }
+    for (const id of ids) {
+      const p = pos[id];
+      p.vx = p.vx * 0.86 - p.x * 0.0018;
+      p.vy = p.vy * 0.86 - p.y * 0.0018;
+      p.x += p.vx; p.y += p.vy;
+    }
+  }
+  return pos;
+}
+
+function atlasEdgeColor(e) {
+  return 'var(--border-strong)';
+}
+
+function renderAtlas() {
+  const g = atlasState.graph || { nodes: {}, edges: [] };
+  const ids = Object.keys(g.nodes);
+  const stats = $('atlas-stats');
+  const empty = $('atlas-empty');
+  if (!ids.length) {
+    empty.classList.remove('hidden');
+    stats.textContent = '';
+  } else {
+    empty.classList.add('hidden');
+    const types = {};
+    ids.forEach((id) => { const t = g.nodes[id].type; types[t] = (types[t] || 0) + 1; });
+    stats.textContent = `${ids.length} 节点 · ${g.edges.length} 关系`;
+  }
+  // (re)layout only when graph identity changed — preserve positions on rescale
+  const sig = ids.length + ':' + g.edges.length + ':' + ids.join(',').length;
+  if (atlasState.sig !== sig || !atlasState.pos || Object.keys(atlasState.pos).length !== ids.length) {
+    atlasState.pos = atlasLayout(g);
+    atlasState.sig = sig;
+  }
+  const pos = atlasState.pos;
+  const svg = $('atlas-svg');
+  const w = svg.clientWidth || 800, h = svg.clientHeight || 520;
+
+  let edgeSvg = '';
+  for (const e of g.edges) {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) continue;
+    const color = ATLAS_COLORS[g.nodes[e.from] && g.nodes[e.from].type] || '#9aa3b2';
+    edgeSvg += `<line class="atlas-edge" data-edge="${e.id}" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${color}"></line>`;
+    if (e.label) {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      edgeSvg += `<text class="atlas-edge-label" x="${mx.toFixed(1)}" y="${(my - 3).toFixed(1)}" text-anchor="middle">${escapeHtml(e.label)}</text>`;
+    }
+  }
+  let nodeSvg = '';
+  for (const id of ids) {
+    const n = g.nodes[id];
+    const p = pos[id];
+    if (!p) continue;
+    const r = 9 + Math.min(16, (n.degree || 0) * 2.4);
+    const color = ATLAS_COLORS[n.type] || '#9aa3b2';
+    const label = n.label.length > 14 ? n.label.slice(0, 13) + '…' : n.label;
+    nodeSvg += `<g class="atlas-node${atlasState.sel === id ? ' sel' : ''}" data-node="${id}" transform="translate(${p.x.toFixed(1)},${p.y.toFixed(1)})">
+      <circle r="${r.toFixed(1)}" fill="${color}" fill-opacity="0.18" stroke="${color}"></circle>
+      <circle r="3.4" class="dot-mark" fill="${color}"></circle>
+      <text x="0" y="${(r + 13).toFixed(1)}" text-anchor="middle">${escapeHtml(label)}</text>
+    </g>`;
+  }
+  svg.innerHTML = `<g id="atlas-g">${edgeSvg}${nodeSvg}</g>`;
+  // center the view on first render
+  if (atlasState.firstRender !== sig) {
+    atlasFit();
+    atlasState.firstRender = sig;
+  } else {
+    atlasApplyTransform();
+  }
+  atlasRenderLegend();
+  atlasApplySearch();
+}
+
+function atlasApplyTransform() {
+  const g = $('atlas-svg').querySelector('#atlas-g');
+  if (g) g.setAttribute('transform', `translate(${atlasState.tx.toFixed(1)},${atlasState.ty.toFixed(1)}) scale(${atlasState.k.toFixed(3)})`);
+}
+
+function atlasFit() {
+  const g = atlasState.graph || { nodes: {} };
+  const ids = Object.keys(g.nodes);
+  const svg = $('atlas-svg');
+  const w = svg.clientWidth || 800, h = svg.clientHeight || 520;
+  if (!ids.length) { atlasState.k = 1; atlasState.tx = w / 2; atlasState.ty = h / 2; atlasApplyTransform(); return; }
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const id of ids) { const p = atlasState.pos[id]; if (!p) continue; minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  const gw = Math.max(1, maxX - minX), gh = Math.max(1, maxY - minY);
+  const pad = 70;
+  const k = Math.min(2, Math.max(0.3, Math.min((w - pad * 2) / gw, (h - pad * 2) / gh)));
+  atlasState.k = k;
+  atlasState.tx = w / 2 - ((minX + maxX) / 2) * k;
+  atlasState.ty = h / 2 - ((minY + maxY) / 2) * k;
+  atlasApplyTransform();
+}
+
+function atlasRenderLegend() {
+  const box = $('atlas-legend');
+  box.innerHTML = Object.keys(ATLAS_TYPE_LABELS).map((t) =>
+    `<div class="lg-item"><span class="lg-dot" style="background:${ATLAS_COLORS[t]};color:${ATLAS_COLORS[t]}"></span>${t} · ${ATLAS_TYPE_LABELS[t]}</div>`
+  ).join('');
+}
+
+function atlasApplySearch() {
+  const q = ($('atlas-search').value || '').trim().toLowerCase();
+  const g = atlasState.graph || { nodes: {}, edges: [] };
+  const svg = $('atlas-svg');
+  if (!q) {
+    svg.querySelectorAll('.atlas-node').forEach((n) => n.classList.remove('dim'));
+    svg.querySelectorAll('.atlas-edge').forEach((n) => n.classList.remove('dim'));
+    return;
+  }
+  const matches = new Set();
+  for (const id of Object.keys(g.nodes)) {
+    const n = g.nodes[id];
+    if ((n.label + ' ' + (n.description || '') + ' ' + n.type).toLowerCase().includes(q)) matches.add(id);
+  }
+  svg.querySelectorAll('.atlas-node').forEach((el) => {
+    el.classList.toggle('dim', !matches.has(el.getAttribute('data-node')));
+  });
+  svg.querySelectorAll('.atlas-edge').forEach((el) => {
+    const e = g.edges.find((x) => x.id === el.getAttribute('data-edge'));
+    const hit = e && (matches.has(e.from) || matches.has(e.to));
+    el.classList.toggle('dim', !hit);
+  });
+}
+
+function atlasShowDetail(id) {
+  const g = atlasState.graph;
+  const n = g.nodes[id];
+  if (!n) return;
+  atlasState.sel = id;
+  const panel = $('atlas-detail');
+  const rels = g.edges.filter((e) => e.from === id || e.to === id).map((e) => {
+    const other = e.from === id ? e.to : e.from;
+    const name = g.nodes[other] ? g.nodes[other].label : other;
+    const dir = e.from === id ? '→' : '←';
+    return `<div class="ad-rel"><span class="rel-type">${escapeHtml(e.type)}</span><span class="rel-name">${dir} ${escapeHtml(name)}</span></div>`;
+  }).join('') || '<div class="muted small">暂无关系</div>';
+  panel.innerHTML = `
+    <div class="ad-title"><span style="width:10px;height:10px;border-radius:50%;background:${ATLAS_COLORS[n.type] || '#9aa3b2'}"></span>${escapeHtml(n.label)}</div>
+    <div class="ad-type">${escapeHtml(n.type)} · ${ATLAS_TYPE_LABELS[n.type] || n.type}</div>
+    ${n.description ? `<div class="ad-desc">${escapeHtml(n.description)}</div>` : ''}
+    <div class="ad-row">连接数：<b>${n.degree || 0}</b></div>
+    ${rels}
+    <button class="mini-btn danger-text ad-del" id="atlas-del-node">删除该节点</button>`;
+  panel.classList.remove('hidden');
+  $('atlas-del-node').onclick = () => atlasRemoveNode(id);
+  renderAtlas(); // refresh selection ring
+}
+
+async function atlasAddNode() {
+  const type = $('atlas-type').value;
+  const label = $('atlas-label').value.trim();
+  const description = $('atlas-desc').value.trim();
+  if (!label) { $('atlas-msg').textContent = '请填写名称。'; return; }
+  $('atlas-msg').textContent = '添加中…';
+  try {
+    const r = await fetch('/api/atlas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'add', type, label, description })
+    }).then((x) => x.json());
+    if (!r.ok) $('atlas-msg').textContent = '失败：' + (r.error || '');
+    else { $('atlas-label').value = ''; $('atlas-desc').value = ''; $('atlas-msg').textContent = '已添加「' + label + '」。'; refreshAtlas(); }
+  } catch (e) { $('atlas-msg').textContent = '失败：' + e.message; }
+}
+
+async function atlasRemoveNode(id) {
+  try {
+    await fetch('/api/atlas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove_node', id }) });
+  } catch { /* ignore */ }
+  atlasState.sel = null;
+  $('atlas-detail').classList.add('hidden');
+  refreshAtlas();
+}
+
+async function atlasReset() {
+  if (!confirm('确定要清空整张记忆图谱吗？此操作不可撤销。')) return;
+  try {
+    await fetch('/api/atlas', { method: 'DELETE' });
+  } catch { /* ignore */ }
+  atlasState.sel = null;
+  $('atlas-detail').classList.add('hidden');
+  refreshAtlas();
+}
+
+async function atlasBuild() {
+  const conv = conversations.find((c) => c.id === currentId);
+  if (!conv || !conv.messages || !conv.messages.length) {
+    $('atlas-msg').textContent = '当前没有对话内容可抽取。';
+    return;
+  }
+  const text = conv.messages.slice(-40).map((m) => {
+    const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    return `[${m.role}] ${c}`;
+  }).join('\n').slice(-7000);
+  $('atlas-msg').textContent = '模型抽取中（需要有效的模型与 API Key）…';
+  $('atlas-build').disabled = true;
+  try {
+    const r = await fetch('/api/atlas/extract', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, config: Object.assign({}, config) })
+    }).then((x) => x.json());
+    if (!r.ok) $('atlas-msg').textContent = '抽取失败：' + (r.error || '');
+    else {
+      const a = r.applied || { added: 0, linked: 0 };
+      $('atlas-msg').textContent = `已抽取：新增 ${a.added} 节点、建立 ${a.linked} 关系。`;
+      refreshAtlas();
+    }
+  } catch (e) { $('atlas-msg').textContent = '抽取失败：' + e.message; }
+  finally { $('atlas-build').disabled = false; }
+}
+
+// --- interactions (attached once) ---
+let atlasEventsBound = false;
+function atlasInitEvents() {
+  const svg = $('atlas-svg');
+  if (atlasEventsBound) return;
+  atlasEventsBound = true;
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const wx = (mx - atlasState.tx) / atlasState.k;
+    const wy = (my - atlasState.ty) / atlasState.k;
+    const nk = Math.min(3, Math.max(0.25, atlasState.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+    atlasState.k = nk;
+    atlasState.tx = mx - wx * nk;
+    atlasState.ty = my - wy * nk;
+    atlasApplyTransform();
+  }, { passive: false });
+
+  svg.addEventListener('pointerdown', (e) => {
+    const nodeEl = e.target.closest('.atlas-node');
+    if (nodeEl) {
+      const id = nodeEl.getAttribute('data-node');
+      atlasState.drag = { id, sx: e.clientX, sy: e.clientY, moved: false, ox: atlasState.pos[id].x, oy: atlasState.pos[id].y };
+    } else {
+      atlasState.pan = { sx: e.clientX, sy: e.clientY, tx: atlasState.tx, ty: atlasState.ty };
+      svg.classList.add('grabbing');
+    }
+    svg.setPointerCapture(e.pointerId);
+  });
+
+  svg.addEventListener('pointermove', (e) => {
+    if (atlasState.drag) {
+      const d = atlasState.drag;
+      const dx = (e.clientX - d.sx) / atlasState.k;
+      const dy = (e.clientY - d.sy) / atlasState.k;
+      if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) > 4) d.moved = true;
+      const p = atlasState.pos[d.id];
+      p.x = d.ox + dx; p.y = d.oy + dy;
+      const el = svg.querySelector(`.atlas-node[data-node="${d.id}"]`);
+      if (el) el.setAttribute('transform', `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+      const g = atlasState.graph;
+      for (const ed of g.edges) {
+        if (ed.from !== d.id && ed.to !== d.id) continue;
+        const line = svg.querySelector(`.atlas-edge[data-edge="${ed.id}"]`);
+        if (!line) continue;
+        const a = atlasState.pos[ed.from], b = atlasState.pos[ed.to];
+        line.setAttribute('x1', a.x.toFixed(1)); line.setAttribute('y1', a.y.toFixed(1));
+        line.setAttribute('x2', b.x.toFixed(1)); line.setAttribute('y2', b.y.toFixed(1));
+      }
+    } else if (atlasState.pan) {
+      atlasState.tx = atlasState.pan.tx + (e.clientX - atlasState.pan.sx);
+      atlasState.ty = atlasState.pan.ty + (e.clientY - atlasState.pan.sy);
+      atlasApplyTransform();
+    }
+  });
+
+  const endDrag = (e) => {
+    if (atlasState.drag) {
+      if (!atlasState.drag.moved) atlasShowDetail(atlasState.drag.id);
+      atlasState.drag = null;
+    }
+    if (atlasState.pan) { atlasState.pan = null; svg.classList.remove('grabbing'); }
+    try { svg.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+  svg.addEventListener('pointerup', endDrag);
+  svg.addEventListener('pointercancel', endDrag);
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
   $('open-goals').onclick = openGoals;
+  $('open-atlas').onclick = openAtlas;
+  $('close-atlas').onclick = closeAtlas;
+  $('atlas-add').onclick = atlasAddNode;
+  $('atlas-build').onclick = atlasBuild;
+  $('atlas-reset').onclick = atlasReset;
+  $('atlas-fit').onclick = atlasFit;
+  $('atlas-search').addEventListener('input', atlasApplySearch);
   $('close-goals').onclick = closeGoals;
   $('goal-assign').onclick = assignGoal;
   $('close-settings').onclick = closeSettings;
@@ -1937,6 +2296,7 @@ function wire() {
   // click-outside to dismiss overlays
   $('settings-modal').addEventListener('mousedown', (e) => { if (e.target === $('settings-modal')) closeSettings(); });
   $('goals-modal').addEventListener('mousedown', (e) => { if (e.target === $('goals-modal')) closeGoals(); });
+  $('atlas-modal').addEventListener('mousedown', (e) => { if (e.target === $('atlas-modal')) closeAtlas(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -1989,6 +2349,7 @@ function wire() {
       else if (pendingApprovalId) resolveApproval(false);
       else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
       else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
+      else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

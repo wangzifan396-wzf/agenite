@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -75,6 +75,7 @@
         </button>
         <button id="open-settings" class="side-link">设置</button>
         <button id="open-goals" class="side-link">目标任务</button>
+        <button id="open-atlas" class="side-link">记忆图谱</button>
       </div>
     </aside>
 
@@ -175,6 +176,54 @@
         <div class="goal-divider"></div>
         <div class="goal-list-head"><span class="field-title">目标列表</span><span id="goals-count" class="muted small"></span></div>
         <div id="goals-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 记忆图谱 Atlas：把 Agent 对你的理解画成一张活的知识地图 -->
+  <div id="atlas-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card">
+      <div class="drawer-head">
+        <h2>记忆图谱 · Atlas</h2>
+        <button id="close-atlas" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body">
+        <div class="atlas-toolbar">
+          <input id="atlas-search" class="text-input atlas-search" type="text" placeholder="搜索实体…" />
+          <span id="atlas-stats" class="muted small"></span>
+          <div class="grow"></div>
+          <button id="atlas-build" class="mini-btn" title="用模型从当前对话抽取实体与关系">从对话构建</button>
+          <button id="atlas-fit" class="mini-btn" title="复位视图">适配</button>
+          <button id="atlas-reset" class="mini-btn danger-text" title="清空整张图谱">清空</button>
+        </div>
+        <div class="atlas-stage">
+          <svg id="atlas-svg" class="atlas-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div id="atlas-empty" class="atlas-empty hidden">
+            <div class="ae-emoji">🧭</div>
+            <p class="ae-title">图谱还是空的</p>
+            <p class="muted small">对话里让 Agent 用 <code>atlas</code> 工具记录人物 / 项目 / 概念；或点「从对话构建」自动抽取；也可以在右侧手动添加。</p>
+          </div>
+          <div id="atlas-detail" class="atlas-detail hidden"></div>
+        </div>
+        <div class="atlas-side">
+          <div class="field-title">手动添加实体</div>
+          <select id="atlas-type" class="text-input">
+            <option value="person">person · 人物</option>
+            <option value="project">project · 项目</option>
+            <option value="concept">concept · 概念</option>
+            <option value="file">file · 文件</option>
+            <option value="tool">tool · 工具</option>
+            <option value="preference">preference · 偏好</option>
+            <option value="fact">fact · 事实</option>
+            <option value="event">event · 事件</option>
+          </select>
+          <input id="atlas-label" class="text-input" type="text" placeholder="名称，如「张三」「Agenite」" />
+          <input id="atlas-desc" class="text-input" type="text" placeholder="说明（可选）" />
+          <button id="atlas-add" class="btn-primary">添加到图谱</button>
+          <div id="atlas-msg" class="muted small"></div>
+          <div class="field-title atlas-legend-title">类型图例</div>
+          <div id="atlas-legend" class="atlas-legend"></div>
+        </div>
       </div>
     </div>
   </div>

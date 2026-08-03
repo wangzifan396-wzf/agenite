@@ -339,6 +339,28 @@ export const TOOL_DEFS = [
       required: ['name']
     },
     danger: false
+  },
+  {
+    name: 'atlas',
+    description: "维护 Agenite 的**记忆图谱**（你工作区与项目的活的知识地图，持久化在本机 ~/.agenite/memory/atlas.json）。当你在一次对话里厘清了人物 / 项目 / 概念 / 文件 / 偏好 / 事实之间的关系，就用它把结构记下来，而不是只说一遍。之后可用 atlas 检索、或在「记忆图谱」面板里可视化查看。type 建议取值：person / project / concept / file / tool / preference / fact / event。",
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'link', 'note', 'remove'], description: "add=新增实体节点；link=连接两个已有节点；note=记一条事实并可选挂到某实体；remove=删除节点。" },
+        type: { type: 'string', description: "实体类型（add/note 用）：person/project/concept/file/tool/preference/fact/event 等。" },
+        label: { type: 'string', description: "实体名称（add 必填）。例如「张三」「Agenite」「速率限制」。" },
+        description: { type: 'string', description: "实体说明（可选），一两句话。" },
+        provenance: { type: 'string', description: "这条记忆的来源（可选），如「用户 2026-08-03 所述」。" },
+        from: { type: 'string', description: "link/note 的源节点（用名称或 id 均可）。" },
+        to: { type: 'string', description: "link 的目标节点（用名称或 id 均可）。" },
+        edge_type: { type: 'string', description: "关系类型（link 用），如 competes_with / part_of / uses / maintained_by / located_in。" },
+        edge_label: { type: 'string', description: "关系的中文说明（可选）。" },
+        text: { type: 'string', description: "note 的事实内容。" },
+        id: { type: 'string', description: "remove 时指定节点 id 或名称。" }
+      },
+      required: ['action']
+    },
+    danger: false
   }
 ];
 
@@ -472,6 +494,8 @@ async function dispatch(name, args, opts) {
         return skillSave(args, opts);
       case 'skill_recall':
         return skillRecall(args, opts);
+      case 'atlas':
+        return atlasTool(args, opts);
     default:
       return { ok: false, error: `未实现的工具: ${name}` };
   }
@@ -1058,6 +1082,44 @@ async function skillRecall(args, opts = {}) {
   if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
   return readSkill(opts.memoryBase, args.name);
 }
+
+// ---- Agenite Atlas: the agent's living memory graph (local-first) ----
+
+async function atlasTool(args, opts = {}) {
+  if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
+  const { loadAtlas, saveAtlas, addNode, linkNodes, removeNode, atlasStats } = await import('./atlas.js');
+  const g = await loadAtlas(opts.memoryBase);
+  const action = args.action;
+  let result;
+  if (action === 'add') {
+    result = addNode(g, { type: args.type, label: args.label, description: args.description, provenance: args.provenance });
+    if (!result.ok) return result;
+    await saveAtlas(g, opts.memoryBase);
+    return { ok: true, content: `已${result.existed ? '更新' : '新增'}节点「${result.node.label}」(${result.node.type})。` };
+  }
+  if (action === 'link') {
+    result = linkNodes(g, { from: args.from, to: args.to, type: args.edge_type, label: args.edge_label });
+    if (!result.ok) return result;
+    await saveAtlas(g, opts.memoryBase);
+    return { ok: true, content: `已${result.existed ? '确认' : '建立'}关系：${args.from} —[${args.edge_type}]→ ${args.to}。` };
+  }
+  if (action === 'note') {
+    if (!args.text) return { ok: false, error: 'note 需要提供 text' };
+    const node = addNode(g, { type: args.type || 'fact', label: args.text.slice(0, 60), description: args.text });
+    if (args.from) linkNodes(g, { from: args.from, to: node.node.id, type: args.edge_type || 'related_to', label: args.edge_label || '' });
+    await saveAtlas(g, opts.memoryBase);
+    return { ok: true, content: `已记录事实并${args.from ? '挂接到「' + args.from + '」' : '加入图谱'}。` };
+  }
+  if (action === 'remove') {
+    result = removeNode(g, args.id || args.label);
+    if (!result.ok) return result;
+    await saveAtlas(g, opts.memoryBase);
+    return { ok: true, content: '已删除节点及其相关边。' };
+  }
+  const s = atlasStats(g);
+  return { ok: true, content: `当前记忆图谱：${s.nodes} 个节点，${s.edges} 条边。类型分布：${JSON.stringify(s.types)}` };
+}
+
 
 // Flat index of the workspace, used by the UI's "@" file picker.
 // Read-only, never leaves the sandbox, and hard-capped so huge repos stay snappy.

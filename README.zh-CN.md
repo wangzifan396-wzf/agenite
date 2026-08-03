@@ -34,8 +34,13 @@
 - **角色人格库 persona（v0.11.0）**：一键切换 Agent 的说话与思维方式——内置 `default` / `strict-reviewer`（严厉代码审查员）/ `warm-writer`（温柔写作助手）/ `researcher`（严谨研究员），也能把当前「系统提示词」**另存为自定义角色**反复复用（存于 `~/.agenite/memory/personas/`）。人格注入系统提示词，并可下发给子代理，是整个"自进化"叙事里的创意支点。
 - **自治目标委派 + 自验证 · 任务看板（v0.12.0）**：这是把 Agenite 从"陪你写代码的聊天 Agent"升级成"**你能交办整个目标、它自治执行并自验证、你随时回来验收**"的关键一跃，直接对齐 OpenHands / Hermes / Codex 后台 Agent 的"交办即走"范式。在侧栏「目标任务」里派发一个目标（如"给 server.js 加速率限制中间件并补测试"），Agent 会**独立**完成：① 规划 → ② 自治执行（复用全部内置工具，含 `run_code` 跑测试、`codebase_search` 找代码、`fanout` 并行子代理，沙箱内操作**自动批准**、不需逐步确认）→ ③ **自验证**（强制跑测试/构建/lint，不过验证不宣布完成）→ ④ 写报告。全过程**持久化**到 `~/.agenite/memory/goals/`，刷新浏览器或重启服务都不丢；看板实时显示计划、进度日志、花费与最终报告，可一键停止。最多同时跑 3 个。这是咱们补齐"竞争力落差"的主线能力。
 - **目标护栏 + 自愈重试（v0.13.0）**：让"交办即走"真正**可靠**、不会跑飞。每个目标现在带**三层预算护栏**（步数上限 / 成本上限 $ / 时长上限，均有安全默认值，派发表单里可调）→ 任一触顶立即停并标记失败；更关键的是**自愈重试**——自验证判定"未完成 / 部分完成"时，Agent 会拿到自己的验收结论，**自动复盘、修正、重新跑验证**，直到通过或达重试上限（默认 2 次），步数与成本在多次尝试间**累加计入预算**。这正是对标 OpenHands / Hermes"自治且可控"的核心体验：你敢把更大的目标交给它，因为它既会自己修自己的失败，又绝不会无上限地烧钱烧时间。
-- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **25 个工具**（再加上你接入的 MCP 工具）：
-  - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
+- **Agenite Atlas · 记忆知识图谱 + Studio 暗色（v0.14.0）**：一次"改头换面"级的形态升级——把 Agenite 从「会干活的聊天 Agent」变成「**会记住你、并把记忆画成活的本地知识图谱的智能体工作台**」，直接补齐 OpenHands / Devin 仍停留在"聊天框 + 日志"形态时被落下的那块**可视化记忆**。包含：
+  - 🧠 **本地零依赖记忆图谱**：新增 `atlas` 工具，让 Agent 把一次对话里厘清的人 / 项目 / 概念 / 文件 / 偏好 / 事实之间的关系，以「节点 + 带类型边」存进本机 `~/.agenite/memory/atlas.json`，跨重启保留、可检索、按 `type+label` 自动去重；对标 Lenny's Memory / Graphiti / MemGraph 的图谱记忆，但纯本地、零依赖、零隐私外泄（云端图谱都不具备）。
+  - 🗺️ **可视化图谱面板**：侧栏「记忆图谱」打开一个力导向画布——按实体类型配色、滚轮缩放、拖拽节点 / 平移画布、一键适配视图；点节点看详情，搜素框实时高亮匹配的实体与关系。
+  - ⚡ **从对话构建**：把当前对话最近一段丢给模型，自动抽取实体与关系并灌进图谱（未配置 key 时给出友好提示而非报错）；也支持手动在侧栏表单里加节点 / 连边。
+  - 🎨 **Studio 暗色视觉语言（默认）**：更深的环境光径向背景 + 毛玻璃面板 + 单点点缀色（暖橙 `#ff7a59` + 辅助蓝 `#6ea8ff`），对标 BrainFlow / tldraw 的"空间化、可视化、visible reasoning"趋势；明色主题同步升级。`<html>` 默认暗色以避免首屏闪烁。
+- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **26 个工具**（再加上你接入的 MCP 工具）：
+  - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
@@ -77,7 +82,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（170 个，node:test）
+npm test       # 跑核心逻辑单元测试（228 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口
@@ -100,7 +105,8 @@ agenite/
 │       ├── markdown.js   # XSS 安全的 Markdown 渲染
 │       ├── provider.js   # OpenAI ↔ Anthropic 消息/工具格式互转
 │       ├── client.js     # 用 fetch 流式调用模型（可注入 mock 测试）
-│       ├── tools.js      # 工具定义与执行
+│       ├── tools.js      # 工具定义与执行（含 atlas 记忆图谱工具）
+│       ├── atlas.js      # 本地零依赖记忆知识图谱引擎（节点 + 带类型边，持久化到 ~/.agenite/memory/atlas.json）
 │       ├── mcp.js        # MCP 客户端：stdio / HTTP / SSE 传输 + 多服务器管理 + 工具索引（仅服务端）
 │       ├── agent.js      # 工具调用循环（含上下文压缩、成本统计、续跑）
 │       ├── context.js    # 上下文估算与自动压缩（estimateTokens / compactMessages，仅服务端）

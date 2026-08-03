@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -46,25 +46,50 @@
 }
 
 [data-theme="dark"] {
-  --bg: #191816;
-  --panel: #212020;
-  --panel-2: #2a2927;
-  --panel-3: #343230;
-  --border: #322f2c;
-  --border-strong: #45413c;
-  --text: #efedea;
-  --text-2: #b8b4ac;
-  --muted: #8c877e;
-  --accent: #d97757;
-  --accent-hover: #e58a6d;
-  --accent-soft: #33241e;
-  --ok: #63b183;
-  --warn: #d7a34a;
-  --danger: #e0685c;
-  --code-bg: #1b1a19;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
-  --shadow-md: 0 4px 16px -4px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .3);
-  --shadow-lg: 0 24px 60px -12px rgba(0, 0, 0, .65), 0 4px 12px rgba(0, 0, 0, .4);
+  --bg: #0d0f14;
+  --panel: #151922;
+  --panel-2: #1a202e;
+  --panel-3: #232b3c;
+  --border: #232b3a;
+  --border-strong: #34415a;
+  --text: #e9edf5;
+  --text-2: #aab3c6;
+  --muted: #6e788e;
+  --accent: #ff7a59;
+  --accent-hover: #ff9576;
+  --accent-soft: #2a1d18;
+  --accent-2: #6ea8ff;
+  --glow: rgba(255, 122, 89, .14);
+  --glow-2: rgba(110, 168, 255, .12);
+  --glass: rgba(21, 25, 34, .62);
+  --ok: #5fd0a0;
+  --warn: #e7b85a;
+  --danger: #ff6b6b;
+  --code-bg: #11151d;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .36);
+  --shadow-md: 0 8px 26px -8px rgba(0, 0, 0, .62), 0 1px 3px rgba(0, 0, 0, .4);
+  --shadow-lg: 0 30px 70px -14px rgba(0, 0, 0, .72), 0 6px 16px rgba(0, 0, 0, .46);
+}
+
+[data-theme="light"] {
+  --accent-2: #3d7ff2;
+  --glow: rgba(191, 91, 56, .08);
+  --glow-2: rgba(61, 127, 242, .07);
+  --glass: rgba(255, 255, 255, .72);
+}
+
+/* Ambient studio backdrop — subtle colored glows that make the surface feel
+   alive without distracting. Sits behind everything, never intercepts input. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 50% at 12% 8%, var(--glow), transparent 70%),
+    radial-gradient(55% 50% at 92% 96%, var(--glow-2), transparent 70%);
+  opacity: .85;
 }
 
 * { box-sizing: border-box; }
@@ -983,6 +1008,26 @@ kbd {
 }
 .field input[type="range"] { padding: 0; accent-color: var(--accent); }
 
+.text-input,
+input.text-input,
+textarea.text-input,
+select.text-input {
+  padding: 8px 11px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13.5px;
+  transition: border-color .14s, box-shadow .14s;
+}
+.text-input::placeholder { color: var(--muted); }
+.text-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+select.text-input { appearance: auto; padding-right: 8px; }
+
 .tag {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -1354,6 +1399,100 @@ kbd {
 }
 .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ===== Agenite Atlas — memory graph studio ===== */
+.atlas-card {
+  width: min(1120px, 95vw);
+  height: min(780px, 92vh);
+  display: flex; flex-direction: column;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(22px) saturate(1.2);
+  backdrop-filter: blur(22px) saturate(1.2);
+  border: 1px solid var(--border-strong);
+}
+[data-theme="dark"] .atlas-card { box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255,255,255,.04) inset, 0 0 80px -30px var(--glow); }
+
+.atlas-body {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 252px;
+  grid-template-rows: auto 1fr;
+  gap: 12px; padding: 14px 16px 16px;
+}
+.atlas-toolbar {
+  grid-column: 1 / 3;
+  display: flex; align-items: center; gap: 10px;
+}
+.atlas-search { flex: 0 1 280px; height: 32px; }
+.atlas-stage {
+  position: relative; min-height: 0; border-radius: 14px; overflow: hidden;
+  background:
+    radial-gradient(80% 80% at 50% 40%, color-mix(in srgb, var(--panel-2) 70%, transparent), color-mix(in srgb, var(--bg) 92%, transparent));
+  border: 1px solid var(--border);
+}
+[data-theme="dark"] .atlas-stage { box-shadow: inset 0 0 60px -20px var(--glow-2), var(--shadow-sm); }
+.atlas-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.atlas-svg.grabbing { cursor: grabbing; }
+.atlas-edge { stroke: var(--border-strong); stroke-width: 1.4; opacity: .55; }
+.atlas-edge.dim { opacity: .07; }
+.atlas-edge-label { fill: var(--muted); font-size: 9px; opacity: .7; pointer-events: none; }
+.atlas-node { cursor: pointer; }
+.atlas-node circle {
+  fill: var(--panel-3); stroke: var(--border-strong); stroke-width: 1.5;
+  transition: stroke .15s, fill .15s;
+}
+.atlas-node:hover circle { stroke: var(--accent); }
+.atlas-node.sel circle { stroke: var(--accent); stroke-width: 2.4; }
+.atlas-node.dim { opacity: .18; }
+.atlas-node text {
+  fill: var(--text); font-size: 11px; font-weight: 560; pointer-events: none;
+  paint-order: stroke; stroke: color-mix(in srgb, var(--bg) 82%, transparent); stroke-width: 3px; stroke-linejoin: round;
+}
+.atlas-node .dot-mark { fill: #fff; opacity: .9; pointer-events: none; }
+
+.atlas-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; gap: 6px; padding: 24px;
+  color: var(--text-2);
+}
+.atlas-empty .ae-emoji { font-size: 42px; filter: drop-shadow(0 6px 14px var(--glow)); }
+.atlas-empty .ae-title { font-size: 16px; font-weight: 620; color: var(--text); margin: 2px 0 0; }
+.atlas-empty code { font-family: var(--mono); background: var(--panel-3); padding: 1px 6px; border-radius: 6px; color: var(--accent); }
+
+.atlas-detail {
+  position: absolute; top: 12px; right: 12px; width: 250px; max-height: calc(100% - 24px);
+  overflow: auto; background: var(--glass); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  border: 1px solid var(--border-strong); border-radius: 12px; padding: 12px 13px; box-shadow: var(--shadow-md);
+}
+.atlas-detail .ad-title { font-size: 14px; font-weight: 660; color: var(--text); display: flex; align-items: center; gap: 7px; }
+.atlas-detail .ad-type { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.atlas-detail .ad-desc { font-size: 12.5px; color: var(--text-2); margin: 7px 0 9px; line-height: 1.5; }
+.atlas-detail .ad-row { font-size: 12px; color: var(--text-2); margin: 3px 0; }
+.atlas-detail .ad-rel { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 4px 0; padding: 4px 6px; border-radius: 7px; background: var(--panel-2); }
+.atlas-detail .ad-rel .rel-type { color: var(--accent); font-size: 10.5px; }
+.atlas-detail .ad-rel .rel-name { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas-detail .ad-del { margin-top: 9px; width: 100%; }
+
+.atlas-side {
+  border-left: 1px solid var(--border); padding-left: 14px;
+  display: flex; flex-direction: column; gap: 8px; overflow: auto;
+}
+.atlas-side .text-input { width: 100%; height: 33px; }
+.atlas-side #atlas-add { height: 34px; }
+.atlas-legend-title { margin-top: 6px; }
+.atlas-legend { display: flex; flex-direction: column; gap: 5px; }
+.atlas-legend .lg-item { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-2); }
+.atlas-legend .lg-dot { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 8px -1px currentColor; }
+
+@media (max-width: 760px) {
+  .atlas-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+  .atlas-side { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 10px; flex-direction: row; flex-wrap: wrap; }
+}
+
+/* Studio polish: a touch more air and intent on headings */
+.drawer-head h2, .modal-card h2, .atlas-card h2 {
+  letter-spacing: .012em;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
@@ -1426,6 +1565,7 @@ kbd {
         </button>
         <button id="open-settings" class="side-link">设置</button>
         <button id="open-goals" class="side-link">目标任务</button>
+        <button id="open-atlas" class="side-link">记忆图谱</button>
       </div>
     </aside>
 
@@ -1526,6 +1666,54 @@ kbd {
         <div class="goal-divider"></div>
         <div class="goal-list-head"><span class="field-title">目标列表</span><span id="goals-count" class="muted small"></span></div>
         <div id="goals-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 记忆图谱 Atlas：把 Agent 对你的理解画成一张活的知识地图 -->
+  <div id="atlas-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card">
+      <div class="drawer-head">
+        <h2>记忆图谱 · Atlas</h2>
+        <button id="close-atlas" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body">
+        <div class="atlas-toolbar">
+          <input id="atlas-search" class="text-input atlas-search" type="text" placeholder="搜索实体…" />
+          <span id="atlas-stats" class="muted small"></span>
+          <div class="grow"></div>
+          <button id="atlas-build" class="mini-btn" title="用模型从当前对话抽取实体与关系">从对话构建</button>
+          <button id="atlas-fit" class="mini-btn" title="复位视图">适配</button>
+          <button id="atlas-reset" class="mini-btn danger-text" title="清空整张图谱">清空</button>
+        </div>
+        <div class="atlas-stage">
+          <svg id="atlas-svg" class="atlas-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div id="atlas-empty" class="atlas-empty hidden">
+            <div class="ae-emoji">🧭</div>
+            <p class="ae-title">图谱还是空的</p>
+            <p class="muted small">对话里让 Agent 用 <code>atlas</code> 工具记录人物 / 项目 / 概念；或点「从对话构建」自动抽取；也可以在右侧手动添加。</p>
+          </div>
+          <div id="atlas-detail" class="atlas-detail hidden"></div>
+        </div>
+        <div class="atlas-side">
+          <div class="field-title">手动添加实体</div>
+          <select id="atlas-type" class="text-input">
+            <option value="person">person · 人物</option>
+            <option value="project">project · 项目</option>
+            <option value="concept">concept · 概念</option>
+            <option value="file">file · 文件</option>
+            <option value="tool">tool · 工具</option>
+            <option value="preference">preference · 偏好</option>
+            <option value="fact">fact · 事实</option>
+            <option value="event">event · 事件</option>
+          </select>
+          <input id="atlas-label" class="text-input" type="text" placeholder="名称，如「张三」「Agenite」" />
+          <input id="atlas-desc" class="text-input" type="text" placeholder="说明（可选）" />
+          <button id="atlas-add" class="btn-primary">添加到图谱</button>
+          <div id="atlas-msg" class="muted small"></div>
+          <div class="field-title atlas-legend-title">类型图例</div>
+          <div id="atlas-legend" class="atlas-legend"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -2454,7 +2642,8 @@ const MOON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke
 function getInitialTheme() {
   const t = localStorage.getItem(LS.theme);
   if (t) return t;
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  // Agenite Atlas ships with a studio dark look as the signature default.
+  return 'dark';
 }
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -4083,10 +4272,368 @@ async function deleteGoal(id) {
   refreshGoals();
 }
 
+// ---------- Agenite Atlas: the living memory graph ----------
+
+const ATLAS_COLORS = {
+  person: '#ff7a59', project: '#6ea8ff', concept: '#c879ff', file: '#46c8a0',
+  tool: '#f5c451', preference: '#ff8fb3', fact: '#7fd1ff', event: '#9aa7ff'
+};
+const ATLAS_TYPE_LABELS = {
+  person: '人物', project: '项目', concept: '概念', file: '文件',
+  tool: '工具', preference: '偏好', fact: '事实', event: '事件'
+};
+const atlasState = { graph: null, pos: {}, k: 1, tx: 0, ty: 0, drag: null, pan: null, sel: null };
+
+function openAtlas() {
+  $('atlas-modal').classList.remove('hidden');
+  atlasInitEvents();
+  refreshAtlas();
+}
+function closeAtlas() {
+  $('atlas-modal').classList.add('hidden');
+}
+
+async function refreshAtlas() {
+  try {
+    const r = await fetch('/api/atlas').then((x) => x.json());
+    atlasState.graph = r.graph || { nodes: {}, edges: [] };
+    renderAtlas();
+  } catch (e) {
+    $('atlas-stats').textContent = '加载失败：' + e.message;
+  }
+}
+
+// Lightweight force-directed layout (synchronous; fine for personal graphs).
+function atlasLayout(graph) {
+  const ids = Object.keys(graph.nodes);
+  const N = ids.length;
+  const pos = {};
+  const cx = 0, cy = 0;
+  ids.forEach((id, i) => {
+    const a = (i / Math.max(1, N)) * Math.PI * 2;
+    pos[id] = { x: Math.cos(a) * 230 + (Math.random() - 0.5) * 30, y: Math.sin(a) * 230 + (Math.random() - 0.5) * 30, vx: 0, vy: 0 };
+  });
+  if (!N) return pos;
+  const iters = N > 140 ? 120 : 260;
+  const W = 130;
+  for (let it = 0; it < iters; it++) {
+    for (let i = 0; i < N; i++) {
+      const pa = pos[ids[i]];
+      for (let j = i + 1; j < N; j++) {
+        const pb = pos[ids[j]];
+        let dx = pa.x - pb.x, dy = pa.y - pb.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 0.01) { d2 = 0.01; dx = Math.random() - 0.5; dy = Math.random() - 0.5; }
+        const d = Math.sqrt(d2);
+        const f = 2600 / d2;
+        const fx = (dx / d) * f, fy = (dy / d) * f;
+        pa.vx += fx; pa.vy += fy; pb.vx -= fx; pb.vy -= fy;
+      }
+    }
+    for (const e of graph.edges) {
+      const pa = pos[e.from], pb = pos[e.to];
+      if (!pa || !pb) continue;
+      const dx = pb.x - pa.x, dy = pb.y - pa.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = (d - W) * 0.045;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      pa.vx += fx; pa.vy += fy; pb.vx -= fx; pb.vy -= fy;
+    }
+    for (const id of ids) {
+      const p = pos[id];
+      p.vx = p.vx * 0.86 - p.x * 0.0018;
+      p.vy = p.vy * 0.86 - p.y * 0.0018;
+      p.x += p.vx; p.y += p.vy;
+    }
+  }
+  return pos;
+}
+
+function atlasEdgeColor(e) {
+  return 'var(--border-strong)';
+}
+
+function renderAtlas() {
+  const g = atlasState.graph || { nodes: {}, edges: [] };
+  const ids = Object.keys(g.nodes);
+  const stats = $('atlas-stats');
+  const empty = $('atlas-empty');
+  if (!ids.length) {
+    empty.classList.remove('hidden');
+    stats.textContent = '';
+  } else {
+    empty.classList.add('hidden');
+    const types = {};
+    ids.forEach((id) => { const t = g.nodes[id].type; types[t] = (types[t] || 0) + 1; });
+    stats.textContent = `${ids.length} 节点 · ${g.edges.length} 关系`;
+  }
+  // (re)layout only when graph identity changed — preserve positions on rescale
+  const sig = ids.length + ':' + g.edges.length + ':' + ids.join(',').length;
+  if (atlasState.sig !== sig || !atlasState.pos || Object.keys(atlasState.pos).length !== ids.length) {
+    atlasState.pos = atlasLayout(g);
+    atlasState.sig = sig;
+  }
+  const pos = atlasState.pos;
+  const svg = $('atlas-svg');
+  const w = svg.clientWidth || 800, h = svg.clientHeight || 520;
+
+  let edgeSvg = '';
+  for (const e of g.edges) {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) continue;
+    const color = ATLAS_COLORS[g.nodes[e.from] && g.nodes[e.from].type] || '#9aa3b2';
+    edgeSvg += `<line class="atlas-edge" data-edge="${e.id}" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${color}"></line>`;
+    if (e.label) {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      edgeSvg += `<text class="atlas-edge-label" x="${mx.toFixed(1)}" y="${(my - 3).toFixed(1)}" text-anchor="middle">${escapeHtml(e.label)}</text>`;
+    }
+  }
+  let nodeSvg = '';
+  for (const id of ids) {
+    const n = g.nodes[id];
+    const p = pos[id];
+    if (!p) continue;
+    const r = 9 + Math.min(16, (n.degree || 0) * 2.4);
+    const color = ATLAS_COLORS[n.type] || '#9aa3b2';
+    const label = n.label.length > 14 ? n.label.slice(0, 13) + '…' : n.label;
+    nodeSvg += `<g class="atlas-node${atlasState.sel === id ? ' sel' : ''}" data-node="${id}" transform="translate(${p.x.toFixed(1)},${p.y.toFixed(1)})">
+      <circle r="${r.toFixed(1)}" fill="${color}" fill-opacity="0.18" stroke="${color}"></circle>
+      <circle r="3.4" class="dot-mark" fill="${color}"></circle>
+      <text x="0" y="${(r + 13).toFixed(1)}" text-anchor="middle">${escapeHtml(label)}</text>
+    </g>`;
+  }
+  svg.innerHTML = `<g id="atlas-g">${edgeSvg}${nodeSvg}</g>`;
+  // center the view on first render
+  if (atlasState.firstRender !== sig) {
+    atlasFit();
+    atlasState.firstRender = sig;
+  } else {
+    atlasApplyTransform();
+  }
+  atlasRenderLegend();
+  atlasApplySearch();
+}
+
+function atlasApplyTransform() {
+  const g = $('atlas-svg').querySelector('#atlas-g');
+  if (g) g.setAttribute('transform', `translate(${atlasState.tx.toFixed(1)},${atlasState.ty.toFixed(1)}) scale(${atlasState.k.toFixed(3)})`);
+}
+
+function atlasFit() {
+  const g = atlasState.graph || { nodes: {} };
+  const ids = Object.keys(g.nodes);
+  const svg = $('atlas-svg');
+  const w = svg.clientWidth || 800, h = svg.clientHeight || 520;
+  if (!ids.length) { atlasState.k = 1; atlasState.tx = w / 2; atlasState.ty = h / 2; atlasApplyTransform(); return; }
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const id of ids) { const p = atlasState.pos[id]; if (!p) continue; minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  const gw = Math.max(1, maxX - minX), gh = Math.max(1, maxY - minY);
+  const pad = 70;
+  const k = Math.min(2, Math.max(0.3, Math.min((w - pad * 2) / gw, (h - pad * 2) / gh)));
+  atlasState.k = k;
+  atlasState.tx = w / 2 - ((minX + maxX) / 2) * k;
+  atlasState.ty = h / 2 - ((minY + maxY) / 2) * k;
+  atlasApplyTransform();
+}
+
+function atlasRenderLegend() {
+  const box = $('atlas-legend');
+  box.innerHTML = Object.keys(ATLAS_TYPE_LABELS).map((t) =>
+    `<div class="lg-item"><span class="lg-dot" style="background:${ATLAS_COLORS[t]};color:${ATLAS_COLORS[t]}"></span>${t} · ${ATLAS_TYPE_LABELS[t]}</div>`
+  ).join('');
+}
+
+function atlasApplySearch() {
+  const q = ($('atlas-search').value || '').trim().toLowerCase();
+  const g = atlasState.graph || { nodes: {}, edges: [] };
+  const svg = $('atlas-svg');
+  if (!q) {
+    svg.querySelectorAll('.atlas-node').forEach((n) => n.classList.remove('dim'));
+    svg.querySelectorAll('.atlas-edge').forEach((n) => n.classList.remove('dim'));
+    return;
+  }
+  const matches = new Set();
+  for (const id of Object.keys(g.nodes)) {
+    const n = g.nodes[id];
+    if ((n.label + ' ' + (n.description || '') + ' ' + n.type).toLowerCase().includes(q)) matches.add(id);
+  }
+  svg.querySelectorAll('.atlas-node').forEach((el) => {
+    el.classList.toggle('dim', !matches.has(el.getAttribute('data-node')));
+  });
+  svg.querySelectorAll('.atlas-edge').forEach((el) => {
+    const e = g.edges.find((x) => x.id === el.getAttribute('data-edge'));
+    const hit = e && (matches.has(e.from) || matches.has(e.to));
+    el.classList.toggle('dim', !hit);
+  });
+}
+
+function atlasShowDetail(id) {
+  const g = atlasState.graph;
+  const n = g.nodes[id];
+  if (!n) return;
+  atlasState.sel = id;
+  const panel = $('atlas-detail');
+  const rels = g.edges.filter((e) => e.from === id || e.to === id).map((e) => {
+    const other = e.from === id ? e.to : e.from;
+    const name = g.nodes[other] ? g.nodes[other].label : other;
+    const dir = e.from === id ? '→' : '←';
+    return `<div class="ad-rel"><span class="rel-type">${escapeHtml(e.type)}</span><span class="rel-name">${dir} ${escapeHtml(name)}</span></div>`;
+  }).join('') || '<div class="muted small">暂无关系</div>';
+  panel.innerHTML = `
+    <div class="ad-title"><span style="width:10px;height:10px;border-radius:50%;background:${ATLAS_COLORS[n.type] || '#9aa3b2'}"></span>${escapeHtml(n.label)}</div>
+    <div class="ad-type">${escapeHtml(n.type)} · ${ATLAS_TYPE_LABELS[n.type] || n.type}</div>
+    ${n.description ? `<div class="ad-desc">${escapeHtml(n.description)}</div>` : ''}
+    <div class="ad-row">连接数：<b>${n.degree || 0}</b></div>
+    ${rels}
+    <button class="mini-btn danger-text ad-del" id="atlas-del-node">删除该节点</button>`;
+  panel.classList.remove('hidden');
+  $('atlas-del-node').onclick = () => atlasRemoveNode(id);
+  renderAtlas(); // refresh selection ring
+}
+
+async function atlasAddNode() {
+  const type = $('atlas-type').value;
+  const label = $('atlas-label').value.trim();
+  const description = $('atlas-desc').value.trim();
+  if (!label) { $('atlas-msg').textContent = '请填写名称。'; return; }
+  $('atlas-msg').textContent = '添加中…';
+  try {
+    const r = await fetch('/api/atlas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'add', type, label, description })
+    }).then((x) => x.json());
+    if (!r.ok) $('atlas-msg').textContent = '失败：' + (r.error || '');
+    else { $('atlas-label').value = ''; $('atlas-desc').value = ''; $('atlas-msg').textContent = '已添加「' + label + '」。'; refreshAtlas(); }
+  } catch (e) { $('atlas-msg').textContent = '失败：' + e.message; }
+}
+
+async function atlasRemoveNode(id) {
+  try {
+    await fetch('/api/atlas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove_node', id }) });
+  } catch { /* ignore */ }
+  atlasState.sel = null;
+  $('atlas-detail').classList.add('hidden');
+  refreshAtlas();
+}
+
+async function atlasReset() {
+  if (!confirm('确定要清空整张记忆图谱吗？此操作不可撤销。')) return;
+  try {
+    await fetch('/api/atlas', { method: 'DELETE' });
+  } catch { /* ignore */ }
+  atlasState.sel = null;
+  $('atlas-detail').classList.add('hidden');
+  refreshAtlas();
+}
+
+async function atlasBuild() {
+  const conv = conversations.find((c) => c.id === currentId);
+  if (!conv || !conv.messages || !conv.messages.length) {
+    $('atlas-msg').textContent = '当前没有对话内容可抽取。';
+    return;
+  }
+  const text = conv.messages.slice(-40).map((m) => {
+    const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    return `[${m.role}] ${c}`;
+  }).join('\n').slice(-7000);
+  $('atlas-msg').textContent = '模型抽取中（需要有效的模型与 API Key）…';
+  $('atlas-build').disabled = true;
+  try {
+    const r = await fetch('/api/atlas/extract', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, config: Object.assign({}, config) })
+    }).then((x) => x.json());
+    if (!r.ok) $('atlas-msg').textContent = '抽取失败：' + (r.error || '');
+    else {
+      const a = r.applied || { added: 0, linked: 0 };
+      $('atlas-msg').textContent = `已抽取：新增 ${a.added} 节点、建立 ${a.linked} 关系。`;
+      refreshAtlas();
+    }
+  } catch (e) { $('atlas-msg').textContent = '抽取失败：' + e.message; }
+  finally { $('atlas-build').disabled = false; }
+}
+
+// --- interactions (attached once) ---
+let atlasEventsBound = false;
+function atlasInitEvents() {
+  const svg = $('atlas-svg');
+  if (atlasEventsBound) return;
+  atlasEventsBound = true;
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const wx = (mx - atlasState.tx) / atlasState.k;
+    const wy = (my - atlasState.ty) / atlasState.k;
+    const nk = Math.min(3, Math.max(0.25, atlasState.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+    atlasState.k = nk;
+    atlasState.tx = mx - wx * nk;
+    atlasState.ty = my - wy * nk;
+    atlasApplyTransform();
+  }, { passive: false });
+
+  svg.addEventListener('pointerdown', (e) => {
+    const nodeEl = e.target.closest('.atlas-node');
+    if (nodeEl) {
+      const id = nodeEl.getAttribute('data-node');
+      atlasState.drag = { id, sx: e.clientX, sy: e.clientY, moved: false, ox: atlasState.pos[id].x, oy: atlasState.pos[id].y };
+    } else {
+      atlasState.pan = { sx: e.clientX, sy: e.clientY, tx: atlasState.tx, ty: atlasState.ty };
+      svg.classList.add('grabbing');
+    }
+    svg.setPointerCapture(e.pointerId);
+  });
+
+  svg.addEventListener('pointermove', (e) => {
+    if (atlasState.drag) {
+      const d = atlasState.drag;
+      const dx = (e.clientX - d.sx) / atlasState.k;
+      const dy = (e.clientY - d.sy) / atlasState.k;
+      if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) > 4) d.moved = true;
+      const p = atlasState.pos[d.id];
+      p.x = d.ox + dx; p.y = d.oy + dy;
+      const el = svg.querySelector(`.atlas-node[data-node="${d.id}"]`);
+      if (el) el.setAttribute('transform', `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+      const g = atlasState.graph;
+      for (const ed of g.edges) {
+        if (ed.from !== d.id && ed.to !== d.id) continue;
+        const line = svg.querySelector(`.atlas-edge[data-edge="${ed.id}"]`);
+        if (!line) continue;
+        const a = atlasState.pos[ed.from], b = atlasState.pos[ed.to];
+        line.setAttribute('x1', a.x.toFixed(1)); line.setAttribute('y1', a.y.toFixed(1));
+        line.setAttribute('x2', b.x.toFixed(1)); line.setAttribute('y2', b.y.toFixed(1));
+      }
+    } else if (atlasState.pan) {
+      atlasState.tx = atlasState.pan.tx + (e.clientX - atlasState.pan.sx);
+      atlasState.ty = atlasState.pan.ty + (e.clientY - atlasState.pan.sy);
+      atlasApplyTransform();
+    }
+  });
+
+  const endDrag = (e) => {
+    if (atlasState.drag) {
+      if (!atlasState.drag.moved) atlasShowDetail(atlasState.drag.id);
+      atlasState.drag = null;
+    }
+    if (atlasState.pan) { atlasState.pan = null; svg.classList.remove('grabbing'); }
+    try { svg.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+  svg.addEventListener('pointerup', endDrag);
+  svg.addEventListener('pointercancel', endDrag);
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
   $('open-goals').onclick = openGoals;
+  $('open-atlas').onclick = openAtlas;
+  $('close-atlas').onclick = closeAtlas;
+  $('atlas-add').onclick = atlasAddNode;
+  $('atlas-build').onclick = atlasBuild;
+  $('atlas-reset').onclick = atlasReset;
+  $('atlas-fit').onclick = atlasFit;
+  $('atlas-search').addEventListener('input', atlasApplySearch);
   $('close-goals').onclick = closeGoals;
   $('goal-assign').onclick = assignGoal;
   $('close-settings').onclick = closeSettings;
@@ -4243,6 +4790,7 @@ function wire() {
   // click-outside to dismiss overlays
   $('settings-modal').addEventListener('mousedown', (e) => { if (e.target === $('settings-modal')) closeSettings(); });
   $('goals-modal').addEventListener('mousedown', (e) => { if (e.target === $('goals-modal')) closeGoals(); });
+  $('atlas-modal').addEventListener('mousedown', (e) => { if (e.target === $('atlas-modal')) closeAtlas(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -4295,6 +4843,7 @@ function wire() {
       else if (pendingApprovalId) resolveApproval(false);
       else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
       else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
+      else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

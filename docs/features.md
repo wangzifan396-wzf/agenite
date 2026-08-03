@@ -305,9 +305,52 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - 状态新增字段：`attempt`（已执行次数）、`verdict`（最终验收结论）、`budget`；看板卡片脚注显示「尝试 N」，详情展开可见「验收结论」。
 - 健壮性：沿用 v0.12.0 的 flush 串行化 + 原子写 + 单调 `createdAt` + `finalized` 契约，`deleteGoal` 等待 `done` 再 unlink。
 
+### 8.9.7 Agenite Atlas · 记忆知识图谱 + Studio 暗色（v0.14.0）
+
+一次「改头换面」级的形态升级（对标 BrainFlow / tldraw 的可视化与 Lenny's Memory / Graphiti / MemGraph 的图谱记忆），把 Agenite 从「聊天框」变成「**会记住你、并把记忆画成活的本地知识图谱的智能体工作台**」——直接补齐 OpenHands / Devin 仍停留在「聊天框 + 日志」形态时缺的那块**可视化记忆**。
+
+#### 8.9.7.1 本地零依赖记忆图谱引擎 `atlas.js`
+
+位于 `src/core/atlas.js`（纯逻辑、无 DOM、可单测）。刻意做到**零依赖 + 可注入目录**，与 `memory.js` 同为记忆基础设施，但图谱记录的是「关系」而非「流水账」：
+
+- **数据模型**：`graph = { meta, nodes[], edges[] }`；节点 `{id, type, label, description, provenance, createdAt, updatedAt, degree}`，边 `{id, from, to, type, label, createdAt}`；
+- **去重**：dedup key = `type + '--' + slug(label)`，同名同类型只更新不重复；`slug()` 小写去标点、中文保留；
+- **解析**：`resolveId(graph, ref)` 同时支持按 `id` 或 `label` 定位节点，连边时容忍「用名字而非 id」；
+- **校验**：`linkNodes` 拒绝自连（`from === to`）与指向不存在的节点，返回 `{ok:false, error}` 而非抛错；
+- **检索**：`searchAtlas(graph, query, {limit})` 大小写不敏感子串匹配 label/description/type，按命中权重排序；
+- **统计**：`atlasStats(graph)` 返回节点数 / 边数 / 类型分布 / 孤立节点数；
+- **抽取**：`parseAtlasExtraction(text)` 鲁棒解析模型返回的图谱（容忍 ```json 围栏、前导 prose、{nodes,edges} 或裸数组），`applyExtraction(graph, ext)` 把抽取结果 merge 进现有图谱（复用 addNode/linkNodes 的全部去重与校验）；
+- **持久化**：`saveAtlas(graph, dir)` 写 `atlas.json.tmp` 再 `rename` 原子落盘；`loadAtlas(dir)` 解析失败回退 `emptyGraph()` 并重算 degree，损坏文件不会让服务崩；
+- 全部核心函数（除 load/save 走 IO）为纯函数，已用假数据单测覆盖 add / dedup / link 校验 / resolveId / search / remove / stats / parse / apply / save+load 往返（含损坏文件回退）。
+
+#### 8.9.7.2 `atlas` 工具（Agent 可调）
+
+`tools.js` 的 `TOOL_DEFS` 新增 `atlas`（`danger:false`，只写记忆目录），`dispatch` 路由到 `atlasTool(args, opts)`：
+
+- 四个 action：`add`（增实体节点）、`link`（连两个已有节点，参数 `edge_type` / `edge_label`）、`note`（记一条事实并可选挂到某实体）、`remove`（删节点及其相连边）；
+- 复用 `opts.memoryBase`（= MEMORY_DIR，由 `toolContext` 注入）决定图谱落盘目录；未配置时返回 `{ok:false, error:'记忆目录未配置'}`；
+- 每次写后 `saveAtlas` 原子落盘，返回带统计的可读结果。
+
+#### 8.9.7.3 图谱端点与「从对话构建」
+
+`server.js` 在 goals 路由后新增四条 `/api/atlas` 路由（无 key 时返回 400 友好提示）：
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/atlas` | 读取图谱 + `atlasStats` |
+| `POST /api/atlas` | action: `add` / `link` / `note` / `remove_node` / `remove_edge` |
+| `POST /api/atlas/extract` | 把最近一段对话交给模型抽取实体/关系，复用 `normalizeConfig` + `validateConfig` 校验与 `callModelStream` 流式调用，落盘用 `parseAtlasExtraction` + `applyExtraction` |
+| `DELETE /api/atlas` | 清空 nodes/edges 保留 meta（重置） |
+
+前端 `#atlas-modal` 面板：`atlasLayout`（轻量力导向，N>140 时 120 迭代否则 260）渲染 SVG；滚轮缩放、pointer 拖拽节点 / 平移画布、一键适配；侧栏表单手动加节点 / 连边；搜索框实时高亮；「从对话构建」按钮调 `/api/atlas/extract`（取当前对话最近 40 条消息）。
+
+#### 8.9.7.4 Studio 暗色视觉语言（默认）
+
+`styles.css` 的 `[data-theme="dark"]` 升级为 studio 调色板：更深的环境光径向背景（`body::before` fixed 层）、毛玻璃面板 `--glass: rgba(21,25,34,.62)`、单点点缀色 `--accent:#ff7a59` 与辅助蓝 `--accent-2:#6ea8ff`、发光阴影 `--glow` / `--glow-2`；明色主题同步补齐 `--accent-2` / `--glow` / `--glass`。`index.html` 的 `<html data-theme="dark">` 默认暗色，`getInitialTheme()` 仍尊重 localStorage 记忆与切换，避免首屏闪烁。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**217 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**228 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。
