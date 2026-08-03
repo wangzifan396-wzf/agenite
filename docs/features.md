@@ -19,7 +19,7 @@
 
 ## 2. 工具说明
 
-内置 23 个工具，分「安全（默认开启）」与「高危（需开启高级工具 + 审批）」两类（下表列出基础文件 / 命令 / 搜索类，另外还有联网搜索、记忆、计划、委派、并行委派、技能共 9 个工作流类工具，见第 8 节）。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
+内置 24 个工具，分「安全（默认开启）」与「高危（需开启高级工具 + 审批）」两类（下表列出基础文件 / 命令 / 搜索类，另外还有联网搜索、记忆、计划、委派、并行委派、技能共 10 个工作流类工具，见第 8 节）。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
 
 | 工具 | 类型 | 说明 |
 | --- | --- | --- |
@@ -246,9 +246,30 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 
 > 何时用哪个：`fanout` 处理**独立**子任务（一次性并行、最快）；`delegate` 处理**单个**聚焦子任务，或子任务之间有**依赖**（后一个需要前一个的输出）时必须串行。
 
+## 8.9 工作区语义检索 `codebase_search` + 技能自动沉淀（v0.10.0）
+
+把 v0.10.0 的两项能力合在一节——它们共同把"本地优先 + 自进化"的护城河又向前推了一步：
+
+### 8.9.1 工作区语义检索 `codebase_search`
+
+**完全本地、代码不出机器**的语义 + 关键词代码检索，对标 Cursor / Cline 的"理解你的代码库"能力，但零依赖、零遥测：
+
+- 当问题是关于**本项目**时（"X 在哪里实现"、"找做 Y 的代码"、"这个模块干嘛的"），Agent 调用 `codebase_search` 扫描整个工作区（自动跳过 `node_modules` / `.git` / `dist` / `.cache` 等，且严格限定在 workspace 沙箱内），把源码切成 ~900 字符、带 150 重叠的块；
+- **混合排序**：先按 CJK 感知的词频打分（`csTokenize` 把拉丁词与每个汉字都拆成 token，`lexicalScore` 累计命中数并轻微按长度归一）做廉价预筛；若本机有 Ollama 嵌入模型（`nomic-embed-text`，即 `embed` 注入），再用向量余弦**对词频 top-60 重排**得到更准的语义结果（嵌入失败自动回退词频）；
+- **防爆**：单次最多索引 600 个文件 / ~3MB 源码，超大仓库会截取前若干个文件并在结果里明示，避免卡死；纯函数 `csTokenize` / `chunkText` / `lexicalScore` 均可独立单测。
+
+### 8.9.2 技能自动沉淀（真正自进化）
+
+把 v0.8.0 的**手工** `save_skill` 升级成**自动**：
+
+- 任务跑完且 `result.stopped === 'done'` 时，若本次确实够复杂（`isComplexEnough`：工具调用 ≥3 或用了 ≥2 种工具），服务端会用一次 **tool-free** 的反思调用（`tools: []`，避免模型再调工具）把精简后的对话抄本（`compactTranscript`，脱敏、截到 6KB）交给模型，要求它返回结构化 JSON 决定是否值得沉淀成 `SKILL.md`；
+- `parseSkillDecision` 鲁棒解析（兼容 ```json 围栏与尾部噪声，任何解析失败都归入 `save:false`，绝不打断对话）；`save:true` 时调用 `saveSkill` 写入 `~/.agenite/memory/skills/<slug>.md`，并通过 `skill_auto` SSE 实时推给前端弹出"💡 自动沉淀技能"提示；
+- 设置里「技能自动沉淀」开关可开/关（默认关，因为每次会多一次模型调用）；**每一步失败都静默跳过**，保证聊天永不被技能抽取搞崩；
+- 纯函数（`countToolActivity` / `isComplexEnough` / `compactTranscript` / `buildSkillReflectionMessages` / `parseSkillDecision`）与编排函数 `autoSaveSkill` 全部可单测（保存 / 跳过 / 复杂度不足不调模型 / 模型失败 各有断言）。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `util`）无 DOM，**177 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 技能各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `util`）无 DOM，**194 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

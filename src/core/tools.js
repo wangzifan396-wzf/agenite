@@ -7,7 +7,7 @@ import { readFile, writeFile, readdir, mkdir, stat } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { resolve, sep, join, relative } from 'node:path';
+import { resolve, sep, join, relative, extname } from 'node:path';
 import os from 'node:os';
 import { sanitizeUrl } from './util.js';
 import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill } from './memory.js';
@@ -178,6 +178,20 @@ export const TOOL_DEFS = [
         limit: { type: 'number', description: 'Max hits (default 50).' }
       },
       required: ['pattern']
+    },
+    danger: false
+  },
+  {
+    name: 'codebase_search',
+    description: 'Semantic + keyword search over the WHOLE workspace (your project files), completely local — no code leaves the machine. Use it whenever the question is about THIS codebase/repo: "where is X implemented", "find code that does Y", "what does this module do". Returns the most relevant file paths with ranked snippets. Falls back to keyword ranking when no local embedding model (Ollama) is available.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What you are looking for, in natural language or keywords.' },
+        top_k: { type: 'number', description: 'How many results to return (default 6, max 12).' },
+        path: { type: 'string', description: 'Sub-directory to limit the search to (default: whole workspace).' }
+      },
+      required: ['query']
     },
     danger: false
   },
@@ -415,6 +429,8 @@ async function dispatch(name, args, opts) {
         return openPath(args.target, opts);
       case 'grep_files':
         return grepFiles(args, opts);
+      case 'codebase_search':
+        return codebaseSearch(args, opts);
       case 'apply_patch':
         return applyPatchTool(args, opts);
       case 'web_search':
@@ -1054,6 +1070,161 @@ export async function scanWorkspaceFiles({ root, limit = 2000, maxDepth = 8 } = 
   await walk(rootAbs, 0);
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
+}
+
+// ---- codebase semantic/keyword search (fully local, no code leaves machine) ----
+
+// Split text into matchable tokens: latin/number words, plus each CJK char on
+// its own (so "处理函数" matches "处理" / "函数" individually).
+export function csTokenize(text) {
+  const s = String(text || '');
+  const out = [];
+  const re = /[a-z0-9_À-ɏ]+|[一-鿿]/gi;
+  let m;
+  while ((m = re.exec(s))) out.push(m[0].toLowerCase());
+  return out;
+}
+
+// Break text into overlapping chunks so a match near a boundary is still found.
+export function chunkText(text, size = 900, overlap = 150) {
+  const t = String(text || '');
+  if (t.length <= size) return t ? [t] : [];
+  const step = Math.max(1, size - overlap);
+  const out = [];
+  for (let i = 0; i < t.length; i += step) {
+    out.push(t.slice(i, i + size));
+    if (i + size >= t.length) break;
+  }
+  return out;
+}
+
+// Lexical relevance of a query to a chunk: total token occurrences, lightly
+// normalized by chunk length so short dense hits still beat long sparse ones.
+export function lexicalScore(query, chunk) {
+  const qt = csTokenize(query);
+  if (!qt.length) return 0;
+  const low = String(chunk || '').toLowerCase();
+  let score = 0;
+  for (const tok of qt) {
+    let idx = 0;
+    let c = 0;
+    while ((idx = low.indexOf(tok, idx)) !== -1) { c++; idx += tok.length; }
+    score += c;
+  }
+  return score / Math.sqrt(low.length / 100 + 1);
+}
+
+const CODE_EXT = new Set([
+  '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.py', '.rb', '.go', '.rs',
+  '.java', '.c', '.h', '.cpp', '.cc', '.hpp', '.cs', '.php', '.swift',
+  '.kt', '.scala', '.sh', '.bash', '.zsh', '.ps1', '.sql', '.html', '.htm',
+  '.css', '.scss', '.less', '.json', '.yaml', '.yml', '.toml', '.md',
+  '.txt', '.vue', '.svelte', '.xml', '.ini', '.cfg', '.env', '.graphql',
+  '.r', '.m', '.pl', '.lua', '.dart', '.ex', '.exs', '.erl', '.hs'
+]);
+
+function cosineVec(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+export async function codebaseSearch(args, opts = {}) {
+  const query = String(args.query || '').trim();
+  if (!query) return { ok: false, error: '请提供查询内容 query' };
+  const topK = Math.min(Math.max(Number(args.top_k) || 6, 1), 12);
+  const root = resolveSafePath(args.path || '.', opts);
+  const embed = typeof opts.embed === 'function' ? opts.embed : null;
+
+  const MAX_FILES = 600;
+  const MAX_CHARS = 3_000_000; // ~3MB of source indexed per query
+  const files = [];
+  let totalChars = 0;
+  let truncated = false;
+
+  async function walk(dir, depth) {
+    if (files.length >= MAX_FILES || depth > 8) { truncated = true; return; }
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (files.length >= MAX_FILES) { truncated = true; return; }
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+        await walk(full, depth + 1);
+      } else if (e.isFile()) {
+        if (!CODE_EXT.has(extname(e.name).toLowerCase())) continue;
+        let size = 0;
+        try { size = (await stat(full)).size; } catch { continue; }
+        if (size > 400_000) continue; // skip huge generated files
+        if (totalChars + size > MAX_CHARS) { truncated = true; continue; }
+        totalChars += size;
+        files.push({ full, rel: relative(root, full).split(sep).join('/') });
+      }
+    }
+  }
+  await walk(root, 0);
+
+  if (!files.length) {
+    return { ok: true, content: `工作区（${displayPath(root, opts)}）内没有可检索的源代码文件。` };
+  }
+
+  // Index chunks and rank lexically first (cheap, always available).
+  const candidates = [];
+  for (const f of files) {
+    let text;
+    try { text = await readFile(f.full, 'utf8'); } catch { continue; }
+    const nameBoost = lexicalScore(query, f.rel.split('/').pop() || '') * 0.5;
+    for (const ch of chunkText(text)) {
+      const s = lexicalScore(query, ch);
+      if (s > 0) candidates.push({ rel: f.rel, text: ch, score: s + nameBoost });
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score);
+
+  let ranked = candidates.slice(0, topK);
+  // Optional semantic rerank: embed the query + the lexical top-N, rerank by
+  // cosine similarity. Only runs when a local embed fn (Ollama) is wired in.
+  if (embed && candidates.length) {
+    try {
+      const pool = candidates.slice(0, Math.min(60, candidates.length));
+      const qv = await embed(query);
+      if (qv && qv.length) {
+        const scored = [];
+        for (const c of pool) {
+          const cv = await embed(c.text);
+          if (!cv || !cv.length) continue;
+          scored.push({ ...c, score: cosineVec(qv, cv) });
+        }
+        scored.sort((a, b) => b.score - a.score);
+        if (scored.length) ranked = scored.slice(0, topK);
+      }
+    } catch {
+      // Embedding failed — keep lexical ranking.
+    }
+  }
+
+  if (!ranked.length) {
+    return { ok: true, content: `没有找到与「${query}」相关的代码（已扫描 ${files.length} 个文件）。` };
+  }
+  const sem = !!embed;
+  const body = ranked
+    .map((c, i) => {
+      const snip = c.text.replace(/\s+/g, ' ').trim().slice(0, 320);
+      const pct = sem ? Math.round(c.score * 100) + '%' : c.score.toFixed(1);
+      return `${i + 1}. ${c.rel}  (相关度 ${pct})\n   ${snip}`;
+    })
+    .join('\n\n');
+  const note = truncated
+    ? `\n\n（注：仓库较大，已截取前 ${files.length} 个文件 / ${Math.round(totalChars / 1024)}KB 建立索引）`
+    : '';
+  return {
+    ok: true,
+    content: `在工作区检索「${query}」，命中 ${ranked.length} 处（共扫描 ${files.length} 个文件）：\n\n${body}${note}`,
+    semantic: sem
+  };
 }
 
 async function editLocalFile(args, opts = {}) {

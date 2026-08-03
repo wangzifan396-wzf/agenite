@@ -737,6 +737,15 @@ async function runTurn(conv, opts = {}) {
         if (aMsg.content === '') md.innerHTML = THINKING;
       } else if (event === 'subagent') {
         handleSubAgentEvent(el, data);
+      } else if (event === 'skill_auto') {
+        if (data.saved) {
+          toast(`💡 自动沉淀技能：${data.name || ''}`);
+          refreshSkillsInfo();
+        } else if (data.error) {
+          toast(`技能沉淀失败：${data.error}`, 3200);
+        } else {
+          toast(`技能沉淀跳过：${data.reason || '暂不需要'}`);
+        }
       } else if (event === 'start') {
         ctxState.window = data.contextWindow || 0;
         ctxState.budget = data.budget || 0;
@@ -1083,6 +1092,7 @@ function fillSettings() {
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
   $('set-memoryEnabled').checked = config.memoryEnabled !== false;
+  $('set-autoSkill').checked = config.autoSkill === true;
   $('set-autoCompact').checked = config.autoCompact !== false;
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
@@ -1197,6 +1207,7 @@ function saveSettings() {
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
     memoryEnabled: $('set-memoryEnabled').checked,
+    autoSkill: $('set-autoSkill').checked,
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),

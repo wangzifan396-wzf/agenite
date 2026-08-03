@@ -1548,6 +1548,10 @@ kbd {
             <span><b>长期记忆</b><em>跨会话记住你的偏好与项目，写入 ~/.agenite/memory（可用 memory_* 工具读写）</em></span>
             <input id="set-memoryEnabled" type="checkbox" checked />
           </label>
+          <label class="switch-row">
+            <span><b>技能自动沉淀</b><em>复杂任务跑完后，让 agent 自动判断并沉淀成可复用技能（多一次反思调用，可在技能库查看）</em></span>
+            <input id="set-autoSkill" type="checkbox" />
+          </label>
           <div class="field">
             <span class="field-title">技能库（自进化）<em class="muted small">agent 把成功的工作流沉淀成可复用技能，越用越聪明</em></span>
             <div class="ws-box">
@@ -2091,6 +2095,9 @@ function defaultConfig() {
     planMode: false,
     memoryEnabled: true,
     dangerTools: false,
+    // Let the agent auto-crystallize complex workflows into reusable SKILL.md
+    // files after a run (opt-in: costs one extra tool-free model call).
+    autoSkill: false,
     // --- machine control ---
     approvalMode: 'ask',
     // Empty means "the folder Agenite was started from"; the server fills it in.
@@ -2926,6 +2933,15 @@ async function runTurn(conv, opts = {}) {
         if (aMsg.content === '') md.innerHTML = THINKING;
       } else if (event === 'subagent') {
         handleSubAgentEvent(el, data);
+      } else if (event === 'skill_auto') {
+        if (data.saved) {
+          toast(`💡 自动沉淀技能：${data.name || ''}`);
+          refreshSkillsInfo();
+        } else if (data.error) {
+          toast(`技能沉淀失败：${data.error}`, 3200);
+        } else {
+          toast(`技能沉淀跳过：${data.reason || '暂不需要'}`);
+        }
       } else if (event === 'start') {
         ctxState.window = data.contextWindow || 0;
         ctxState.budget = data.budget || 0;
@@ -3272,6 +3288,7 @@ function fillSettings() {
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
   $('set-memoryEnabled').checked = config.memoryEnabled !== false;
+  $('set-autoSkill').checked = config.autoSkill === true;
   $('set-autoCompact').checked = config.autoCompact !== false;
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
@@ -3386,6 +3403,7 @@ function saveSettings() {
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,
     memoryEnabled: $('set-memoryEnabled').checked,
+    autoSkill: $('set-autoSkill').checked,
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),

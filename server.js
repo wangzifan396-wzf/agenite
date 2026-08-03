@@ -20,6 +20,7 @@ import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } from './src/core/sessions.js';
 import { defaultMemoryDir, injectMemory, injectSkills, listSkills } from './src/core/memory.js';
 import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
+import { autoSaveSkill } from './src/core/autoskill.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -562,6 +563,26 @@ async function handleChat(req, res) {
       summarize,
       toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn }
     });
+
+    // Self-evolving skills, part 2: after a successful complex run, ask the
+    // model once (tool-free) whether to crystallize the workflow into a SKILL.
+    // Runs before 'end' so the client sees the skill_auto event in-stream.
+    if (config.autoSkill && result.stopped === 'done') {
+      const reflect = (msgs, o) =>
+        callModelStream({
+          config: { ...config, maxTokens: 800, temperature: 0.2 },
+          messages: msgs,
+          tools: [],
+          onDelta: o && o.onDelta,
+          signal: ac.signal
+        });
+      try {
+        await autoSaveSkill({ messages, callModel: reflect, sse, memoryBase: MEMORY_DIR });
+      } catch {
+        // Never let skill extraction break a finished chat.
+      }
+    }
+
     sse('end', { stopped: result.stopped, turns: result.turns, historyTokens: totalTokens(messages), budget });
     res.end();
   } catch (e) {

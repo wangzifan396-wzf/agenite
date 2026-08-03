@@ -107,6 +107,9 @@ export function defaultConfig() {
     planMode: false,
     memoryEnabled: true,
     dangerTools: false,
+    // Let the agent auto-crystallize complex workflows into reusable SKILL.md
+    // files after a run (opt-in: costs one extra tool-free model call).
+    autoSkill: false,
     // --- machine control ---
     approvalMode: 'ask',
     // Empty means "the folder Agenite was started from"; the server fills it in.
