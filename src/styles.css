@@ -1492,6 +1492,41 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .tchip.chip-bad b { color: var(--danger, #ff5d5d); }
 .trace-loop { padding: 9px 12px; border-radius: 10px; background: rgba(255, 180, 60, .12); border: 1px solid rgba(255, 180, 60, .4); color: #ffcf7a; font-size: 12.5px; }
 .trace-loop code { color: #ffe0a3; }
+
+/* ── Run self-check (diagnosis) ── lives in the trace modal ── */
+.trace-diagnosis { padding: 9px 12px; border-radius: 10px; font-size: 12.5px; border: 1px solid var(--border); background: var(--panel-2); }
+.trace-diagnosis.sev-ok { border-color: rgba(80, 200, 120, .4); background: rgba(80, 200, 120, .1); color: #8fe3a8; }
+.trace-diagnosis.sev-warn { border-color: rgba(255, 180, 60, .4); background: rgba(255, 180, 60, .12); color: #ffcf7a; }
+.trace-diagnosis.sev-bad { border-color: rgba(255, 93, 93, .45); background: rgba(255, 93, 93, .12); color: #ff9b9b; }
+.td-head { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+.td-ico { font-size: 13px; }
+.td-title { flex: 1; }
+.td-count { font-size: 10.5px; opacity: .8; font-weight: 500; }
+.td-item { display: flex; gap: 8px; margin-top: 7px; }
+.tdi-ico { font-size: 12px; margin-top: 1px; }
+.td-item.fb .tdi-ico { color: #ff9b9b; }
+.td-item.fw .tdi-ico { color: #ffcf7a; }
+.tdi-title { font-weight: 500; color: var(--text); }
+.tdi-detail { font-size: 11.5px; color: var(--text-2); margin-top: 2px; line-height: 1.45; }
+.trace-diagnosis.sev-ok .td-title, .trace-diagnosis.sev-ok .td-ico { color: #8fe3a8; }
+
+/* ── Run self-check card (in the chat, after the reply) ── */
+.selfcheck { margin-top: 10px; border-radius: 12px; border: 1px solid var(--border); overflow: hidden; background: var(--panel-2); }
+.selfcheck .sc-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-weight: 600; font-size: 13px; }
+.selfcheck .sc-ico { font-size: 14px; }
+.selfcheck .sc-title { flex: 1; }
+.selfcheck .sc-metrics { padding: 0 12px 8px; font-size: 11.5px; color: var(--text-2); }
+.selfcheck.sev-ok .sc-head { background: rgba(80, 200, 120, .12); color: #8fe3a8; }
+.selfcheck.sev-warn .sc-head { background: rgba(255, 180, 60, .14); color: #ffcf7a; }
+.selfcheck.sev-bad .sc-head { background: rgba(255, 93, 93, .14); color: #ff9b9b; }
+.selfcheck .sc-findings { padding: 4px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+.sc-find { display: flex; gap: 8px; align-items: flex-start; }
+.scf-ico { font-size: 12px; margin-top: 1px; }
+.sc-find.fb .scf-ico { color: #ff9b9b; }
+.sc-find.fw .scf-ico { color: #ffcf7a; }
+.scf-title { font-weight: 500; font-size: 12.5px; color: var(--text); }
+.scf-detail { font-size: 11.5px; color: var(--text-2); margin-top: 2px; line-height: 1.5; }
+.selfcheck .sc-ok-note { padding: 0 12px 10px; font-size: 11.5px; color: var(--text-2); }
 .trace-timeline { overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 10px 12px; flex: 1; }
 .tstep { border-left: 2px solid var(--border); padding: 6px 0 6px 10px; margin: 2px 0; }
 .tstep:last-child { border-bottom: none; }

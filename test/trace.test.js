@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import {
   newTrace, addStep, classifyTool, detectLoops, detectConsecutiveLoops,
-  traceSummary, saveTrace, loadTrace, deleteTrace, pruneTraces
+  traceSummary, saveTrace, loadTrace, deleteTrace, pruneTraces, diagnoseTrace, traceCost
 } from '../src/core/trace.js';
 
 function tempDir() {
@@ -140,4 +140,57 @@ test('deleteTrace removes the file', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('traceCost normalises number and object shapes', () => {
+  assert.equal(traceCost({ cost: 0.5 }), 0.5);
+  assert.equal(traceCost({ cost: { amount: 0.25, currency: 'USD' } }), 0.25);
+  assert.equal(traceCost({}), 0);
+  assert.equal(traceCost({ cost: 'nope' }), 0);
+});
+
+test('diagnoseTrace flags an identical-call loop as bad', () => {
+  const t = newTrace();
+  const same = { kind: 'tool', name: 'read_file', data: { args: { path: 'a.txt' } } };
+  for (let i = 0; i < 5; i++) addStep(t, same);
+  t.stopped = 'guardrail';
+  t.turns = 5;
+  const d = diagnoseTrace(t, { loopThreshold: 6 });
+  assert.equal(d.severity, 'bad');
+  assert.equal(d.healthy, false);
+  assert.ok(d.consecutiveLoop && d.consecutiveLoop.count === 5);
+  const bad = d.findings.find((f) => f.level === 'bad');
+  assert.ok(bad, 'should have a bad finding');
+  assert.ok(bad.title.includes('空转'));
+});
+
+test('diagnoseTrace is ok for a clean trace', () => {
+  const t = newTrace();
+  addStep(t, { kind: 'turn', name: '推理' });
+  addStep(t, { kind: 'tool', name: 'read_file', data: { args: { path: 'a' } } });
+  addStep(t, { kind: 'tool', name: 'write_file', data: { args: { path: 'b' } } });
+  const d = diagnoseTrace(t);
+  assert.equal(d.severity, 'ok');
+  assert.equal(d.healthy, true);
+  assert.equal(d.findings.length, 0);
+});
+
+test('diagnoseTrace warns on heavy but non-looped reuse', () => {
+  const t = newTrace();
+  // 7 distinct-arg calls to the same tool: counts as heavy, but not consecutive
+  for (let i = 0; i < 7; i++) addStep(t, { kind: 'tool', name: 'web_search', data: { args: { q: 'x' + i } } });
+  const d = diagnoseTrace(t, { loopThreshold: 6 });
+  assert.equal(d.severity, 'warn');
+  assert.ok(d.findings.some((f) => f.title.includes('web_search')));
+});
+
+test('diagnoseTrace warns when over the budget cap', () => {
+  const t = newTrace();
+  addStep(t, { kind: 'tool', name: 'read_file', data: { args: { path: 'a' } } });
+  t.cost = 0.05;
+  const d = diagnoseTrace(t, { maxCostUSD: 0.01 });
+  assert.equal(d.severity, 'warn');
+  assert.ok(d.findings.some((f) => f.title.includes('预算')));
+  // without a cap, the same cost is fine
+  assert.equal(diagnoseTrace(t, { maxCostUSD: 0 }).severity, 'ok');
 });

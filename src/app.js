@@ -400,6 +400,7 @@ function buildMessageEl(m, index) {
   el.querySelector('.md').innerHTML = renderMarkdown(m.content || '') || '';
   if (Array.isArray(m.toolCalls)) for (const t of m.toolCalls) upsertToolCard(el, t);
   if (Array.isArray(m.notices)) for (const n of m.notices) addNotice(el, n);
+  if (m.selfCheck) renderSelfCheck(el, m.selfCheck);
   renderMsgUsage(el, m);
   if (m.canContinue) addContinueBar(el);
   if (typeof index === 'number') {
@@ -429,6 +430,59 @@ function addNotice(el, n) {
   if (n.detail) div.title = n.detail;
   box.appendChild(div);
   return div;
+}
+
+// A graded self-check report card appended to an assistant reply. Built from
+// the server's diagnoseTrace payload (ok / warn / bad). Persisted on the
+// message as `selfCheck` so it re-renders when the conversation is rebuilt.
+function renderSelfCheck(el, d) {
+  const bubble = el.querySelector('.bubble');
+  if (!bubble) return;
+  let card = el.querySelector('.selfcheck');
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'selfcheck';
+    bubble.appendChild(card);
+  }
+  const sev = (d && d.severity) || 'ok';
+  const SEV = {
+    ok: { cls: 'sev-ok', ico: '✓', label: '运行正常' },
+    warn: { cls: 'sev-warn', ico: '⚠', label: '需要关注' },
+    bad: { cls: 'sev-bad', ico: '✕', label: '发现问题' }
+  }[sev] || { cls: 'sev-ok', ico: '✓', label: '运行正常' };
+
+  const cost = (d && typeof d.cost === 'number') ? d.cost : 0;
+  const mins = d && d.durationMs ? Math.max(1, Math.round(d.durationMs / 1000)) : 0;
+  const metrics = [
+    `工具调用 ${d.tools || 0}`,
+    `子智能体 ${d.subagents || 0}`,
+    `失败 ${d.errors || 0}`,
+    `花费 $${cost.toFixed(4)}`,
+    `轮次 ${d.turns || 0}`,
+    mins ? `${mins}s` : ''
+  ].filter(Boolean).join(' · ');
+
+  let html = `<div class="sc-head ${SEV.cls}"><span class="sc-ico">${SEV.ico}</span>` +
+    `<span class="sc-title">运行自检 · ${SEV.label}</span></div>` +
+    `<div class="sc-metrics">${escapeHtml(metrics)}</div>`;
+
+  const findings = (d && d.findings) || [];
+  if (findings.length) {
+    html += '<div class="sc-findings">';
+    for (const f of findings) {
+      const fi = f.level === 'bad' ? '✕' : '⚠';
+      html += `<div class="sc-find ${f.level === 'bad' ? 'fb' : 'fw'}"><span class="scf-ico">${fi}</span>` +
+        `<div><div class="scf-title">${escapeHtml(f.title)}</div>` +
+        (f.detail ? `<div class="scf-detail">${escapeHtml(f.detail)}</div>` : '') + '</div></div>';
+    }
+    html += '</div>';
+  } else {
+    html += '<div class="sc-ok-note">未检测到空转、高频失败或超预算等异常，本次运行健康。</div>';
+  }
+
+  card.className = 'selfcheck ' + SEV.cls;
+  card.innerHTML = html;
+  return card;
 }
 
 // Shown when the agent stopped only because it hit the turn ceiling. Without
@@ -777,6 +831,15 @@ async function runTurn(conv, opts = {}) {
       } else if (event === 'error') {
         aMsg.content += (aMsg.content ? '\n\n' : '') + '⚠️ ' + (data.message || '出错了');
         md.innerHTML = renderMarkdown(aMsg.content);
+      } else if (event === 'guardrail') {
+        // The server hit the interactive cost cap and forced a stop. Toast it so
+        // the user knows why the run ended early, not just that it did.
+        toast('🛡️ 预算护栏触发：已达 $' + (Number(data.max) || 0).toFixed(2) + ' 上限，已强制停止并让模型总结', 4500);
+      } else if (event === 'diagnosis') {
+        // Graded self-check for this run. Persist on the message so it survives
+        // re-renders, and render it inline as a report card.
+        aMsg.selfCheck = data;
+        renderSelfCheck(el, data);
       } else if (event === 'done' || event === 'end') {
         md.innerHTML = renderMarkdown(aMsg.content) || '<span class="muted small">（没有文本输出）</span>';
         if (event === 'done' && data.canContinue) {
@@ -1107,6 +1170,7 @@ function fillSettings() {
   $('set-smartCompact').checked = config.smartCompact !== false;
   $('set-maxTurns').value = config.maxTurns || 20;
   $('set-contextWindow').value = config.contextWindow || 0;
+  $('set-maxCostUSD').value = (config.budget && Number(config.budget.maxCostUSD) > 0) ? config.budget.maxCostUSD : 0;
   $('set-priceIn').value = config.priceIn || 0;
   $('set-priceOut').value = config.priceOut || 0;
   $('set-priceCurrency').value = config.priceCurrency || 'CNY';
@@ -1271,6 +1335,9 @@ function saveSettings() {
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
+    // Budget guardrail: 0 = use the server default ($3) for interactive chat.
+    // Stored under `budget` (what the server reads); goals carry their own rails.
+    budget: { maxCostUSD: clampNum($('set-maxCostUSD').value, 0, 10000, 0) },
     priceIn: Math.max(0, Number($('set-priceIn').value) || 0),
     priceOut: Math.max(0, Number($('set-priceOut').value) || 0),
     priceCurrency: $('set-priceCurrency').value || 'CNY',
@@ -1749,7 +1816,11 @@ async function assignGoal() {
     if (Number.isFinite(mc) && mc > 0) budget.maxCostUSD = mc;
     if (Number.isFinite(rt) && rt >= 0) budget.retries = rt;
     const body = { goal, title, config: Object.assign({}, config) };
+    // A goal always uses its OWN rails (resolveBudget in goals.js). Never let the
+    // interactive-chat budget (e.g. the $3 default) leak in and silently cap a
+    // delegated goal — so strip it when the goal form is left empty.
     if (Object.keys(budget).length) body.config.budget = budget;
+    else delete body.config.budget;
     const r = await fetch('/api/goals', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2287,6 +2358,8 @@ function traceOnEvent(type, payload) {
     liveTrace.finishedAt = Date.now();
     liveTrace.stopped = payload?.stopped || null;
     liveTrace.turns = payload?.turns || 0;
+  } else if (type === 'diagnosis') {
+    liveTrace.diagnosis = payload || null;
   }
   // Re-render the timeline if the panel is open (skip the high-frequency deltas).
   if (type !== 'delta' && $('trace-modal') && !$('trace-modal').classList.contains('hidden') && !historyTrace) renderTrace();
@@ -2381,6 +2454,32 @@ function renderTrace() {
   } else {
     loop.classList.add('hidden');
   }
+  // Graded self-check (ok / warn / bad). Surfaced from the server's diagnoseTrace
+  // so the user sees WHAT to worry about, not just that the run happened.
+  const diagEl = $('trace-diagnosis');
+  const diag = trace.diagnosis;
+  if (diag && diag.severity && diag.severity !== 'ok') {
+    diagEl.classList.remove('hidden');
+    const sevCls = diag.severity === 'bad' ? 'sev-bad' : 'sev-warn';
+    const sevIco = diag.severity === 'bad' ? '✕' : '⚠';
+    const sevLabel = diag.severity === 'bad' ? '发现问题' : '需要关注';
+    const items = (diag.findings || []).map((f) => {
+      const fi = f.level === 'bad' ? '✕' : '⚠';
+      return `<div class="td-item ${f.level === 'bad' ? 'fb' : 'fw'}"><span class="tdi-ico">${fi}</span>` +
+        `<div><div class="tdi-title">${escapeHtml(f.title)}</div>` +
+        (f.detail ? `<div class="tdi-detail">${escapeHtml(f.detail)}</div>` : '') + '</div></div>';
+    }).join('');
+    diagEl.className = 'trace-diagnosis ' + sevCls;
+    diagEl.innerHTML = `<div class="td-head"><span class="td-ico">${sevIco}</span><span class="td-title">运行自检 · ${sevLabel}</span>` +
+      `<span class="td-count">${diag.findings.length} 项</span></div>${items}`;
+  } else if (diag && diag.severity === 'ok') {
+    diagEl.classList.remove('hidden');
+    diagEl.className = 'trace-diagnosis sev-ok';
+    diagEl.innerHTML = `<div class="td-head"><span class="td-ico">✓</span><span class="td-title">运行自检 · 正常</span>` +
+      `<span class="td-count">未检测到异常</span></div>`;
+  } else {
+    diagEl.classList.add('hidden');
+  }
   const depths = traceDepth(trace);
   tl.innerHTML = trace.steps.length
     ? trace.steps.map((s) => traceStepHtml(s, depths[s.id])).join('')
@@ -2427,6 +2526,7 @@ async function openHistoryTrace(runId) {
     const r = await fetch('/api/traces/' + encodeURIComponent(runId)).then((x) => x.json());
     if (!r.ok) return;
     historyTrace = r.trace;
+    historyTrace.diagnosis = r.diagnosis || null;
     $('trace-title').textContent = '回放：' + (r.trace.title || runId);
     renderTrace();
   } catch { /* ignore */ }

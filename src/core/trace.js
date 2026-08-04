@@ -162,6 +162,104 @@ export function traceSummary(trace) {
   };
 }
 
+// Normalise the many shapes `trace.cost` can take into a plain number.
+// The server folds the live `costOf(...)` object (which has `.amount`) into
+// the trace; older/inline callers may store a number directly.
+export function traceCost(trace) {
+  const c = trace && trace.cost;
+  if (typeof c === 'number') return c;
+  if (c && typeof c.amount === 'number') return c.amount;
+  return 0;
+}
+
+// Turn a finished trace into a graded self-check report. A healthy HTTP 200
+// can still hide a stuck loop, repeated tool failures, or a runaway bill —
+// this is the "observability -> actionable" step: it tells the user *what* to
+// worry about, not just *that* the run happened.
+//
+//   severity 'bad'  -> something is clearly wrong (e.g. an identical-call loop)
+//   severity 'warn' -> smells off (heavy tool reuse, many failures, over budget)
+//   severity 'ok'   -> nothing flagged
+//
+// opts: { loopThreshold=6, errorThreshold=3, maxCostUSD=0 }
+export function diagnoseTrace(trace, opts = {}) {
+  const loopThreshold = Number(opts.loopThreshold) > 0 ? Number(opts.loopThreshold) : 6;
+  const errorThreshold = Number(opts.errorThreshold) > 0 ? Number(opts.errorThreshold) : 3;
+  const maxCostUSD = Number(opts.maxCostUSD) > 0 ? Number(opts.maxCostUSD) : 0;
+
+  const consecutive = detectConsecutiveLoops(trace);
+  const loops = detectLoops(trace);
+  const s = trace.stats || emptyStats();
+  const cost = traceCost(trace);
+
+  const findings = [];
+
+  // 1. Identical back-to-back calls = the classic "stuck burning budget" bug.
+  if (consecutive) {
+    const args = consecutive.args && Object.keys(consecutive.args).length
+      ? JSON.stringify(consecutive.args).slice(0, 120)
+      : '';
+    findings.push({
+      level: 'bad',
+      title: '检测到空转 / 死循环',
+      detail:
+        `工具「${consecutive.name}」以完全相同的参数被连续调用了 ${consecutive.count} 次` +
+        (args ? `（${args}…）` : '') +
+        `，智能体很可能卡在同一操作上反复重试，正在白白消耗预算与时间。建议检查该工具的前置条件或给模型更明确的终止指令。`
+    });
+  }
+
+  // 2. A tool called many times total (excluding the one already flagged as a
+  //    consecutive loop, to avoid double-reporting the same smell).
+  const heavy = loops.filter((l) => l.count >= loopThreshold && (!consecutive || l.name !== consecutive.name));
+  const KIND_LABEL = { memory: '记忆操作', mcp: 'MCP 工具', tool: '工具' };
+  for (const l of heavy) {
+    findings.push({
+      level: 'warn',
+      title: `工具「${l.name}」被高频调用 ${l.count} 次`,
+      detail: `累计调用 ${l.count} 次（类别：${KIND_LABEL[l.kind] || '工具'}）。注意是否过度依赖、重复执行或未能利用缓存结果。`
+    });
+  }
+
+  // 3. Many failed tool calls.
+  if (s.errors >= errorThreshold) {
+    findings.push({
+      level: 'warn',
+      title: `工具调用失败较多（${s.errors} 次）`,
+      detail: '本次运行中有多次工具调用出错，建议检查工具参数、工作区权限或外部环境（如网络 / API）。'
+    });
+  }
+
+  // 4. Over the configured budget.
+  if (maxCostUSD && cost > maxCostUSD) {
+    findings.push({
+      level: 'warn',
+      title: '超出预算护栏',
+      detail: `本轮花费约 $${cost.toFixed(4)}，超出了设定的 $${maxCostUSD.toFixed(2)} 上限（预算护栏已尝试在超限时强制停止）。`
+    });
+  }
+
+  let severity = 'ok';
+  if (findings.some((f) => f.level === 'bad')) severity = 'bad';
+  else if (findings.length) severity = 'warn';
+
+  return {
+    severity,
+    healthy: severity === 'ok',
+    findings,
+    consecutiveLoop: consecutive,
+    loops,
+    errors: s.errors,
+    tools: s.tools,
+    subagents: s.subagents,
+    compactions: s.compactions,
+    memoryOps: s.memoryOps,
+    cost,
+    turns: trace.turns || 0,
+    durationMs: (trace.finishedAt && trace.startedAt) ? trace.finishedAt - trace.startedAt : 0
+  };
+}
+
 // --- persistence (injected directory) ---
 
 export async function listTraces(dir = TRACES_DIR) {

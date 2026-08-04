@@ -53,6 +53,10 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   - 🔍 **Typed spans**: model turns (reasoning), tool-call spans (name / args / result / latency / ok·error), sub-agent handoffs (nested), and context compactions (state transitions) — the four pillars from the Braintrust observability model.
   - ⚠️ **Loop detection**: automatically flags repeated identical tool calls (e.g. 5× `web_search` with the same args) — the classic "agent stuck burning budget" signal — and surfaces it as a warning chip.
   - 💾 **Local-first & private**: every run is persisted to `~/.agenite/traces/` (atomic write, capped at 200, pruned oldest-first), fully offline and auditable. Adds `src/core/trace.js` (pure capture + `detectLoops` / `detectConsecutiveLoops`) + `GET /api/traces`, `GET /api/traces/:id`, `DELETE /api/traces/:id` — **zero architectural debt**, and pairs with the Atlas graph and the local-first privacy stance that sets Agenite apart from cloud-only agents.
+- **Run self-check + budget guardrail (v0.18.0)**: observability is only step one — the point is *intervention*. The 2026 differentiator is not "can you observe" but "can you stop it before it runs away". Turns the v0.17 trace into an actual guardrail:
+  - 🛡️ **Budget guardrail (cost circuit-breaker)**: when an interactive chat's cumulative spend crosses a cap (configurable in Settings, default $3), Agenite injects a "stop and summarize" instruction and lets the model produce one final wrap-up instead of burning money in a loop. Independent of the autonomous-goal budget rails.
+  - 🩺 **Run self-check report**: at the end of every run, `diagnoseTrace` grades the trace **ok / warn / bad** — an identical-args loop (stuck burning budget) is flagged *bad* and called out by name; heavy tool reuse, repeated failures, or over-budget are *warn*. The report appears both as a self-check card under the assistant reply and inside the "执行轨迹" panel, so a "200 but broken inside" run has nowhere to hide.
+  - 🧩 Pure `diagnoseTrace` + `traceCost` added to `src/core/trace.js` (reusing `detectConsecutiveLoops`); guardrail logic lives in the `runAgent` loop in `src/core/agent.js` (graceful stop + `guardrail` event); the server adds a `diagnosis` SSE event and a default-budget injection — **zero architectural debt**.
 - **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 26 built-in tools (plus whatever MCP servers you connect):
   - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `codebase_search` (semantic search the project), `memory_recall`, `memory_save`, `memory_log`, `atlas` (memory graph), `plan`, `delegate`, `fanout`, `save_skill`, `skill_recall`
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `run_code` (local code interpreter), `apply_patch` (multi-file unified diff)
@@ -87,7 +91,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (250, via node:test)
+npm test       # run core unit tests (257, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

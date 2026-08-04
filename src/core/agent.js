@@ -53,8 +53,48 @@ export async function runAgent({
   });
   const autoCompact = config.autoCompact !== false;
 
+  // Cost guardrail (interactive budget): when cumulative spend crosses the cap,
+  // stop the agent gracefully — inject a "stop and summarize" instruction and
+  // let the model produce one final answer instead of silently burning budget
+  // in a loop. Goals carry their own rails (goals.js); this only guards the
+  // interactive chat turn. Off when maxCostUSD <= 0.
+  const guardCost = (config.budget && Number(config.budget.maxCostUSD) > 0)
+    ? Number(config.budget.maxCostUSD) : 0;
+  let guardNoted = false;
+
   let turn = 0;
   for (; turn < limit; turn++) {
+    // ── Budget guardrail ──
+    // Check AFTER each turn's spend has been folded into `usage`. The first
+    // iteration always runs (usage is still empty then), so we never abort
+    // before the model has spoken at least once.
+    const spend = costOf(usage, price).amount;
+    if (guardCost && spend >= guardCost) {
+      if (!guardNoted) {
+        guardNoted = true;
+        const c = costOf(usage, price);
+        const sym = c.currency === 'USD' ? '$' : '¥';
+        onEvent('guardrail', { reason: 'cost', cost: c.amount, max: guardCost, currency: c.currency || 'CNY' });
+        messages.push({
+          role: 'system',
+          content:
+            `⚠️ 预算护栏触发：本轮已花费约 ${sym}${c.amount.toFixed(4)}，已达上限 ${sym}${guardCost.toFixed(2)}。` +
+            `请立即停止任何新的工具调用，并输出最终总结（做了什么、改了哪些文件、遗留问题）。`
+        });
+      }
+      // One final summary turn. We ignore any tool_calls it returns — the
+      // instruction above already told the model to stop; if it still asks for
+      // tools we end the run anyway rather than keep spending.
+      const r = await callModel(messages, { onDelta: (t) => onEvent('delta', t) });
+      if (r.usage) { addUsage(usage, r.usage); onEvent('usage', { turn: turn + 1, ...usage, cost: costOf(usage, price) }); }
+      const finalMsg = { role: 'assistant', content: r.content || '' };
+      messages.push(finalMsg);
+      onEvent('assistant', finalMsg);
+      const payload = finish('guardrail', turn + 1, usage, price, limit);
+      onEvent('done', payload);
+      return { messages, ...payload };
+    }
+
     if (autoCompact) {
       const before = totalTokens(messages);
       if (before > budget) {

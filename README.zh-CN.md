@@ -53,6 +53,10 @@
   - 🔍 **带类型 span**：模型推理步、工具调用 span（名称 / 参数 / 结果 / 耗时 / 成败）、子智能体交接（嵌套）、上下文压缩（状态转移）——即 Braintrust 可观测模型里的四根支柱。
   - ⚠️ **循环检测**：自动标出「参数完全相同的重复工具调用」（比如同一个 `web_search` 连刷 5 次）——典型的「Agent 空转烧预算」信号，并以警告条直接点名。
   - 💾 **本地优先 / 隐私**：每次运行落盘到 `~/.agenite/traces/`（原子写、上限 200、超量删最旧），完全离线、可审计。新增 `src/core/trace.js`（纯捕获 + `detectLoops` / `detectConsecutiveLoops`）+ `GET /api/traces`、`GET /api/traces/:id`、`DELETE /api/traces/:id`，**零架构债**；与 Atlas 图谱、以及「本地优先、不上云」的差异化定位一脉相承。
+- **运行自检 + 预算护栏（v0.18.0）**：可观测只是第一步，关键是**可干预**——2026 年 Agent 的竞争点已从「能不能观测」转向「能不能在失控前拦住」。把 v0.17 的轨迹真正变成护栏：
+  - 🛡️ **预算护栏（成本熔断）**：交互式对话累计花费达到上限（设置里可调，默认 $3）时，自动注入「停止并总结」指令，让模型做最后一次收尾，而不是任由它在死循环里烧钱。与「自治目标」已有的预算护栏互不干扰。
+  - 🩺 **运行自检报告**：每次运行结束，`diagnoseTrace` 把轨迹打成 **ok / warn / bad** 三级体检报告——空转死循环（参数完全相同的重复调用）= bad 重点点名；工具高频复用、多次失败、超预算 = warn。报告既作为聊天里的「自检卡片」贴在当前回复下方，也显示在「执行轨迹」面板里，让「返回 200 但藏着问题」无所遁形。
+  - 🧩 纯函数 `diagnoseTrace` + `traceCost` 新增于 `src/core/trace.js`，复用既有 `detectConsecutiveLoops`；护栏逻辑落在 `src/core/agent.js` 的 `runAgent` 循环里（成本达标即优雅收尾 + 发 `guardrail` 事件），服务端新增 `diagnosis` SSE 事件与默认预算注入，**零架构债**。
 - **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **26 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
@@ -96,7 +100,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（250 个，node:test）
+npm test       # 跑核心逻辑单元测试（257 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

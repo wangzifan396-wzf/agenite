@@ -54,3 +54,45 @@ test('agent loop returns immediately when no tool call', async () => {
   assert.equal(res.stopped, 'done');
   assert.equal(calls, 1);
 });
+
+test('agent loop triggers cost guardrail and stops gracefully', async () => {
+  const events = [];
+  const messages = [{ role: 'user', content: 'loop me' }];
+  let n = 0;
+  // gpt-4o-mini pricing: in $0.15 / out $0.6 per 1M. 1000+1000 tokens ~= $0.00075,
+  // which exceeds the tiny $0.0001 cap, so the guardrail should trip after turn 1.
+  const callModel = async (msgs, { onDelta }) => {
+    n++;
+    if (n === 1) {
+      return {
+        content: '',
+        toolCalls: [{ id: 't1', name: 'calculator', args: { a: 1 } }],
+        usage: { prompt_tokens: 1000, completion_tokens: 1000 }
+      };
+    }
+    onDelta('stopped');
+    return { content: '已触发预算护栏并汇总。', toolCalls: [], usage: { prompt_tokens: 10, completion_tokens: 10 } };
+  };
+  const executeTool = async () => ({ ok: true, content: '1' });
+  const res = await runAgent({
+    messages, callModel, executeTool,
+    config: { model: 'gpt-4o-mini', budget: { maxCostUSD: 0.0001 } },
+    onEvent: (t, p) => events.push([t, p])
+  });
+  assert.equal(res.stopped, 'guardrail', 'should stop with the guardrail reason');
+  assert.ok(events.some(([t, p]) => t === 'guardrail' && p.reason === 'cost'), 'should emit a guardrail event');
+  const last = [...messages].reverse().find((m) => m.role === 'assistant');
+  assert.equal(last.tool_calls, undefined, 'final summary has no tool calls');
+});
+
+test('agent loop ignores cost guardrail when cap is 0', async () => {
+  // With maxCostUSD <= 0 the guardrail is off; a loop of tool calls should fall
+  // through to the normal maxTurns stop, not the guardrail stop.
+  const messages = [{ role: 'user', content: 'loop' }];
+  let n = 0;
+  const callModel = async () => { n++; return { content: '', toolCalls: [{ id: 'x', name: 'calculator', args: {} }], usage: { prompt_tokens: 1000, completion_tokens: 1000 } }; };
+  const executeTool = async () => ({ ok: true, content: 'n' });
+  const res = await runAgent({ messages, callModel, executeTool, config: { model: 'gpt-4o-mini', budget: { maxCostUSD: 0 } }, maxTurns: 2 });
+  assert.equal(res.stopped, 'max_turns');
+  assert.ok(!res.stopped || res.stopped !== 'guardrail');
+});

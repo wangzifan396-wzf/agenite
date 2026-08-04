@@ -412,9 +412,27 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 
 侧栏「执行轨迹」打开 `#trace-modal`：标题 + 统计 chips（步数 / 工具 / 子智能体 / 错误 / 记忆 / 耗时 / 成本 / 轮次 / 状态）+ 循环警告条 + `#trace-timeline`（按 kind 图标、按 depth 缩进、工具步可展开参数/结果、推理步显示内容、压缩步显示 token 前后）+ 右侧 `#trace-history`（历史运行列表，点开回放、可删除）。**复用聊天同一路 SSE 事件流**在 `app.js` 内维护 `liveTrace`，零额外服务端接线；`runTurn` 开始时 `traceReset`，SSE 回调里 `traceOnEvent` 实时喂入并就地重渲染。
 
+### 8.9.11 运行自检 + 预算护栏（v0.18.0）
+
+可观测只是第一步，关键是**可干预**——把 v0.17 的轨迹从「事后回放」升级为「事前/事中拦截」。2026 年 Agent 的竞争点已从「能不能观测」转向「能不能在失控前拦住」。
+
+#### 8.9.11.1 预算护栏（成本熔断）
+
+`src/core/agent.js` 的 `runAgent` 循环内新增成本护栏：每轮结束后累计 `costOf(usage, price).amount`，一旦达到 `config.budget.maxCostUSD`（交互式对话默认 $3，可在设置里调；自治目标走各自独立的 `resolveBudget`），即注入一条「停止并总结」系统指令，再做最后一次模型调用收尾，并以 `stopped='guardrail'` 优雅结束，同时 emit `guardrail` 事件。`maxCostUSD<=0` 时完全不触发，向后兼容。服务端 `handleChat` 注入默认预算；`handleChat` 的 `onEvent` 把 `guardrail` 同时 sse 转发并落为 trace 的 `guardrail` 步骤。
+
+#### 8.9.11.2 运行自检 diagnoseTrace
+
+`src/core/trace.js` 新增纯函数 `diagnoseTrace(trace, opts)`（`opts`：`loopThreshold=6` / `errorThreshold=3` / `maxCostUSD=0`）：复用 `detectConsecutiveLoops` 与 `detectLoops`，把轨迹打成 **ok / warn / bad** 三级体检报告——
+
+- **bad**：参数完全相同的连续重复调用（空转死循环），直接点名工具名与次数；
+- **warn**：工具被高频复用（≥`loopThreshold`）、工具调用失败较多（≥`errorThreshold`）、或超出预算上限；
+- **ok**：无异常。
+
+`traceCost(trace)` 兼容 `number` 与 `{amount}` 两种成本形状。每次运行结束，服务端在 `res.end()` 前 emit 一个 `diagnosis` SSE 事件（带 `maxCostUSD`）；前端 `app.js` 既在助手回复下方渲染「运行自检」卡片（持久化到 `aMsg.selfCheck`，重渲染不丢），也在「执行轨迹」面板用 `#trace-diagnosis` 显示；`GET /api/traces/:id` 也一并返回 `diagnosis`，历史回放同样能看到体检结果。**零架构债**。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `trace` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**250 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `trace` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**257 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

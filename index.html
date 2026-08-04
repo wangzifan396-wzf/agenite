@@ -249,6 +249,7 @@
           <div class="trace-timeline-wrap">
             <div id="trace-chips" class="trace-chips"></div>
             <div id="trace-loop" class="trace-loop hidden"></div>
+            <div id="trace-diagnosis" class="trace-diagnosis hidden"></div>
             <div id="trace-timeline" class="trace-timeline">
               <div class="atlas-empty"><p class="muted small">还没有运行记录。发一条消息，轨迹会实时出现在这里；每次运行也会自动保存在本机 <code>~/.agenite/traces</code>，可在右侧历史里回放。</p></div>
             </div>
@@ -513,6 +514,16 @@
             </label>
             <label class="field">上下文窗口（0=按模型自动）
               <input id="set-contextWindow" type="number" min="0" max="2000000" step="1000" value="0" />
+            </label>
+          </div>
+
+          <div class="field">
+            <span class="field-title">预算护栏（运行自检）</span>
+            <p class="muted small">交互式对话累计花费达到该上限时，自动注入「停止并总结」指令——防止智能体死循环或失控烧钱（2026 年 Agent 护栏基线）。填 0 表示使用默认上限 $3。自治目标有独立的预算设置，不受影响。</p>
+          </div>
+          <div class="field-row">
+            <label class="field">预算护栏上限 (USD)
+              <input id="set-maxCostUSD" type="number" min="0" step="0.1" value="0" />
             </label>
           </div>
 

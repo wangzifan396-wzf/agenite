@@ -26,7 +26,9 @@ import {
   loadAtlas, saveAtlas, addNode, linkNodes, removeNode, removeEdge, atlasStats, parseAtlasExtraction, applyExtraction, graphToContext,
   exportAtlasMarkdown, importAtlasMarkdown, mergeGraph
 } from './src/core/atlas.js';
-import { newTrace, addStep, classifyTool, saveTrace, listTraces, loadTrace, deleteTrace, pruneTraces, traceSummary, TRACES_DIR } from './src/core/trace.js';
+import {
+  newTrace, addStep, classifyTool, saveTrace, listTraces, loadTrace, deleteTrace, pruneTraces, traceSummary, diagnoseTrace, TRACES_DIR
+} from './src/core/trace.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -549,7 +551,7 @@ async function handleTraceGet(req, res, reqUrl) {
   if (!id) return sendJson(res, 400, { ok: false, error: '缺少 runId' });
   try {
     const t = await loadTrace(TRACES_DIR, id);
-    return sendJson(res, 200, { ok: true, trace: t, summary: traceSummary(t) });
+    return sendJson(res, 200, { ok: true, trace: t, summary: traceSummary(t), diagnosis: diagnoseTrace(t, { maxCostUSD: 0 }) });
   } catch {
     return sendJson(res, 404, { ok: false, error: '未找到该轨迹（可能已被清理）' });
   }
@@ -669,6 +671,15 @@ async function handleChat(req, res) {
   const validation = validateConfig(config);
   if (!validation.ok) {
     return sendJson(res, 400, { error: validation.errors.join('；') });
+  }
+
+  // Interactive chat gets a default cost guardrail even when the client didn't
+  // set one (autonomous goals carry their own rails in goals.js). This keeps an
+  // accidental loop from silently burning money — the 2026 "agents need
+  // guardrails, not just observability" baseline. The client can raise/lower it
+  // from Settings (budget.maxCostUSD); 0 means "use this default".
+  if (!config.budget || !(Number(config.budget.maxCostUSD) > 0)) {
+    config.budget = { ...(config.budget || {}), maxCostUSD: 3 };
   }
 
   const agentEnabled = body.agentEnabled !== false && config.agentEnabled;
@@ -804,6 +815,7 @@ async function handleChat(req, res) {
     else if (type === 'usage') sse('usage', payload);
     else if (type === 'done') sse('done', payload);
     else if (type === 'subagent') sse('subagent', payload);
+    else if (type === 'guardrail') sse('guardrail', payload);
 
     // capture into the trace (best-effort: never break the chat)
     try {
@@ -858,7 +870,13 @@ async function handleChat(req, res) {
           traceSubId = null;
         }
       } else if (type === 'usage') {
-        if (payload?.cost != null) trace.cost = payload.cost;
+        if (payload?.cost != null) {
+          // store the numeric amount (costOf returns { amount, currency, known })
+          trace.cost = (payload.cost && typeof payload.cost.amount === 'number')
+            ? payload.cost.amount : (Number(payload.cost) || 0);
+        }
+      } else if (type === 'guardrail') {
+        addStep(trace, { kind: 'guardrail', name: '预算护栏触发', status: 'error', data: payload || {} });
       } else if (type === 'done') {
         trace.finishedAt = Date.now();
         trace.stopped = payload?.stopped || null;
@@ -964,6 +982,14 @@ async function handleChat(req, res) {
         // Never let skill extraction break a finished chat.
       }
     }
+
+    // Run self-check on the completed trace and surface it as a graded report
+    // (ok / warn / bad) — this is the "observability -> actionable" step: the
+    // client shows the user WHAT to worry about, not just that the run happened.
+    try {
+      const maxCostUSD = (config.budget && Number(config.budget.maxCostUSD) > 0) ? config.budget.maxCostUSD : 0;
+      sse('diagnosis', diagnoseTrace(trace, { maxCostUSD }));
+    } catch { /* never break the chat */ }
 
     sse('end', { stopped: result.stopped, turns: result.turns, historyTokens: totalTokens(messages), budget });
     res.end();
