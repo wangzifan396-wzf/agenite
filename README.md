@@ -48,6 +48,11 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   - 🔍 **Node drill-down + recall conversations**: click any node to see its detail (type, description, degree, neighbors), and a one-click "回忆相关对话" (recall related conversations) that fishes the real snippets where that entity appeared across past sessions (with title / role / date) — the graph becomes a **navigation entry**, not a dead end.
   - 🚪 **Default landing**: on launch, if the graph is non-empty, the "记忆图谱" panel auto-opens as the home (toggle "打开时自动展示记忆图谱", on by default, can be turned off) — you land on your living memory instead of a blank chat box. A more thorough "head-to-tail" makeover.
   - 🔌 Adds 4 atlas pure functions (`exportAtlasMarkdown` / `importAtlasMarkdown` / `mergeGraph` / reusing `graphToContext`) + `searchSessionsForLabel`, endpoints `GET/POST /api/atlas/markdown` and `GET /api/atlas/recall` — **zero architectural debt**.
+- **Run Trace: agent observability + visible reasoning (v0.17.0)**: the 2026 release gate is *behavior-level tracing* — a healthy HTTP 200 can still hide a wrong tool call, a stale memory read, or a silent loop. Every run now becomes a **local, replayable evidence chain** mapped onto the four observability pillars. Includes:
+  - 🧠 **Live + historical trace panel** (侧栏「执行轨迹」): a visual timeline of the current run, fed by the *same* SSE stream the chat uses (zero extra plumbing), plus a history list of past runs fetched from `/api/traces` that you can click to replay.
+  - 🔍 **Typed spans**: model turns (reasoning), tool-call spans (name / args / result / latency / ok·error), sub-agent handoffs (nested), and context compactions (state transitions) — the four pillars from the Braintrust observability model.
+  - ⚠️ **Loop detection**: automatically flags repeated identical tool calls (e.g. 5× `web_search` with the same args) — the classic "agent stuck burning budget" signal — and surfaces it as a warning chip.
+  - 💾 **Local-first & private**: every run is persisted to `~/.agenite/traces/` (atomic write, capped at 200, pruned oldest-first), fully offline and auditable. Adds `src/core/trace.js` (pure capture + `detectLoops` / `detectConsecutiveLoops`) + `GET /api/traces`, `GET /api/traces/:id`, `DELETE /api/traces/:id` — **zero architectural debt**, and pairs with the Atlas graph and the local-first privacy stance that sets Agenite apart from cloud-only agents.
 - **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 26 built-in tools (plus whatever MCP servers you connect):
   - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `codebase_search` (semantic search the project), `memory_recall`, `memory_save`, `memory_log`, `atlas` (memory graph), `plan`, `delegate`, `fanout`, `save_skill`, `skill_recall`
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `run_code` (local code interpreter), `apply_patch` (multi-file unified diff)
@@ -82,7 +87,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (239, via node:test)
+npm test       # run core unit tests (250, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

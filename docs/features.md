@@ -393,9 +393,28 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 
 `config.atlasAutoOpen`(默认 true) + 设置开关「打开时自动展示记忆图谱」；`init()` 末尾 `maybeOpenAtlasOnBoot()`：若 `config.atlasAutoOpen !== false` 且 `/api/atlas` 返回 `stats.nodes > 0`，延迟 350ms 自动 `openAtlas()`——打开 Agenite 先看到活记忆，而非空白聊天框。
 
+### 8.9.10 执行轨迹 Run Trace：Agent 可观测 + 可见推理（v0.17.0）
+
+把每一次 Agent 运行变成**可回放、可审计的本地决策证据链**——这是 2026 年 Agent「发布门槛」从「服务健康」转向「行为级追踪」的直接回应：一个返回 200 的请求照样可能藏着调错工具、读过时记忆、或静默死循环。对应 Braintrust 可观测模型的四根支柱。
+
+#### 8.9.10.1 捕获与落盘
+
+`src/core/trace.js`（纯函数，可单测）：
+- `newTrace(meta)` → 空 trace（`steps:[]` + `stats` + `cost/stopped/turns`）；
+- `addStep(trace, step)` → 追加带 `parentId` 的 span，自动维护 `children[]` 与 `stats`（步数 / 工具 / 子智能体 / 错误 / 压缩 / 记忆操作 / 总耗时）；
+- `classifyTool(name)` → `memory_` 归 memory、`mcp__` 归 mcp、其余 tool；
+- `detectLoops(trace, threshold)` → 被大量复用的工具；`detectConsecutiveLoops(trace, min)` → **参数完全相同的连续重复调用**（真正的「空转」信号）；`traceSummary(trace)` 聚合两者；
+- 持久化 `listTraces / loadTrace / saveTrace(原子 rename) / deleteTrace / pruneTraces(上限 200，删最旧)`，落盘 `~/.agenite/traces/<runId>.json`。
+
+服务端 `handleChat` 内 `onEvent` 同时把 `assistant/tool/subagent/compact/usage/done` 落入 trace（含 parentId 树、cost 累计），`finally` 里 `saveTrace` + `pruneTraces`（廉价本地 I/O，断连也保留）。端点：`GET /api/traces`（按时间倒序摘要列表）、`GET /api/traces/:id`、`DELETE /api/traces/:id`。
+
+#### 8.9.10.2 前端面板
+
+侧栏「执行轨迹」打开 `#trace-modal`：标题 + 统计 chips（步数 / 工具 / 子智能体 / 错误 / 记忆 / 耗时 / 成本 / 轮次 / 状态）+ 循环警告条 + `#trace-timeline`（按 kind 图标、按 depth 缩进、工具步可展开参数/结果、推理步显示内容、压缩步显示 token 前后）+ 右侧 `#trace-history`（历史运行列表，点开回放、可删除）。**复用聊天同一路 SSE 事件流**在 `app.js` 内维护 `liveTrace`，零额外服务端接线；`runTurn` 开始时 `traceReset`，SSE 回调里 `traceOnEvent` 实时喂入并就地重渲染。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**239 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `trace` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**250 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

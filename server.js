@@ -17,14 +17,16 @@ import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore }
 import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
-import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR } from './src/core/sessions.js';
+import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR, searchSessionsForLabel } from './src/core/sessions.js';
 import { defaultMemoryDir, injectMemory, injectSkills, listSkills, savePersona, listPersonas, readPersona, deletePersona } from './src/core/memory.js';
 import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
 import { autoSaveSkill } from './src/core/autoskill.js';
 import { createGoal, listGoals, getGoal, stopGoal, deleteGoal, initGoals } from './src/core/goals.js';
 import {
-  loadAtlas, saveAtlas, addNode, linkNodes, removeNode, removeEdge, atlasStats, parseAtlasExtraction, applyExtraction, graphToContext
+  loadAtlas, saveAtlas, addNode, linkNodes, removeNode, removeEdge, atlasStats, parseAtlasExtraction, applyExtraction, graphToContext,
+  exportAtlasMarkdown, importAtlasMarkdown, mergeGraph
 } from './src/core/atlas.js';
+import { newTrace, addStep, classifyTool, saveTrace, listTraces, loadTrace, deleteTrace, pruneTraces, traceSummary, TRACES_DIR } from './src/core/trace.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -130,6 +132,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/atlas') return handleAtlasPost(req, res);
   if (req.method === 'POST' && url === '/api/atlas/extract') return handleAtlasExtract(req, res);
   if (req.method === 'DELETE' && url === '/api/atlas') return handleAtlasReset(req, res);
+  if (req.method === 'GET' && url === '/api/atlas/markdown') return handleAtlasMarkdownGet(req, res);
+  if (req.method === 'POST' && url === '/api/atlas/markdown') return handleAtlasMarkdownPost(req, res);
+  if (req.method === 'GET' && url.startsWith('/api/atlas/recall')) return handleAtlasRecall(req, res, req.url);
+  if (req.method === 'GET' && url === '/api/traces') return handleTracesList(req, res);
+  if (req.method === 'GET' && url.startsWith('/api/traces/')) return handleTraceGet(req, res, req.url);
+  if (req.method === 'DELETE' && url.startsWith('/api/traces/')) return handleTraceDelete(req, res, req.url);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -486,6 +494,75 @@ async function handleAtlasReset(req, res) {
   return sendJson(res, 200, { ok: true, stats: atlasStats(g) });
 }
 
+// Export the graph as a hand-editable Markdown file.
+async function handleAtlasMarkdownGet(req, res) {
+  const g = await loadAtlas(MEMORY_DIR);
+  return sendJson(res, 200, { ok: true, markdown: exportAtlasMarkdown(g) });
+}
+
+// Import a (possibly hand-edited) Markdown file back into the graph, merging
+// by type+label. Never throws — a bad file just yields zero parsed entities.
+async function handleAtlasMarkdownPost(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return sendJson(res, 400, { ok: false, error: '无效的 JSON' }); }
+  const md = String(body.markdown || '').trim();
+  if (!md) return sendJson(res, 400, { ok: false, error: '请提供 markdown' });
+  const ext = importAtlasMarkdown(md);
+  if (!ext.nodes.length && !ext.edges.length) {
+    return sendJson(res, 400, { ok: false, error: '未从 Markdown 解析到任何节点 / 关系' });
+  }
+  const g = await loadAtlas(MEMORY_DIR);
+  const applied = mergeGraph(g, ext);
+  await saveAtlas(g, MEMORY_DIR);
+  return sendJson(res, 200, { ok: true, parsed: ext, applied, stats: atlasStats(g) });
+}
+
+// Recall the entity's appearances across past conversations (best-effort).
+async function handleAtlasRecall(req, res, reqUrl) {
+  const u = new URL(reqUrl || '/', 'http://localhost');
+  const label = u.searchParams.get('label') || '';
+  if (!label.trim()) return sendJson(res, 400, { ok: false, error: '需要 label 参数' });
+  try {
+    const list = await listSessions();
+    const sessions = [];
+    for (const meta of list.slice(0, 200)) {
+      const s = await readSession(meta.id);
+      if (s) sessions.push(s);
+    }
+    const matches = searchSessionsForLabel(sessions, label, { limit: 12 });
+    return sendJson(res, 200, { ok: true, label, matches });
+  } catch {
+    return sendJson(res, 200, { ok: true, label, matches: [] });
+  }
+}
+
+// ---------- Agenite Run Trace handlers ----------
+
+async function handleTracesList(req, res) {
+  const traces = await listTraces(TRACES_DIR);
+  return sendJson(res, 200, { ok: true, traces });
+}
+
+async function handleTraceGet(req, res, reqUrl) {
+  const u = new URL(reqUrl || '/', 'http://localhost');
+  const id = decodeURIComponent(u.pathname.replace(/^\/api\/traces\/?/, '').trim());
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少 runId' });
+  try {
+    const t = await loadTrace(TRACES_DIR, id);
+    return sendJson(res, 200, { ok: true, trace: t, summary: traceSummary(t) });
+  } catch {
+    return sendJson(res, 404, { ok: false, error: '未找到该轨迹（可能已被清理）' });
+  }
+}
+
+async function handleTraceDelete(req, res, reqUrl) {
+  const u = new URL(reqUrl || '/', 'http://localhost');
+  const id = decodeURIComponent(u.pathname.replace(/^\/api\/traces\/?/, '').trim());
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少 runId' });
+  const ok = await deleteTrace(TRACES_DIR, id);
+  return sendJson(res, ok ? 200 : 404, { ok, deleted: id });
+}
+
 // Embedding via a local Ollama model — powers fully-on-device semantic memory.
 // Returns a number[] or null on any failure (recall then falls back to keyword).
 const OLLAMA_EMBED_MODEL = process.env.AGENITE_EMBED_MODEL || 'nomic-embed-text';
@@ -704,7 +781,22 @@ async function handleChat(req, res) {
   // Semantic memory only when a local Ollama is the provider (zero-cost, on-device).
   const embedFn = config.provider === 'ollama' ? (q) => ollamaEmbed(q) : null;
 
+  // --- Execution trace capture (agent observability) ---
+  // Every run becomes a local, replayable evidence chain: model turns,
+  // tool-call spans (with args/result/status), sub-agent handoffs, and
+  // context compactions. A healthy 200 can still hide a wrong tool or a loop;
+  // the trace surfaces it. Persisted in finally() so it survives disconnects.
+  const cap = (s, n = 1500) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `…(${s.length - n}字已省略)` : s);
+  const trace = newTrace({
+    title: (incoming.find((m) => m.role === 'user')?.content || '').toString().slice(0, 80),
+    model: config.model,
+    provider: config.provider
+  });
+  let traceTurnId = null; // current model-turn step (parent for its tools)
+  let traceSubId = null;  // current sub-agent step (parent for its tools)
+
   const onEvent = (type, payload) => {
+    // forward to the client unchanged
     if (type === 'delta') sse('delta', { content: payload });
     else if (type === 'tool_start') sse('tool_start', payload);
     else if (type === 'tool') sse('tool', payload);
@@ -712,6 +804,67 @@ async function handleChat(req, res) {
     else if (type === 'usage') sse('usage', payload);
     else if (type === 'done') sse('done', payload);
     else if (type === 'subagent') sse('subagent', payload);
+
+    // capture into the trace (best-effort: never break the chat)
+    try {
+      if (type === 'assistant') {
+        if (!trace.startedAt) trace.startedAt = Date.now();
+        const step = addStep(trace, {
+          kind: 'turn',
+          name: '推理 / 模型回复',
+          parentId: traceSubId || null,
+          data: {
+            content: cap(typeof payload?.content === 'string' ? payload.content : '', 4000),
+            toolCalls: (payload?.tool_calls || []).length
+          }
+        });
+        traceTurnId = step.id;
+      } else if (type === 'tool') {
+        addStep(trace, {
+          kind: 'tool',
+          name: payload?.name || '',
+          parentId: traceSubId || traceTurnId || null,
+          ms: payload?.ms || 0,
+          status: payload?.ok === false ? 'error' : 'ok',
+          data: {
+            args: cap(JSON.stringify(payload?.args || {}), 1500),
+            result: cap(typeof payload?.result === 'string' ? payload.result : JSON.stringify(payload?.result ?? ''), 1500),
+            ok: payload?.ok,
+            kind: classifyTool(payload?.name || ''),
+            diff: payload?.diff
+          }
+        });
+      } else if (type === 'compact') {
+        addStep(trace, { kind: 'compact', name: '上下文压缩', data: payload || {} });
+      } else if (type === 'subagent') {
+        const ev = payload?.event;
+        if (ev === 'start') {
+          const step = addStep(trace, {
+            kind: 'subagent', name: payload?.name || '子智能体',
+            parentId: traceTurnId || null, data: {}
+          });
+          traceSubId = step.id;
+        } else if (ev === 'tool') {
+          addStep(trace, {
+            kind: 'tool', name: payload?.name || '', parentId: traceSubId || null,
+            ms: payload?.ms || 0, status: payload?.ok === false ? 'error' : 'ok',
+            data: {
+              args: cap(JSON.stringify(payload?.args || {}), 1500),
+              result: cap(typeof payload?.result === 'string' ? payload.result : JSON.stringify(payload?.result ?? ''), 1500),
+              ok: payload?.ok, kind: classifyTool(payload?.name || ''), sub: true
+            }
+          });
+        } else if (ev === 'done') {
+          traceSubId = null;
+        }
+      } else if (type === 'usage') {
+        if (payload?.cost != null) trace.cost = payload.cost;
+      } else if (type === 'done') {
+        trace.finishedAt = Date.now();
+        trace.stopped = payload?.stopped || null;
+        trace.turns = payload?.turns || 0;
+      }
+    } catch { /* trace capture is strictly best-effort */ }
   };
 
   // Used by the context compactor to turn dropped turns into a short recap.
@@ -820,6 +973,9 @@ async function handleChat(req, res) {
     res.end();
   } finally {
     cleanup();
+    // Persist the run trace locally (cheap fs write, not a model call) so the
+    // execution evidence chain survives disconnects and is replayable later.
+    void saveTrace(trace, TRACES_DIR).then(() => pruneTraces(TRACES_DIR)).catch(() => {});
     // Fire-and-forget: don't block the SSE response or reuse ac.signal (which
     // aborts on disconnect). Runs its own model call + atomic save off the
     // event loop; any failure is swallowed so it never breaks the chat.

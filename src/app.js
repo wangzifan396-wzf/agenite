@@ -712,6 +712,11 @@ async function runTurn(conv, opts = {}) {
   scrollBottom();
   setBusy(true);
 
+  // Start a fresh live trace for this run (rendered in the Trace panel if open).
+  const firstUser = (conv.messages.find((m) => m.role === 'user')?.content || '').toString();
+  traceReset(firstUser);
+  if (!$('trace-modal').classList.contains('hidden')) { historyTrace = null; $('trace-title').textContent = '实时轨迹'; renderTrace(); }
+
   const md = el.querySelector('.md');
   const turnUsage = emptyUsage();
   try {
@@ -722,6 +727,7 @@ async function runTurn(conv, opts = {}) {
       planning,
       mcpServers: getMcpServers()
     }, (event, data) => {
+      traceOnEvent(event, data);
       const stick = nearBottom();
       if (event === 'delta') {
         aMsg.content += data.content || '';
@@ -2200,12 +2206,266 @@ function atlasInitEvents() {
   svg.addEventListener('pointercancel', endDrag);
 }
 
+// --- Agenite Run Trace (agent observability) ---
+// The panel renders a live trace during a run (fed by the same SSE stream the
+// chat uses) and replays past runs fetched from /api/traces. This is the
+// "decision evidence chain": model turns, tool-call spans, sub-agent handoffs
+// and context compactions — so a healthy-looking 200 can still be audited.
+let liveTrace = null;
+let traceTurnId = null;
+let traceSubId = null;
+let historyTrace = null; // non-null => viewing a past run instead of live
+
+const TRACE_ICON = {
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️'
+};
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理' };
+
+function traceClassify(name) {
+  if (name && name.startsWith('memory_')) return 'memory';
+  if (name && name.startsWith('mcp__')) return 'mcp';
+  return 'tool';
+}
+
+function traceReset(title) {
+  liveTrace = {
+    runId: 'live_' + Date.now().toString(36),
+    title: (title || '').slice(0, 80),
+    steps: [],
+    stats: { steps: 0, tools: 0, subagents: 0, errors: 0, compactions: 0, memoryOps: 0, totalMs: 0 },
+    cost: 0, stopped: null, turns: 0, startedAt: null, finishedAt: null
+  };
+  traceTurnId = null;
+  traceSubId = null;
+}
+
+function traceAdd(step) {
+  const s = Object.assign(
+    { id: 's' + (liveTrace.steps.length + 1), parentId: null, kind: 'turn', name: '', ts: Date.now(), ms: 0, status: 'ok', data: {}, children: [] },
+    step
+  );
+  liveTrace.steps.push(s);
+  if (s.parentId) {
+    const p = liveTrace.steps.find((x) => x.id === s.parentId);
+    if (p) p.children.push(s.id);
+  }
+  const st = liveTrace.stats;
+  st.steps++;
+  if (s.kind === 'tool') {
+    st.tools++;
+    if (s.status !== 'ok') st.errors++;
+    if (traceClassify(s.name) === 'memory') st.memoryOps++;
+  } else if (s.kind === 'subagent') st.subagents++;
+  else if (s.kind === 'compact') st.compactions++;
+  st.totalMs += s.ms || 0;
+  return s;
+}
+
+function traceOnEvent(type, payload) {
+  if (!liveTrace) return;
+  if (type === 'assistant') {
+    if (!liveTrace.startedAt) liveTrace.startedAt = Date.now();
+    const s = traceAdd({ kind: 'turn', name: '推理 / 模型回复', parentId: traceSubId || null, data: { content: typeof payload?.content === 'string' ? payload.content : '', toolCalls: (payload?.tool_calls || []).length } });
+    traceTurnId = s.id;
+  } else if (type === 'tool') {
+    traceAdd({ kind: 'tool', name: payload?.name || '', parentId: traceSubId || traceTurnId || null, ms: payload?.ms || 0, status: payload?.ok === false ? 'error' : 'ok', data: { args: payload?.args || {}, result: payload?.result, ok: payload?.ok, kind: traceClassify(payload?.name || '') } });
+  } else if (type === 'compact') {
+    traceAdd({ kind: 'compact', name: '上下文压缩', data: payload || {} });
+  } else if (type === 'subagent') {
+    const ev = payload?.event;
+    if (ev === 'start') {
+      const s = traceAdd({ kind: 'subagent', name: payload?.name || '子智能体', parentId: traceTurnId || null });
+      traceSubId = s.id;
+    } else if (ev === 'tool') {
+      traceAdd({ kind: 'tool', name: payload?.name || '', parentId: traceSubId || null, ms: payload?.ms || 0, status: payload?.ok === false ? 'error' : 'ok', data: { args: payload?.args || {}, result: payload?.result, ok: payload?.ok, kind: traceClassify(payload?.name || ''), sub: true } });
+    } else if (ev === 'done') {
+      traceSubId = null;
+    }
+  } else if (type === 'usage') {
+    if (payload?.cost != null) liveTrace.cost = payload.cost;
+  } else if (type === 'done') {
+    liveTrace.finishedAt = Date.now();
+    liveTrace.stopped = payload?.stopped || null;
+    liveTrace.turns = payload?.turns || 0;
+  }
+  // Re-render the timeline if the panel is open (skip the high-frequency deltas).
+  if (type !== 'delta' && $('trace-modal') && !$('trace-modal').classList.contains('hidden') && !historyTrace) renderTrace();
+}
+
+function traceDepth(trace) {
+  const map = {};
+  const depthOf = (id) => {
+    if (map[id] != null) return map[id];
+    const s = trace.steps.find((x) => x.id === id);
+    const d = !s || !s.parentId ? 0 : depthOf(s.parentId) + 1;
+    map[id] = d;
+    return d;
+  };
+  for (const s of trace.steps) depthOf(s.id);
+  return map;
+}
+
+function traceConsecutive(trace, min = 3) {
+  let best = null, cur = null;
+  for (const s of trace.steps) {
+    if (s.kind !== 'tool') { cur = null; continue; }
+    const key = s.name + '|' + JSON.stringify(s.data.args || {});
+    if (cur && cur.key === key) cur.count++;
+    else cur = { key, name: s.name, count: 1 };
+    if (!best || cur.count > best.count) best = { ...cur };
+  }
+  return best && best.count >= Math.max(2, min) ? best : null;
+}
+
+function fmtMs(ms) {
+  if (ms == null) return '—';
+  return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
+}
+
+function traceStepHtml(s, depth) {
+  const icon = TRACE_ICON[s.kind] || '•';
+  const kind = s.kind === 'tool' ? (s.data.kind || 'tool') : s.kind;
+  const kindLabel = TRACE_KIND_LABEL[kind] || s.kind;
+  const err = s.status === 'error' ? ' tstep-err' : '';
+  const title = escapeHtml(s.name || kindLabel);
+  let detail = '';
+  if (s.kind === 'tool') {
+    const args = s.data.args != null ? (typeof s.data.args === 'string' ? s.data.args : JSON.stringify(s.data.args)) : '';
+    const res = s.data.result != null ? (typeof s.data.result === 'string' ? s.data.result : JSON.stringify(s.data.result)) : '';
+    detail = `<details class="tstep-detail"><summary>参数 / 结果</summary>` +
+      (args ? `<div class="tstep-kv"><b>参数</b><pre>${escapeHtml(String(args).slice(0, 1200))}</pre></div>` : '') +
+      (res ? `<div class="tstep-kv"><b>结果</b><pre>${escapeHtml(String(res).slice(0, 1200))}</pre></div>` : '') +
+      `</details>`;
+  } else if (s.kind === 'turn') {
+    const c = s.data.content || '';
+    detail = c ? `<div class="tstep-content">${escapeHtml(c.slice(0, 1500))}</div>` : '';
+  } else if (s.kind === 'compact') {
+    const d = s.data || {};
+    detail = `<div class="tstep-content muted small">上下文 ${fmtTok(d.before)} → ${fmtTok(d.after)}（丢弃 ${d.dropped || 0} 组）</div>`;
+  }
+  return `<div class="tstep${err}" style="margin-left:${(depth || 0) * 18}px">` +
+    `<div class="tstep-head"><span class="tstep-ic">${icon}</span>` +
+    `<span class="tstep-kind">${kindLabel}</span>` +
+    `<span class="tstep-name">${title}</span>` +
+    (s.ms ? `<span class="tstep-ms">${fmtMs(s.ms)}</span>` : '') +
+    (s.status === 'error' ? '<span class="tstep-bad">失败</span>' : '') +
+    `</div>${detail}</div>`;
+}
+
+function fmtTok(n) { return n == null ? '—' : (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)) + ' tok'; }
+
+function stoppedLabel(s) {
+  return s === 'done' ? '完成' : s === 'max_turns' ? '达步数上限' : s === 'error' ? '出错' : (s || '运行中');
+}
+
+function renderTrace() {
+  const trace = historyTrace || liveTrace;
+  const tl = $('trace-timeline');
+  const chips = $('trace-chips');
+  const loop = $('trace-loop');
+  if (!trace) {
+    tl.innerHTML = '<div class="atlas-empty"><p class="muted small">还没有运行记录。发一条消息即可开始追踪。</p></div>';
+    chips.innerHTML = ''; loop.classList.add('hidden');
+    return;
+  }
+  const st = trace.stats || { steps: 0, tools: 0, subagents: 0, errors: 0, compactions: 0, memoryOps: 0, totalMs: 0 };
+  chips.innerHTML =
+    chip('步数', st.steps) + chip('工具', st.tools) + chip('子智能体', st.subagents) +
+    chip('错误', st.errors, st.errors ? 'chip-bad' : '') + chip('记忆', st.memoryOps) +
+    chip('耗时', fmtMs(st.totalMs)) + chip('成本', '$' + (trace.cost || 0).toFixed(4)) +
+    chip('轮次', trace.turns || 0) + chip('状态', stoppedLabel(trace.stopped));
+  const consec = traceConsecutive(trace, 3);
+  if (consec) {
+    loop.classList.remove('hidden');
+    loop.innerHTML = `⚠ 检测到 <b>${consec.count}</b> 次重复调用 <code>${escapeHtml(consec.name)}</code>（参数相同）—— 可能空转 / 死循环，已消耗预算却无进展。`;
+  } else {
+    loop.classList.add('hidden');
+  }
+  const depths = traceDepth(trace);
+  tl.innerHTML = trace.steps.length
+    ? trace.steps.map((s) => traceStepHtml(s, depths[s.id])).join('')
+    : '<div class="atlas-empty"><p class="muted small">本运行还没有步骤（可能已结束或尚未开始）。</p></div>';
+}
+
+function chip(label, val, cls = '') {
+  return `<span class="tchip ${cls}"><b>${escapeHtml(String(val))}</b><i>${label}</i></span>`;
+}
+
+async function loadTraceHistory() {
+  const box = $('trace-history');
+  box.innerHTML = '<div class="muted small">加载中…</div>';
+  try {
+    const r = await fetch('/api/traces').then((x) => x.json());
+    const list = (r && r.traces) || [];
+    $('trace-hist-count').textContent = '(' + list.length + ')';
+    if (!list.length) { box.innerHTML = '<div class="muted small">暂无历史运行。</div>'; return; }
+    box.innerHTML = list.map((t) => {
+      const loop = t.consecutiveLoop ? ' <span class="th-loop" title="检测到重复调用">⚠循环</span>' : '';
+      const err = t.stats && t.stats.errors ? ' th-err' : '';
+      return `<div class="th-item${err}" data-run="${escapeHtml(t.runId)}">` +
+        `<div class="th-top"><span class="th-title">${escapeHtml(t.title || '(无标题)')}</span>${loop}</div>` +
+        `<div class="th-meta muted small">${new Date(t.createdAt).toLocaleString()} · ${stoppedLabel(t.stopped)} · ${t.stats ? t.stats.steps : 0}步 / ${t.stats ? t.stats.tools : 0}工具 / $${(t.cost || 0).toFixed(4)}</div>` +
+        `<button class="th-del mini-btn danger-text" data-run="${escapeHtml(t.runId)}" title="删除该轨迹">删除</button>` +
+        `</div>`;
+    }).join('');
+    box.querySelectorAll('.th-item').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        if (e.target.classList.contains('th-del')) return;
+        openHistoryTrace(el.getAttribute('data-run'));
+      });
+    });
+    box.querySelectorAll('.th-del').forEach((el) => {
+      el.addEventListener('click', (e) => { e.stopPropagation(); deleteHistoryTrace(el.getAttribute('data-run')); });
+    });
+  } catch {
+    box.innerHTML = '<div class="muted small">加载失败。</div>';
+  }
+}
+
+async function openHistoryTrace(runId) {
+  try {
+    const r = await fetch('/api/traces/' + encodeURIComponent(runId)).then((x) => x.json());
+    if (!r.ok) return;
+    historyTrace = r.trace;
+    $('trace-title').textContent = '回放：' + (r.trace.title || runId);
+    renderTrace();
+  } catch { /* ignore */ }
+}
+
+async function deleteHistoryTrace(runId) {
+  try {
+    await fetch('/api/traces/' + encodeURIComponent(runId), { method: 'DELETE' });
+    if (historyTrace && historyTrace.runId === runId) { historyTrace = null; $('trace-title').textContent = '实时轨迹'; }
+    await loadTraceHistory();
+  } catch { /* ignore */ }
+}
+
+function openTrace() {
+  $('trace-modal').classList.remove('hidden');
+  historyTrace = null;
+  $('trace-title').textContent = '实时轨迹';
+  renderTrace();
+  loadTraceHistory();
+}
+
+function closeTrace() {
+  $('trace-modal').classList.add('hidden');
+}
+
+function refreshTrace() {
+  renderTrace();
+  loadTraceHistory();
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
   $('open-goals').onclick = openGoals;
   $('open-atlas').onclick = openAtlas;
   $('close-atlas').onclick = closeAtlas;
+  $('open-trace').onclick = openTrace;
+  $('close-trace').onclick = closeTrace;
+  $('trace-refresh').onclick = refreshTrace;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
   $('atlas-reset').onclick = atlasReset;
@@ -2371,6 +2631,7 @@ function wire() {
   $('settings-modal').addEventListener('mousedown', (e) => { if (e.target === $('settings-modal')) closeSettings(); });
   $('goals-modal').addEventListener('mousedown', (e) => { if (e.target === $('goals-modal')) closeGoals(); });
   $('atlas-modal').addEventListener('mousedown', (e) => { if (e.target === $('atlas-modal')) closeAtlas(); });
+  $('trace-modal').addEventListener('mousedown', (e) => { if (e.target === $('trace-modal')) closeTrace(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -2424,6 +2685,7 @@ function wire() {
       else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
       else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
       else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
+      else if (!$('trace-modal').classList.contains('hidden')) closeTrace();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

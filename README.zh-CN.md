@@ -48,6 +48,11 @@
   - 🔍 **节点下钻 + 回忆对话**：点任一节点弹出详情（类型、说明、连接数、邻居关系），并能一键「回忆相关对话」——去历史会话里捞出该实体出现过的真实片段（含会话标题 / 角色 / 时间），图谱从此是**导航入口**而非终点。
   - 🚪 **默认 landing**：启动后若图谱非空，自动打开「记忆图谱」面板作为首页（设置「打开时自动展示记忆图谱」默认开，可关）——打开 Agenite 先看到你的活记忆，而不是空白聊天框。更直接地「改头换面」。
   - 🔌 新增 4 个 atlas 纯函数（`exportAtlasMarkdown` / `importAtlasMarkdown` / `mergeGraph` / 复用 `graphToContext`）+ `searchSessionsForLabel`，端点 `GET/POST /api/atlas/markdown` 与 `GET /api/atlas/recall`，**零架构债**。
+- **执行轨迹 Run Trace：Agent 可观测 + 可见推理（v0.17.0）**：2026 年 Agent 的「发布门槛」已经从「服务健康」变成「行为级追踪」——一个返回 200 的请求，照样可能藏着调错工具、读过时记忆、或静默死循环。现在**每一次运行都变成一条可回放、可审计的本地决策证据链**，正好对应可观测性的四根支柱。包含：
+  - 🧠 **实时 + 历史轨迹面板**（侧栏「执行轨迹」）：当前运行的实时时间线，**复用聊天同一路 SSE 事件流**（零额外接线）；下方历史列表从 `/api/traces` 拉取过往运行，点一下即可回放。
+  - 🔍 **带类型 span**：模型推理步、工具调用 span（名称 / 参数 / 结果 / 耗时 / 成败）、子智能体交接（嵌套）、上下文压缩（状态转移）——即 Braintrust 可观测模型里的四根支柱。
+  - ⚠️ **循环检测**：自动标出「参数完全相同的重复工具调用」（比如同一个 `web_search` 连刷 5 次）——典型的「Agent 空转烧预算」信号，并以警告条直接点名。
+  - 💾 **本地优先 / 隐私**：每次运行落盘到 `~/.agenite/traces/`（原子写、上限 200、超量删最旧），完全离线、可审计。新增 `src/core/trace.js`（纯捕获 + `detectLoops` / `detectConsecutiveLoops`）+ `GET /api/traces`、`GET /api/traces/:id`、`DELETE /api/traces/:id`，**零架构债**；与 Atlas 图谱、以及「本地优先、不上云」的差异化定位一脉相承。
 - **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **26 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
@@ -91,7 +96,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（239 个，node:test）
+npm test       # 跑核心逻辑单元测试（250 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

@@ -76,6 +76,7 @@
         <button id="open-settings" class="side-link">设置</button>
         <button id="open-goals" class="side-link">目标任务</button>
         <button id="open-atlas" class="side-link">记忆图谱</button>
+        <button id="open-trace" class="side-link">执行轨迹</button>
       </div>
     </aside>
 
@@ -226,6 +227,38 @@
           <div id="atlas-msg" class="muted small"></div>
           <div class="field-title atlas-legend-title">类型图例</div>
           <div id="atlas-legend" class="atlas-legend"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 执行轨迹 Run Trace：把每次 Agent 运行变成可回放、可审计的决策证据链 -->
+  <div id="trace-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card">
+      <div class="drawer-head">
+        <h2>执行轨迹 · Run Trace</h2>
+        <button id="close-trace" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body trace-body">
+        <div class="atlas-toolbar">
+          <span id="trace-title" class="trace-title">实时轨迹</span>
+          <div class="grow"></div>
+          <button id="trace-refresh" class="mini-btn" title="刷新历史运行列表">刷新历史</button>
+        </div>
+        <div class="trace-cols">
+          <div class="trace-timeline-wrap">
+            <div id="trace-chips" class="trace-chips"></div>
+            <div id="trace-loop" class="trace-loop hidden"></div>
+            <div id="trace-timeline" class="trace-timeline">
+              <div class="atlas-empty"><p class="muted small">还没有运行记录。发一条消息，轨迹会实时出现在这里；每次运行也会自动保存在本机 <code>~/.agenite/traces</code>，可在右侧历史里回放。</p></div>
+            </div>
+          </div>
+          <div class="trace-history-wrap">
+            <div class="field-title">历史运行 <span id="trace-hist-count" class="muted small"></span></div>
+            <div id="trace-history" class="trace-history">
+              <div class="muted small">加载中…</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
