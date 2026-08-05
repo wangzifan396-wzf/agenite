@@ -132,9 +132,20 @@ describe('browser — real Chrome smoke', { skip: !puppeteerResolvable }, () => 
     assert.ok(Array.isArray(snap.elements) && snap.elements.length >= 2, 'elements=' + JSON.stringify(snap.elements));
     const firstRef = snap.elements[0].ref;
     assert.ok(/^e\d+$/.test(firstRef), 'ref format ' + firstRef);
+    // each element carries a viewport-space rect so the UI can overlay markers.
+    const el0 = snap.elements[0];
+    assert.ok('rect' in el0 && typeof el0.rect.x === 'number' && typeof el0.rect.width === 'number', 'rect=' + JSON.stringify(el0.rect));
+    // status() should surface the same elements (valid refs) + the fixed viewport.
+    const st = await BROWSER.status();
+    assert.equal(st.open, true);
+    assert.ok(Array.isArray(st.elements) && st.elements.length >= 2, 'status elements');
+    assert.ok(st.viewport && st.viewport.width === 1280 && st.viewport.height === 800);
     // click by ref resolves the injected selector deterministically.
     const clicked = await BROWSER.click({ ref: firstRef });
     assert.equal(clicked.ok, true);
+    // after a mutate (click) the stamped refs are stale, so the overlay hides.
+    const st2 = await BROWSER.status();
+    assert.equal(st2.elements, null);
     const shot = await BROWSER.screenshot();
     assert.equal(shot.ok, true);
     assert.ok(shot.screenshot.startsWith('data:image/png;base64,'));

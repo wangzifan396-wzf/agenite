@@ -1638,7 +1638,41 @@ select.text-input { appearance: auto; padding-right: 8px; }
   color: var(--accent); font-weight: 600;
 }
 
+/* Visual element overlay: numbered @refs sit on top of the live screenshot so
+   the user can see exactly what the agent can click, and click a marker to
+   feed that ref back into the composer. */
+.browser-stage { position: relative; line-height: 0; max-width: 100%; display: inline-block; }
+.browser-overlay { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; }
+.ref-marker {
+  position: absolute; pointer-events: auto;
+  display: flex; align-items: flex-start; justify-content: flex-start;
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+  border-radius: 4px;
+  font: 600 10px/1.1 var(--mono);
+  padding: 1px 3px; margin: 0;
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
+}
+.ref-marker:hover { background: var(--accent); color: #fff; z-index: 2; }
+
 @media (max-width: 760px) {
   .browser-body { gap: 10px; }
   .browser-view { min-height: 260px; max-height: 60vh; }
 }
+
+/* ---- 指令库 (snippets) ---- */
+.snippets-body { display: flex; flex-direction: column; gap: 12px; }
+.snippet-form { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--code-bg); }
+.text-input {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font: 14px/1.5 var(--ui); resize: vertical;
+}
+.snippet-list { display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow: auto; }
+.snippet-item { border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; background: var(--bg); }
+.snippet-meta { display: flex; align-items: center; margin-bottom: 6px; }
+.snippet-name { font-weight: 600; }
+.snippet-body-text { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.6 var(--mono); color: var(--text); max-height: 140px; overflow: auto; background: var(--code-bg); padding: 8px; border-radius: 8px; }
+.snippet-actions { display: flex; gap: 8px; justify-content: flex-end; }

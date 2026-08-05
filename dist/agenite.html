@@ -1647,10 +1647,44 @@ select.text-input { appearance: auto; padding-right: 8px; }
   color: var(--accent); font-weight: 600;
 }
 
+/* Visual element overlay: numbered @refs sit on top of the live screenshot so
+   the user can see exactly what the agent can click, and click a marker to
+   feed that ref back into the composer. */
+.browser-stage { position: relative; line-height: 0; max-width: 100%; display: inline-block; }
+.browser-overlay { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; }
+.ref-marker {
+  position: absolute; pointer-events: auto;
+  display: flex; align-items: flex-start; justify-content: flex-start;
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+  border-radius: 4px;
+  font: 600 10px/1.1 var(--mono);
+  padding: 1px 3px; margin: 0;
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
+}
+.ref-marker:hover { background: var(--accent); color: #fff; z-index: 2; }
+
 @media (max-width: 760px) {
   .browser-body { gap: 10px; }
   .browser-view { min-height: 260px; max-height: 60vh; }
 }
+
+/* ---- 指令库 (snippets) ---- */
+.snippets-body { display: flex; flex-direction: column; gap: 12px; }
+.snippet-form { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--code-bg); }
+.text-input {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font: 14px/1.5 var(--ui); resize: vertical;
+}
+.snippet-list { display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow: auto; }
+.snippet-item { border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; background: var(--bg); }
+.snippet-meta { display: flex; align-items: center; margin-bottom: 6px; }
+.snippet-name { font-weight: 600; }
+.snippet-body-text { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.6 var(--mono); color: var(--text); max-height: 140px; overflow: auto; background: var(--code-bg); padding: 8px; border-radius: 8px; }
+.snippet-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 </style>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20512%20512%22%20width%3D%22512%22%20height%3D%22512%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23c9633e%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23e59a72%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20rx%3D%22112%22%20fill%3D%22url(%23g)%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M150%20150h212v78H228v134h-78z%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%22330%22%20cy%3D%22330%22%20r%3D%2234%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%3C%2Fsvg%3E%0A" />
@@ -1724,6 +1758,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <button id="open-trace" class="side-link">执行轨迹</button>
         <button id="open-eval" class="side-link">评估 Eval</button>
         <button id="open-browser" class="side-link">🌐 浏览器</button>
+        <button id="open-snippets" class="side-link">💡 指令库</button>
       </div>
     </aside>
 
@@ -1970,6 +2005,25 @@ select.text-input { appearance: auto; padding-right: 8px; }
           <summary class="muted small">操作审计轨迹</summary>
           <ol id="browser-log" class="browser-log muted small"></ol>
         </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- 指令库 · 可复用的 prompt 片段（本地持久化，零云） -->
+  <div id="snippets-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card snippets-card">
+      <div class="drawer-head">
+        <h2>💡 指令库</h2>
+        <button id="close-snippets" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body snippets-body">
+        <p class="muted small">把常用的提示词 / 工作流存成片段，一键插入到对话输入框。仅保存在本机浏览器（localStorage），不上云。</p>
+        <div class="snippet-form">
+          <input id="snippet-name" class="text-input" type="text" placeholder="名称，如「总结网页要点」" maxlength="40" />
+          <textarea id="snippet-body" class="text-input" rows="3" placeholder="片段内容，可包含多行指令…"></textarea>
+          <button id="snippet-add" class="mini-btn">添加片段</button>
+        </div>
+        <div id="snippet-list" class="snippet-list"></div>
       </div>
     </div>
   </div>
@@ -2783,10 +2837,76 @@ function validateConfig(cfg) {
   return { ok: errors.length === 0, errors };
 }
 
+/* snippets.js */
+// Local-first reusable prompt snippets (the "指令库"). Persisted to
+// localStorage; falls back to an in-memory store when storage is unavailable
+// (e.g. during tests). Pure logic so it can be unit-tested without the DOM.
+const KEY = 'agenite.snippets.v1';
+
+function _store() {
+  try {
+    if (typeof localStorage !== 'undefined') return localStorage;
+  } catch { /* ignore */ }
+  return null;
+}
+
+let _mem = null; // fallback store when localStorage is unavailable
+
+function _read() {
+  const s = _store();
+  if (s) {
+    try { return JSON.parse(s.getItem(KEY) || '[]'); } catch { return []; }
+  }
+  return _mem || [];
+}
+
+function _write(arr) {
+  const s = _store();
+  if (s) { try { s.setItem(KEY, JSON.stringify(arr)); } catch { /* ignore */ } }
+  else _mem = arr;
+}
+
+function listSnippets() {
+  return _read().slice();
+}
+
+function addSnippet(name, body) {
+  name = String(name || '').trim();
+  body = String(body || '').trim();
+  if (!name || !body) return { ok: false, error: '名称和正文都不能为空' };
+  const arr = _read();
+  const id = 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  arr.push({ id, name, body, created: Date.now() });
+  _write(arr);
+  return { ok: true, id };
+}
+
+function removeSnippet(id) {
+  const arr = _read().filter((s) => s.id !== id);
+  _write(arr);
+  return { ok: true };
+}
+
+function getSnippet(id) {
+  return _read().find((s) => s.id === id) || null;
+}
+
+// Merge a snippet body into an existing textarea value, inserting at the end
+// with a sensible separator so it can be appended to an in-progress prompt.
+function insertSnippetInto(text, body) {
+  text = String(text || '');
+  body = String(body || '').trim();
+  if (!body) return text;
+  if (!text.trim()) return body;
+  const sep = /\s$/.test(text) ? '' : '\n';
+  return text + sep + body;
+}
+
 /* app.js */
 // Agenite browser controller: settings, streaming chat with tool visualization
 // and human-in-the-loop approvals, multi-conversation management, theme.
 // Talks to the local server, which is the part that can actually touch the machine.
+
 
 
 
@@ -5526,6 +5646,7 @@ function closeEval() {
 // timer while the modal is open. The agent's browser_* tools write to the
 // very same page, so this shows exactly what the model is looking at.
 let browserPolling = null;
+let browserShotSig = null; // last screenshot data URL, to skip needless re-renders
 
 function openBrowserPanel() {
   $('browser-modal').classList.remove('hidden');
@@ -5558,9 +5679,18 @@ async function refreshBrowserView() {
       return;
     }
     urlEl.textContent = (j.title ? j.title + ' · ' : '') + j.url;
-    box.innerHTML = j.screenshot
-      ? `<img class="browser-shot" src="${j.screenshot}" alt="页面截图" />`
-      : '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+    if (j.screenshot && j.screenshot !== browserShotSig) {
+      browserShotSig = j.screenshot;
+      box.innerHTML = `<div class="browser-stage"><img class="browser-shot" src="${j.screenshot}" alt="页面截图" /><div class="browser-overlay" id="browser-overlay"></div></div>`;
+      const img = box.querySelector('.browser-shot');
+      if (img && img.complete) positionOverlay(j, img);
+      else if (img) img.onload = () => positionOverlay(j, img);
+    } else if (j.screenshot) {
+      positionOverlay(j, box.querySelector('.browser-shot'));
+    } else {
+      box.innerHTML = '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+      browserShotSig = null;
+    }
     renderBrowserLog(j.actions || []);
   } catch {
     /* keep previous content; transient network hiccup */
@@ -5579,12 +5709,101 @@ function renderBrowserLog(actions) {
   ).join('');
 }
 
+// Lay interactive-element markers over the live screenshot. Coordinates come
+// from the controller's bounding boxes (viewport space); we scale them to the
+// rendered image size so the badges sit exactly on top of the real controls.
+function positionOverlay(j, img) {
+  const ov = document.getElementById('browser-overlay');
+  if (!ov || !img) return;
+  const els = (j && j.elements) || [];
+  if (!els.length) { ov.innerHTML = ''; return; }
+  const vw = (j.viewport && j.viewport.width) || img.naturalWidth || 1;
+  const scale = (img.clientWidth || img.naturalWidth || 1) / vw;
+  ov.innerHTML = els.map((el) => {
+    const r = el.rect || { x: 0, y: 0, width: 0, height: 0 };
+    const left = r.x * scale;
+    const top = r.y * scale;
+    const w = r.width * scale;
+    const h = r.height * scale;
+    const title = `@${el.ref} ${el.tag}${el.name ? ' “' + el.name + '”' : ''}${el.href ? ' → ' + el.href : ''}`;
+    return `<button class="ref-marker" data-ref="@${el.ref}" title="${escapeHtml(title)}" style="left:${left}px;top:${top}px;min-width:${Math.max(16, w)}px;min-height:${Math.max(16, h)}px">@${el.ref}</button>`;
+  }).join('');
+  ov.querySelectorAll('.ref-marker').forEach((b) => {
+    b.addEventListener('click', () => insertRefIntoInput(b.getAttribute('data-ref')));
+  });
+}
+
+// Clicking a marker drops its @ref into the composer so the user can tell the
+// agent exactly which element to act on — turning passive watching into a
+// precise instruction without copy-paste.
+function insertRefIntoInput(ref) {
+  const inp = document.getElementById('input');
+  if (!inp) return;
+  inp.value = insertSnippetInto(inp.value, ref);
+  inp.focus();
+  if (inp.dispatchEvent) inp.dispatchEvent(new Event('input'));
+}
+
 async function closeBrowserEngine() {
   try {
     await fetch('/api/browser/close', { method: 'POST' });
     toast('已关闭本地浏览器');
     refreshBrowserView();
   } catch { /* ignore */ }
+}
+
+// ---------- 指令库 (reusable prompt snippets, local-first) ----------
+function openSnippets() {
+  $('snippets-modal').classList.remove('hidden');
+  renderSnippetList();
+}
+function closeSnippets() {
+  $('snippets-modal').classList.add('hidden');
+}
+function renderSnippetList() {
+  const list = $('snippet-list');
+  if (!list) return;
+  const items = listSnippets();
+  if (!items.length) {
+    list.innerHTML = '<div class="muted small">还没有保存的片段。在上方填写名称与内容后点「添加片段」。</div>';
+    return;
+  }
+  list.innerHTML = items.map((s) => `
+    <div class="snippet-item" data-id="${escapeHtml(s.id)}">
+      <div class="snippet-meta"><span class="snippet-name">${escapeHtml(s.name)}</span></div>
+      <pre class="snippet-body-text">${escapeHtml(s.body)}</pre>
+      <div class="snippet-actions">
+        <button class="mini-btn snippet-insert" data-id="${escapeHtml(s.id)}">插入</button>
+        <button class="mini-btn danger-text snippet-del" data-id="${escapeHtml(s.id)}">删除</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('.snippet-insert').forEach((b) => {
+    b.addEventListener('click', () => {
+      const s = getSnippet(b.getAttribute('data-id'));
+      if (s) {
+        const inp = document.getElementById('input');
+        if (inp) { inp.value = insertSnippetInto(inp.value, s.body); inp.focus(); inp.dispatchEvent(new Event('input')); }
+        closeSnippets();
+        toast('已插入片段：' + s.name);
+      }
+    });
+  });
+  list.querySelectorAll('.snippet-del').forEach((b) => {
+    b.addEventListener('click', () => {
+      removeSnippet(b.getAttribute('data-id'));
+      renderSnippetList();
+    });
+  });
+}
+function addSnippetFromForm() {
+  const nameEl = $('snippet-name');
+  const bodyEl = $('snippet-body');
+  const r = addSnippet(nameEl.value, bodyEl.value);
+  if (!r.ok) { toast(r.error); return; }
+  nameEl.value = '';
+  bodyEl.value = '';
+  renderSnippetList();
+  toast('已添加片段');
 }
 
 function wire() {
@@ -5603,6 +5822,9 @@ function wire() {
   $('close-browser').onclick = closeBrowserPanel;
   $('browser-refresh').onclick = refreshBrowserView;
   $('browser-close').onclick = closeBrowserEngine;
+  $('open-snippets').onclick = openSnippets;
+  $('close-snippets').onclick = closeSnippets;
+  $('snippet-add').onclick = addSnippetFromForm;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
   $('atlas-reset').onclick = atlasReset;
@@ -5771,6 +5993,7 @@ function wire() {
   $('trace-modal').addEventListener('mousedown', (e) => { if (e.target === $('trace-modal')) closeTrace(); });
   $('eval-modal').addEventListener('mousedown', (e) => { if (e.target === $('eval-modal')) closeEval(); });
   $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
+  $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -5827,6 +6050,7 @@ function wire() {
       else if (!$('trace-modal').classList.contains('hidden')) closeTrace();
       else if (!$('eval-modal').classList.contains('hidden')) closeEval();
       else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
+      else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

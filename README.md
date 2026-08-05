@@ -71,7 +71,11 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 - **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 34 built-in tools (plus whatever MCP servers you connect):
   - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `codebase_search` (semantic search the project), `memory_recall`, `memory_save`, `memory_log`, `atlas` (memory graph), `plan`, `delegate`, `fanout`, `save_skill`, `skill_recall`
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `run_code` (local code interpreter), `apply_patch` (multi-file unified diff)
-  - *Browser (built-in, no MCP)*: `browser_navigate`, `browser_snapshot` (lists interactive elements with `@eN` refs), `browser_screenshot`, `browser_back`, `browser_scroll` (observe, on by default), `browser_click`, `browser_type` (act, prefer `ref`, require "电脑操作权限" + approval), `browser_log` (read-only action audit trail) — driven by local headless Chrome; live view + audit trail in the "🌐 浏览器" panel.
+  - *Browser (built-in, no MCP)*: `browser_navigate`, `browser_snapshot` (lists interactive elements with `@eN` refs + viewport rects for the visual overlay), `browser_screenshot`, `browser_back`, `browser_scroll` (observe, on by default), `browser_click`, `browser_type` (act, prefer `ref`, require "电脑操作权限" + approval), `browser_log` (read-only action audit trail) — driven by local headless Chrome; live view, clickable element markers + audit trail in the "🌐 浏览器" panel.
+- **Browser Agent upgrade: visual overlay + Snippets library (v0.22.0)**: turns "invisible automation" into "visible automation".
+  - 🎯 **Visual element overlay**: the live preview is no longer just a screenshot — `browser_snapshot` now returns each interactive element's viewport `rect`, and the frontend **overlays numbered `@eN` markers** precisely on top of the real buttons / links / inputs. Hover for element info; **click a marker to drop `@eN` straight into the composer** so you can tell the agent exactly "click this" without copy-paste.
+  - 💡 **Snippets (指令库)**: a new "💡 指令库" sidebar panel saves reusable prompt / workflow fragments and inserts them into the composer in one click. Stored only in local `localStorage` — zero cloud, zero dependencies, echoing the 2026 local-first "skills as a distribution channel" idea.
+  - 🧩 `src/core/browser.js` pins a viewport (1280×800) so screenshot pixels and marker coords align 1:1; `status()` only returns `elements` + `viewport` while refs are valid (overlay auto-hides after navigate/click/back to avoid drift). New `src/core/snippets.js` (pure, unit-tested core) plus the "🌐 浏览器 / 指令库" panel wiring.
 - **Plan Mode** — toggle `Plan` in the header: the agent first returns a step-by-step plan (recorded as an inspectable checklist via the `plan` tool) and waits for your **批准并执行** before touching anything. Ideal for risky or multi-step tasks.
 - **Diff preview + one-click undo** — every file mutation (`write_file` / `edit_file` / `apply_patch`) shows a live `diff` in its tool card, with a **↩ 撤销** button that restores the previous content via a server-held snapshot.
 - **Local computer control** — a **workspace sandbox** pins every file operation under one root directory, and a **3-mode approval gate** decides when a human must approve:
@@ -103,7 +107,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (281, via node:test)
+npm test       # run core unit tests (290, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

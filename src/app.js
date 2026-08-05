@@ -4,6 +4,7 @@
 import { renderMarkdown } from './core/markdown.js';
 import { uid, escapeHtml, fuzzyFilter, formatBytes } from './core/util.js';
 import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES } from './core/config.js';
+import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
 
 const $ = (id) => document.getElementById(id);
 const LS = {
@@ -2732,6 +2733,7 @@ function closeEval() {
 // timer while the modal is open. The agent's browser_* tools write to the
 // very same page, so this shows exactly what the model is looking at.
 let browserPolling = null;
+let browserShotSig = null; // last screenshot data URL, to skip needless re-renders
 
 function openBrowserPanel() {
   $('browser-modal').classList.remove('hidden');
@@ -2764,9 +2766,18 @@ async function refreshBrowserView() {
       return;
     }
     urlEl.textContent = (j.title ? j.title + ' · ' : '') + j.url;
-    box.innerHTML = j.screenshot
-      ? `<img class="browser-shot" src="${j.screenshot}" alt="页面截图" />`
-      : '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+    if (j.screenshot && j.screenshot !== browserShotSig) {
+      browserShotSig = j.screenshot;
+      box.innerHTML = `<div class="browser-stage"><img class="browser-shot" src="${j.screenshot}" alt="页面截图" /><div class="browser-overlay" id="browser-overlay"></div></div>`;
+      const img = box.querySelector('.browser-shot');
+      if (img && img.complete) positionOverlay(j, img);
+      else if (img) img.onload = () => positionOverlay(j, img);
+    } else if (j.screenshot) {
+      positionOverlay(j, box.querySelector('.browser-shot'));
+    } else {
+      box.innerHTML = '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+      browserShotSig = null;
+    }
     renderBrowserLog(j.actions || []);
   } catch {
     /* keep previous content; transient network hiccup */
@@ -2785,12 +2796,101 @@ function renderBrowserLog(actions) {
   ).join('');
 }
 
+// Lay interactive-element markers over the live screenshot. Coordinates come
+// from the controller's bounding boxes (viewport space); we scale them to the
+// rendered image size so the badges sit exactly on top of the real controls.
+function positionOverlay(j, img) {
+  const ov = document.getElementById('browser-overlay');
+  if (!ov || !img) return;
+  const els = (j && j.elements) || [];
+  if (!els.length) { ov.innerHTML = ''; return; }
+  const vw = (j.viewport && j.viewport.width) || img.naturalWidth || 1;
+  const scale = (img.clientWidth || img.naturalWidth || 1) / vw;
+  ov.innerHTML = els.map((el) => {
+    const r = el.rect || { x: 0, y: 0, width: 0, height: 0 };
+    const left = r.x * scale;
+    const top = r.y * scale;
+    const w = r.width * scale;
+    const h = r.height * scale;
+    const title = `@${el.ref} ${el.tag}${el.name ? ' “' + el.name + '”' : ''}${el.href ? ' → ' + el.href : ''}`;
+    return `<button class="ref-marker" data-ref="@${el.ref}" title="${escapeHtml(title)}" style="left:${left}px;top:${top}px;min-width:${Math.max(16, w)}px;min-height:${Math.max(16, h)}px">@${el.ref}</button>`;
+  }).join('');
+  ov.querySelectorAll('.ref-marker').forEach((b) => {
+    b.addEventListener('click', () => insertRefIntoInput(b.getAttribute('data-ref')));
+  });
+}
+
+// Clicking a marker drops its @ref into the composer so the user can tell the
+// agent exactly which element to act on — turning passive watching into a
+// precise instruction without copy-paste.
+function insertRefIntoInput(ref) {
+  const inp = document.getElementById('input');
+  if (!inp) return;
+  inp.value = insertSnippetInto(inp.value, ref);
+  inp.focus();
+  if (inp.dispatchEvent) inp.dispatchEvent(new Event('input'));
+}
+
 async function closeBrowserEngine() {
   try {
     await fetch('/api/browser/close', { method: 'POST' });
     toast('已关闭本地浏览器');
     refreshBrowserView();
   } catch { /* ignore */ }
+}
+
+// ---------- 指令库 (reusable prompt snippets, local-first) ----------
+function openSnippets() {
+  $('snippets-modal').classList.remove('hidden');
+  renderSnippetList();
+}
+function closeSnippets() {
+  $('snippets-modal').classList.add('hidden');
+}
+function renderSnippetList() {
+  const list = $('snippet-list');
+  if (!list) return;
+  const items = listSnippets();
+  if (!items.length) {
+    list.innerHTML = '<div class="muted small">还没有保存的片段。在上方填写名称与内容后点「添加片段」。</div>';
+    return;
+  }
+  list.innerHTML = items.map((s) => `
+    <div class="snippet-item" data-id="${escapeHtml(s.id)}">
+      <div class="snippet-meta"><span class="snippet-name">${escapeHtml(s.name)}</span></div>
+      <pre class="snippet-body-text">${escapeHtml(s.body)}</pre>
+      <div class="snippet-actions">
+        <button class="mini-btn snippet-insert" data-id="${escapeHtml(s.id)}">插入</button>
+        <button class="mini-btn danger-text snippet-del" data-id="${escapeHtml(s.id)}">删除</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('.snippet-insert').forEach((b) => {
+    b.addEventListener('click', () => {
+      const s = getSnippet(b.getAttribute('data-id'));
+      if (s) {
+        const inp = document.getElementById('input');
+        if (inp) { inp.value = insertSnippetInto(inp.value, s.body); inp.focus(); inp.dispatchEvent(new Event('input')); }
+        closeSnippets();
+        toast('已插入片段：' + s.name);
+      }
+    });
+  });
+  list.querySelectorAll('.snippet-del').forEach((b) => {
+    b.addEventListener('click', () => {
+      removeSnippet(b.getAttribute('data-id'));
+      renderSnippetList();
+    });
+  });
+}
+function addSnippetFromForm() {
+  const nameEl = $('snippet-name');
+  const bodyEl = $('snippet-body');
+  const r = addSnippet(nameEl.value, bodyEl.value);
+  if (!r.ok) { toast(r.error); return; }
+  nameEl.value = '';
+  bodyEl.value = '';
+  renderSnippetList();
+  toast('已添加片段');
 }
 
 function wire() {
@@ -2809,6 +2909,9 @@ function wire() {
   $('close-browser').onclick = closeBrowserPanel;
   $('browser-refresh').onclick = refreshBrowserView;
   $('browser-close').onclick = closeBrowserEngine;
+  $('open-snippets').onclick = openSnippets;
+  $('close-snippets').onclick = closeSnippets;
+  $('snippet-add').onclick = addSnippetFromForm;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
   $('atlas-reset').onclick = atlasReset;
@@ -2977,6 +3080,7 @@ function wire() {
   $('trace-modal').addEventListener('mousedown', (e) => { if (e.target === $('trace-modal')) closeTrace(); });
   $('eval-modal').addEventListener('mousedown', (e) => { if (e.target === $('eval-modal')) closeEval(); });
   $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
+  $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -3033,6 +3137,7 @@ function wire() {
       else if (!$('trace-modal').classList.contains('hidden')) closeTrace();
       else if (!$('eval-modal').classList.contains('hidden')) closeEval();
       else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
+      else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

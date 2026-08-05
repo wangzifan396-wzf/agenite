@@ -69,6 +69,9 @@ export const BROWSER = {
   _chromePath: null,
   _refs: null,        // Map<ref, selector> from the latest snapshot
   _actions: null,     // ring buffer of audit entries
+  _viewport: { width: 1280, height: 800 }, // fixed so screenshot px map to overlay
+  _elementsValid: false, // refs currently valid for the open DOM
+  _lastElements: null,   // last snapshot's interactive elements (with rects)
 
   // Lazily load puppeteer-core and locate Chrome. Caches any failure so we
   // don't spam the same error on every call.
@@ -99,6 +102,7 @@ export const BROWSER = {
     if (!ensured.ok) return ensured;
     if (!this._page || this._page.isClosed()) {
       this._page = await this._browser.newPage();
+      try { await this._page.setViewport(this._viewport); } catch { /* ignore */ }
     }
     return { ok: true, page: this._page };
   },
@@ -144,6 +148,7 @@ export const BROWSER = {
     try {
       await pr.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
       this._refs = null; // DOM changed; refs are stale now
+      this._elementsValid = false;
       const title = await pr.page.title();
       this._record('navigate', url);
       return { ok: true, content: `已打开 ${url}\n标题: ${title}` };
@@ -176,7 +181,10 @@ export const BROWSER = {
           const href = tag === 'a' ? (el.getAttribute('href') || '') : '';
           const placeholder = (tag === 'input' || tag === 'textarea') ? (el.getAttribute('placeholder') || '') : '';
           const type = tag === 'input' ? (el.getAttribute('type') || 'text') : '';
-          out.push({ ref, tag, role, name: name.trim(), href, placeholder, type });
+          out.push({
+            ref, tag, role, name: name.trim(), href, placeholder, type,
+            rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }
+          });
         }
         return {
           title: document.title,
@@ -191,6 +199,8 @@ export const BROWSER = {
       for (const el of data.elements) {
         this._refs.set(el.ref, `[data-agenite-ref="${el.ref}"]`);
       }
+      this._lastElements = data.elements;
+      this._elementsValid = true;
 
       let text = String(data.text || '').replace(/\n{3,}/g, '\n\n').trim();
       if (text.length > 6000) text = text.slice(0, 6000) + '\n…(已截断)';
@@ -218,11 +228,47 @@ export const BROWSER = {
         url: data.url,
         title: data.title,
         elements: data.elements,
+        viewport: this._viewport,
         actions: this._recentActions()
       };
     } catch (e) {
       return { ok: false, error: '读取页面失败: ' + (e && e.message ? e.message : e) };
     }
+  },
+
+  // Re-read interactive element rects from the live DOM using the refs already
+  // stamped by snapshot(). Does NOT reassign refs, so element identities stay
+  // stable between snapshots (important for clicks by ref). Used by the live
+  // preview overlay so the markers track the real page as it scrolls.
+  async _collectElements() {
+    if (!this._page || this._page.isClosed()) return [];
+    try {
+      return await this._page.evaluate(() => {
+        const els = Array.from(document.querySelectorAll('[data-agenite-ref]'));
+        const out = [];
+        for (const el of els) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue;
+          const tag = (el.tagName || '').toLowerCase();
+          const aria = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt') || '';
+          let name = (aria || '').trim();
+          if (!name) {
+            if (tag === 'input' || tag === 'textarea') name = el.getAttribute('placeholder') || (el.value || '').slice(0, 40);
+            else name = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+          }
+          out.push({
+            ref: el.getAttribute('data-agenite-ref'),
+            tag,
+            role: el.getAttribute('role') || tag,
+            name: name.trim(),
+            href: tag === 'a' ? (el.getAttribute('href') || '') : '',
+            placeholder: (tag === 'input' || tag === 'textarea') ? (el.getAttribute('placeholder') || '') : '',
+            rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }
+          });
+        }
+        return out;
+      });
+    } catch { return []; }
   },
 
   async screenshot() {
@@ -245,6 +291,7 @@ export const BROWSER = {
     try {
       await pr.page.click(t.selector);
       this._refs = null; // DOM likely changed after a click
+      this._elementsValid = false;
       this._record('click', t.selector);
       return { ok: true, content: `已点击 ${t.selector}` };
     } catch (e) {
@@ -274,6 +321,7 @@ export const BROWSER = {
     try {
       await pr.page.goBack({ waitUntil: 'domcontentloaded' });
       this._refs = null;
+      this._elementsValid = false;
       this._record('back', 'history');
       return { ok: true, content: '已后退到上一页' };
     } catch (e) {
@@ -333,9 +381,17 @@ export const BROWSER = {
         const buf = await this._page.screenshot({ type: 'png', fullPage: false });
         screenshot = 'data:image/png;base64,' + buf.toString('base64');
       } catch { /* screenshot optional */ }
+      // Only surface clickable refs when they're still valid for this DOM;
+      // after navigate/click/back the stamped refs are stale, so the overlay
+      // hides itself until the agent calls browser_snapshot again.
+      let elements = null;
+      if (this._elementsValid && this._refs) {
+        try { elements = await this._collectElements(); } catch { elements = null; }
+      }
       return {
         ok: true, available: true, open: true,
         url: info.url, title: info.title, screenshot,
+        elements, viewport: this._viewport,
         actions: this._recentActions()
       };
     } catch (e) {

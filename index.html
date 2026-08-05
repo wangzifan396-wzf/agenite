@@ -79,6 +79,7 @@
         <button id="open-trace" class="side-link">执行轨迹</button>
         <button id="open-eval" class="side-link">评估 Eval</button>
         <button id="open-browser" class="side-link">🌐 浏览器</button>
+        <button id="open-snippets" class="side-link">💡 指令库</button>
       </div>
     </aside>
 
@@ -325,6 +326,25 @@
           <summary class="muted small">操作审计轨迹</summary>
           <ol id="browser-log" class="browser-log muted small"></ol>
         </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- 指令库 · 可复用的 prompt 片段（本地持久化，零云） -->
+  <div id="snippets-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card snippets-card">
+      <div class="drawer-head">
+        <h2>💡 指令库</h2>
+        <button id="close-snippets" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body snippets-body">
+        <p class="muted small">把常用的提示词 / 工作流存成片段，一键插入到对话输入框。仅保存在本机浏览器（localStorage），不上云。</p>
+        <div class="snippet-form">
+          <input id="snippet-name" class="text-input" type="text" placeholder="名称，如「总结网页要点」" maxlength="40" />
+          <textarea id="snippet-body" class="text-input" rows="3" placeholder="片段内容，可包含多行指令…"></textarea>
+          <button id="snippet-add" class="mini-btn">添加片段</button>
+        </div>
+        <div id="snippet-list" class="snippet-list"></div>
       </div>
     </div>
   </div>

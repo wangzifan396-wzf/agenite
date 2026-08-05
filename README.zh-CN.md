@@ -71,7 +71,11 @@
 - **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **34 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
-  - *浏览器（内置，无 MCP）*：`browser_navigate`、`browser_snapshot`（列出可交互元素的 `@eN` 引用）、`browser_screenshot`、`browser_back`、`browser_scroll`（观察类，默认可用）、`browser_click`、`browser_type`（操作类，优先吃 `ref` 引用，需开启电脑操作权限 + 审批）、`browser_log`（只读操作审计轨迹）—— 由本机 Chrome 无头驱动，实时画面与审计轨迹可在「🌐 浏览器」面板查看。
+  - *浏览器（内置，无 MCP）*：`browser_navigate`、`browser_snapshot`（列出可交互元素的 `@eN` 引用，并带视口坐标供前端叠加可视化标记）、`browser_screenshot`、`browser_back`、`browser_scroll`（观察类，默认可用）、`browser_click`、`browser_type`（操作类，优先吃 `ref` 引用，需开启电脑操作权限 + 审批）、`browser_log`（只读操作审计轨迹）—— 由本机 Chrome 无头驱动，实时画面、可点击的元素标记与审计轨迹可在「🌐 浏览器」面板查看。
+- **浏览器 Agent 再升级：可视化覆盖层 + 指令库（v0.22.0）**：把"看不见的自动化"变成"看得见的自动化"。
+  - 🎯 **可视化元素覆盖层**：实时预览不再只是一张截图——`browser_snapshot` 现在会带上每个可交互元素的视口坐标（`rect`），前端在截图上方**叠加带编号的 `@eN` 标记**，精确落在页面真实的按钮 / 链接 / 输入框上。悬停看元素信息，**点一下标记就把 `@eN` 直接填进对话输入框**，让你可以精确告诉 Agent"点这个"，无需复制粘贴。
+  - 💡 **指令库（Snippets）**：侧栏新增「💡 指令库」——把常用的提示词 / 工作流存成命名片段，一键插入对话输入框。仅存在本机 `localStorage`，零云、零依赖，呼应 2026 年 "skills 作为分发渠道" 的本地优先思路。
+  - 🧩 `src/core/browser.js` 固定视口（1280×800）以便截图像素与标记坐标一一对应；`status()` 仅在引用仍有效时回传 `elements` + `viewport`（导航/点击/后退后引用失效会自动隐藏覆盖层，避免错位）；前端 `positionOverlay` 按渲染尺寸缩放标记。新增 `src/core/snippets.js`（纯函数核心，含单测）与「🌐 浏览器 / 指令库」面板接线。
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
 - **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：
@@ -112,7 +116,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（281 个，node:test）
+npm test       # 跑核心逻辑单元测试（290 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口
