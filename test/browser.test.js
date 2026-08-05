@@ -18,12 +18,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function fakeBrowser() {
   return {
     navigate: async (a) => ({ ok: true, content: '打开 ' + a.url }),
-    snapshot: async () => ({ ok: true, content: '页面文本', url: 'https://x.test/', title: 'X' }),
+    snapshot: async () => ({ ok: true, content: '页面文本', url: 'https://x.test/', title: 'X', elements: [{ ref: 'e1', tag: 'a', name: 'go' }] }),
     screenshot: async () => ({ ok: true, content: '已截图', screenshot: 'data:image/png;base64,AAAA' }),
-    click: async (a) => ({ ok: true, content: '点击 ' + a.selector }),
+    click: async (a) => ({ ok: true, content: '点击 ' + (a.selector || a.ref) }),
     type: async (a) => ({ ok: true, content: '输入 ' + a.text }),
     back: async () => ({ ok: true, content: '后退' }),
     scroll: async (a) => ({ ok: true, content: '滚动 ' + (a.direction || 'down') }),
+    log: async () => ({ ok: true, content: 'log', actions: [] }),
     close: async () => ({ ok: true, content: '关闭' }),
     status: async () => ({ ok: true, available: true, open: true, url: 'u', title: 't' })
   };
@@ -49,6 +50,17 @@ describe('browser tools — routing & contract (injected fake)', () => {
     });
   }
 
+  test('browser_click accepts a snapshot ref (deterministic handle)', async () => {
+    const r = await executeTool('browser_click', { ref: 'e3' }, { browser: fake, dangerTools: true });
+    assert.equal(r.ok, true);
+    assert.ok(r.content.includes('e3'));
+  });
+
+  test('browser_log routes to controller and returns ok', async () => {
+    const r = await executeTool('browser_log', {}, { browser: fake });
+    assert.equal(r.ok, true);
+  });
+
   test('falls back to the shared BROWSER singleton when opts.browser absent', async () => {
     // BROWSER has all methods; should not be treated as "unavailable".
     const r = await BROWSER.status();
@@ -65,6 +77,11 @@ describe('browser tools — routing & contract (injected fake)', () => {
     const r = await executeTool('browser_click', { selector: 'a' }, { browser: fake });
     assert.equal(r.ok, false);
     assert.ok(/电脑操作权限/.test(r.error));
+  });
+
+  test('read-only browser_log is available without dangerTools', async () => {
+    const names = activeTools({}).map((t) => t.name);
+    assert.ok(names.includes('browser_log'));
   });
 });
 
@@ -98,22 +115,39 @@ describe('browser — real Chrome smoke', { skip: !puppeteerResolvable }, () => 
     // Serve a tiny page locally so the smoke needs no external network.
     server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end('<!doctype html><html><body><h1>hello</h1><p>world</p></body></html>');
+      res.end('<!doctype html><html><body><h1>hello</h1><p>world</p><a href="/next">next</a><button>go</button></body></html>');
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     url = 'http://127.0.0.1:' + server.address().port + '/';
   });
   after(async () => { if (server) await new Promise((r) => server.close(r)); });
 
-  test('navigate + snapshot + screenshot against a real local page', async () => {
+  test('navigate + snapshot (with @refs) + ref-based click + screenshot', async () => {
     const nav = await BROWSER.navigate({ url });
     assert.equal(nav.ok, true);
     const snap = await BROWSER.snapshot();
     assert.equal(snap.ok, true);
     assert.ok(/hello|world/.test(snap.content));
+    // snapshot must expose deterministic element refs for click/type.
+    assert.ok(Array.isArray(snap.elements) && snap.elements.length >= 2, 'elements=' + JSON.stringify(snap.elements));
+    const firstRef = snap.elements[0].ref;
+    assert.ok(/^e\d+$/.test(firstRef), 'ref format ' + firstRef);
+    // click by ref resolves the injected selector deterministically.
+    const clicked = await BROWSER.click({ ref: firstRef });
+    assert.equal(clicked.ok, true);
     const shot = await BROWSER.screenshot();
     assert.equal(shot.ok, true);
     assert.ok(shot.screenshot.startsWith('data:image/png;base64,'));
+    await BROWSER.close();
+  });
+
+  test('click by unknown ref is rejected with a helpful error', async () => {
+    const nav = await BROWSER.navigate({ url });
+    assert.equal(nav.ok, true);
+    await BROWSER.snapshot();
+    const r = await BROWSER.click({ ref: 'e999' });
+    assert.equal(r.ok, false);
+    assert.ok(/找不到元素引用/.test(r.error));
     await BROWSER.close();
   });
 

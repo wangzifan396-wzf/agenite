@@ -2760,15 +2760,29 @@ async function refreshBrowserView() {
     if (!j.open) {
       urlEl.textContent = '尚未打开页面';
       box.innerHTML = '<div class="muted small">还没有打开的页面。发一条「打开 https://…」的消息，Agent 会自动导航，这里会实时显示截图。</div>';
+      renderBrowserLog([]);
       return;
     }
     urlEl.textContent = (j.title ? j.title + ' · ' : '') + j.url;
     box.innerHTML = j.screenshot
       ? `<img class="browser-shot" src="${j.screenshot}" alt="页面截图" />`
       : '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+    renderBrowserLog(j.actions || []);
   } catch {
     /* keep previous content; transient network hiccup */
   }
+}
+
+function renderBrowserLog(actions) {
+  const el = $('browser-log');
+  if (!el) return;
+  if (!actions || !actions.length) {
+    el.innerHTML = '<li class="muted">（暂无操作记录）</li>';
+    return;
+  }
+  el.innerHTML = actions.slice().reverse().map((a) =>
+    `<li><code>${escapeHtml(a.action)}</code> ${escapeHtml(a.target)}${a.detail ? ' <span class="muted">· ' + escapeHtml(a.detail) + '</span>' : ''}</li>`
+  ).join('');
 }
 
 async function closeBrowserEngine() {

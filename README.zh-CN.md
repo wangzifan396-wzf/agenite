@@ -67,10 +67,11 @@
   - 🌐 **内置工具**：`browser_navigate`（打开网页）、`browser_snapshot`（读取页面可见文本）、`browser_screenshot`（截图）、`browser_click` / `browser_type`（点击 / 输入，需开启「电脑操作权限」+ 审批）、`browser_back` / `browser_scroll`（后退 / 滚动）。
   - 👁️ **实时预览面板**：侧栏「🌐 浏览器」直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），让"它在看什么"一目了然。
   - 🧩 新增 `src/core/browser.js`（懒加载 `puppeteer-core`、自动探测本机 Chrome、找不到时优雅降级），`src/core/tools.js` 注册 7 个工具并经 `toolContext.browser` 注入；服务端新增 `GET /api/browser`（实时状态 + 截图）、`POST /api/browser/close`，**零架构债**。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。
-- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **33 个工具**（再加上你接入的 MCP 工具）：
+- **浏览器 Agent 升级：确定性元素引用 + 操作审计轨迹（v0.21.0）**：把浏览器自动化从"靠截图/坐标的脆弱视觉操作"升级为**确定性交互**——`browser_snapshot` 现在会给页面上每个可见可交互元素注入临时 `@eN` 引用并列出清单，模型用 `ref`（如 `e3`）调用 `browser_click` / `browser_type`，不再依赖易碎的 CSS 选择器或像素坐标（借鉴 2026 年 Vercel Agent Browser / 阿里 Page-Agent 的 accessibility-tree 思路，**纯本地即可**）。同时每次导航/点击/输入/后退/滚动都被记录为**可审计的操作轨迹**（含时间戳与目标），可在「🌐 浏览器」面板的「操作审计轨迹」里实时回看，亦可调用 `browser_log` 取回——回应了"agentic browsing 需要可审计痕迹"的监管趋势，数据依旧不出本机。内置浏览器工具由 7 个增至 **8 个**（新增 `browser_log`）。
+- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **34 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
-  - *浏览器（内置，无 MCP）*：`browser_navigate`、`browser_snapshot`、`browser_screenshot`、`browser_back`、`browser_scroll`（观察类，默认可用）、`browser_click`、`browser_type`（操作类，需开启电脑操作权限 + 审批）—— 由本机 Chrome 无头驱动，实时画面可在「🌐 浏览器」面板查看。
+  - *浏览器（内置，无 MCP）*：`browser_navigate`、`browser_snapshot`（列出可交互元素的 `@eN` 引用）、`browser_screenshot`、`browser_back`、`browser_scroll`（观察类，默认可用）、`browser_click`、`browser_type`（操作类，优先吃 `ref` 引用，需开启电脑操作权限 + 审批）、`browser_log`（只读操作审计轨迹）—— 由本机 Chrome 无头驱动，实时画面与审计轨迹可在「🌐 浏览器」面板查看。
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
 - **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：

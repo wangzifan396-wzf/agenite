@@ -1636,6 +1636,16 @@ select.text-input { appearance: auto; padding-right: 8px; }
   padding: 12px;
 }
 .browser-shot { max-width: 100%; height: auto; border-radius: 8px; box-shadow: var(--shadow-sm); }
+.browser-log-wrap { border-top: 1px dashed var(--border); padding-top: 8px; }
+.browser-log-wrap > summary { cursor: pointer; user-select: none; }
+.browser-log {
+  margin: 8px 0 0; padding-left: 18px; max-height: 180px; overflow: auto;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+}
+.browser-log code {
+  background: var(--chip); padding: 1px 6px; border-radius: 5px;
+  color: var(--accent); font-weight: 600;
+}
 
 @media (max-width: 760px) {
   .browser-body { gap: 10px; }
@@ -1956,6 +1966,10 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <div id="browser-view" class="browser-view">
           <div class="muted small">还没有打开的页面。发一条「打开 https://…」的消息，Agent 会自动导航，这里会实时显示截图。</div>
         </div>
+        <details class="browser-log-wrap">
+          <summary class="muted small">操作审计轨迹</summary>
+          <ol id="browser-log" class="browser-log muted small"></ol>
+        </details>
       </div>
     </div>
   </div>
@@ -5540,15 +5554,29 @@ async function refreshBrowserView() {
     if (!j.open) {
       urlEl.textContent = '尚未打开页面';
       box.innerHTML = '<div class="muted small">还没有打开的页面。发一条「打开 https://…」的消息，Agent 会自动导航，这里会实时显示截图。</div>';
+      renderBrowserLog([]);
       return;
     }
     urlEl.textContent = (j.title ? j.title + ' · ' : '') + j.url;
     box.innerHTML = j.screenshot
       ? `<img class="browser-shot" src="${j.screenshot}" alt="页面截图" />`
       : '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+    renderBrowserLog(j.actions || []);
   } catch {
     /* keep previous content; transient network hiccup */
   }
+}
+
+function renderBrowserLog(actions) {
+  const el = $('browser-log');
+  if (!el) return;
+  if (!actions || !actions.length) {
+    el.innerHTML = '<li class="muted">（暂无操作记录）</li>';
+    return;
+  }
+  el.innerHTML = actions.slice().reverse().map((a) =>
+    `<li><code>${escapeHtml(a.action)}</code> ${escapeHtml(a.target)}${a.detail ? ' <span class="muted">· ' + escapeHtml(a.detail) + '</span>' : ''}</li>`
+  ).join('');
 }
 
 async function closeBrowserEngine() {

@@ -375,7 +375,7 @@ export const TOOL_DEFS = [
   },
   {
     name: 'browser_snapshot',
-    description: '读取当前已打开页面的可见文本与标题（去掉脚本/样式噪音的可读视图），让模型"看见"页面内容后再决定下一步。每次需要了解页面时调用。',
+    description: '读取当前页面的可见文本、标题，并列出所有可交互元素（按钮/链接/输入框）及其稳定 @引用（如 @e3）。这是点击/输入前的必做步骤：先用 @引用 定位元素，再传给 browser_click / browser_type。引用仅在本次快照有效，页面变化后需重新快照。',
     parameters: { type: 'object', properties: {} },
     danger: false
   },
@@ -387,24 +387,28 @@ export const TOOL_DEFS = [
   },
   {
     name: 'browser_click',
-    description: '点击页面上匹配 CSS 选择器的元素（按钮、链接等）。会真实触发页面交互，需要用户审批。',
+    description: '点击页面元素（按钮、链接等），会真实触发交互，需要用户审批。优先用 browser_snapshot 返回的 @引用（如 ref: "e3"）；也可传原始 selector。',
     parameters: {
       type: 'object',
-      properties: { selector: { type: 'string', description: 'CSS 选择器，如 "button#submit" 或 "a.login-link"。' } },
-      required: ['selector']
+      properties: {
+        ref: { type: 'string', description: '来自 browser_snapshot 的元素引用，如 "e3"。优先于 selector。' },
+        selector: { type: 'string', description: '回退用的 CSS 选择器，如 "button#submit"。' }
+      },
+      required: []
     },
     danger: true
   },
   {
     name: 'browser_type',
-    description: '在页面上匹配 CSS 选择器的输入框中键入文本（登录框、搜索框等）。会真实输入内容，需要用户审批。',
+    description: '在页面输入框中键入文本（搜索框、登录框等），会真实输入内容，需要用户审批。优先用 browser_snapshot 返回的 @引用（如 ref: "e3"）；也可传原始 selector。',
     parameters: {
       type: 'object',
       properties: {
-        selector: { type: 'string', description: '目标输入框的 CSS 选择器。' },
+        ref: { type: 'string', description: '来自 browser_snapshot 的元素引用，如 "e3"。优先于 selector。' },
+        selector: { type: 'string', description: '回退用的目标输入框 CSS 选择器。' },
         text: { type: 'string', description: '要键入的文本。' }
       },
-      required: ['selector', 'text']
+      required: ['text']
     },
     danger: true
   },
@@ -425,6 +429,12 @@ export const TOOL_DEFS = [
       },
       required: []
     },
+    danger: false
+  },
+  {
+    name: 'browser_log',
+    description: '返回浏览器操作的审计轨迹（最近的导航/点击/输入/后退/滚动，含时间戳与目标），用于复盘 Agent 在网页上做过什么。只读，无需审批。',
+    parameters: { type: 'object', properties: {} },
     danger: false
   }
 ];
@@ -568,6 +578,7 @@ async function dispatch(name, args, opts) {
       case 'browser_type':
       case 'browser_back':
       case 'browser_scroll':
+      case 'browser_log':
         return browserTool(name, args, opts);
     default:
       return { ok: false, error: `未实现的工具: ${name}` };

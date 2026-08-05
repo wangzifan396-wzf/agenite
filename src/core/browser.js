@@ -11,6 +11,16 @@
 //   - One shared browser + one page process-wide. Local-first, single-user, so
 //     a singleton is the simplest correct model; the live preview panel reads
 //     exactly what the agent is looking at.
+//   - Deterministic element handles (v0.21): browser_snapshot injects a
+//     temporary data-agenite-ref="@eN" attribute on every visible interactive
+//     element and returns them as a stable, clickable list. click/type take a
+//     ref instead of brittle CSS selectors or coordinates — this is the single
+//     biggest reliability win over vision/coordinate-driven browsing, and it
+//     needs no cloud at all (local-first by construction).
+//   - Action audit trail (v0.21): every navigate/click/type/back/scroll is
+//     recorded with a timestamp + target so the user (and the model) can review
+//     exactly what the agent did — answering the 2026 "agentic browsing needs
+//     auditable traces" requirement without leaving the machine.
 //   - Every method returns { ok, content, ... } like the rest of the tools.
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -43,6 +53,12 @@ function findChrome() {
   return null;
 }
 
+// Selector for the interactive elements we surface as clickable refs.
+const INTERACTIVE_SEL = [
+  'a[href]', 'button', 'input', 'select', 'textarea',
+  '[role="button"]', '[role="link"]', '[tabindex]', '[contenteditable="true"]'
+].join(',');
+
 // The shared controller. Methods are arrow functions so they work regardless
 // of how they're invoked (e.g. ctrl[name](args) inside the dispatch switch).
 export const BROWSER = {
@@ -51,6 +67,8 @@ export const BROWSER = {
   _page: null,
   _launchError: null,
   _chromePath: null,
+  _refs: null,        // Map<ref, selector> from the latest snapshot
+  _actions: null,     // ring buffer of audit entries
 
   // Lazily load puppeteer-core and locate Chrome. Caches any failure so we
   // don't spam the same error on every call.
@@ -85,6 +103,37 @@ export const BROWSER = {
     return { ok: true, page: this._page };
   },
 
+  // Resolve a click/type target from either a snapshot ref or a raw selector.
+  _resolveTarget(args = {}) {
+    const ref = String(args.ref || '').trim();
+    if (ref) {
+      const sel = this._refs && this._refs.get(ref);
+      if (!sel) {
+        return { error: `找不到元素引用 ${ref} —— 请先调用 browser_snapshot 获取最新引用（页面变化后引用会失效）` };
+      }
+      return { selector: sel };
+    }
+    const selector = String(args.selector || '').trim();
+    if (!selector) return { error: 'ref 或 selector 不能为空' };
+    return { selector };
+  },
+
+  _record(kind, target, extra) {
+    if (!this._actions) this._actions = [];
+    this._actions.push({ t: Date.now(), kind, target, extra: extra || null });
+    if (this._actions.length > 200) this._actions.shift();
+  },
+
+  _recentActions(n = 12) {
+    if (!this._actions || !this._actions.length) return [];
+    return this._actions.slice(-n).map((a) => ({
+      time: new Date(a.t).toISOString(),
+      action: a.kind,
+      target: a.target,
+      detail: a.extra ? JSON.stringify(a.extra) : null
+    }));
+  },
+
   // ---- tool-facing methods ----
 
   async navigate(args = {}) {
@@ -94,7 +143,9 @@ export const BROWSER = {
     if (!pr.ok) return pr;
     try {
       await pr.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      this._refs = null; // DOM changed; refs are stale now
       const title = await pr.page.title();
+      this._record('navigate', url);
       return { ok: true, content: `已打开 ${url}\n标题: ${title}` };
     } catch (e) {
       return { ok: false, error: '打开页面失败: ' + (e && e.message ? e.message : e) };
@@ -105,18 +156,69 @@ export const BROWSER = {
     const pr = await this._pageReady();
     if (!pr.ok) return pr;
     try {
-      const data = await pr.page.evaluate(() => ({
-        title: document.title,
-        url: location.href,
-        text: document.body ? document.body.innerText : ''
-      }));
+      const data = await pr.page.evaluate((sel) => {
+        const els = Array.from(document.querySelectorAll(sel));
+        const out = [];
+        let i = 0;
+        for (const el of els) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue; // skip hidden
+          const ref = 'e' + (++i);
+          try { el.setAttribute('data-agenite-ref', ref); } catch { /* ignore */ }
+          const tag = (el.tagName || '').toLowerCase();
+          const role = el.getAttribute('role') || tag;
+          const aria = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt') || '';
+          let name = aria.trim();
+          if (!name) {
+            if (tag === 'input' || tag === 'textarea') name = el.getAttribute('placeholder') || (el.value || '').slice(0, 40);
+            else name = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+          }
+          const href = tag === 'a' ? (el.getAttribute('href') || '') : '';
+          const placeholder = (tag === 'input' || tag === 'textarea') ? (el.getAttribute('placeholder') || '') : '';
+          const type = tag === 'input' ? (el.getAttribute('type') || 'text') : '';
+          out.push({ ref, tag, role, name: name.trim(), href, placeholder, type });
+        }
+        return {
+          title: document.title,
+          url: location.href,
+          text: document.body ? document.body.innerText : '',
+          elements: out
+        };
+      }, INTERACTIVE_SEL);
+
+      // Persist ref -> selector so click/type can resolve deterministically.
+      this._refs = new Map();
+      for (const el of data.elements) {
+        this._refs.set(el.ref, `[data-agenite-ref="${el.ref}"]`);
+      }
+
       let text = String(data.text || '').replace(/\n{3,}/g, '\n\n').trim();
-      if (text.length > 8000) text = text.slice(0, 8000) + '\n…(已截断)';
+      if (text.length > 6000) text = text.slice(0, 6000) + '\n…(已截断)';
+
+      const listed = data.elements.slice(0, 80).map((el) => {
+        const tag = el.type ? `${el.tag} ${el.type}` : el.tag;
+        const extra = el.href ? ` -> ${el.href}` : (el.placeholder ? ` placeholder="${el.placeholder}"` : '');
+        return `@${el.ref} [${tag}] "${el.name}"${extra}`;
+      }).join('\n');
+
+      const content = [
+        `页面: ${data.title}`,
+        `地址: ${data.url}`,
+        '',
+        `【可交互元素 ${data.elements.length} 个（用 @引用 给 click/type）】`,
+        listed || '（无可交互元素）',
+        '',
+        '【可见文本】',
+        text || '（无文本）'
+      ].join('\n');
+
       return {
         ok: true,
-        content: `页面: ${data.title}\n地址: ${data.url}\n\n可见内容:\n${text}`,
+        content,
         url: data.url,
-        title: data.title
+        title: data.title,
+        elements: data.elements,
+        actions: this._recentActions()
       };
     } catch (e) {
       return { ok: false, error: '读取页面失败: ' + (e && e.message ? e.message : e) };
@@ -136,27 +238,31 @@ export const BROWSER = {
   },
 
   async click(args = {}) {
-    const selector = String(args.selector || '').trim();
-    if (!selector) return { ok: false, error: 'selector 不能为空' };
+    const t = this._resolveTarget(args);
+    if (t.error) return { ok: false, error: t.error };
     const pr = await this._pageReady();
     if (!pr.ok) return pr;
     try {
-      await pr.page.click(selector);
-      return { ok: true, content: `已点击 ${selector}` };
+      await pr.page.click(t.selector);
+      this._refs = null; // DOM likely changed after a click
+      this._record('click', t.selector);
+      return { ok: true, content: `已点击 ${t.selector}` };
     } catch (e) {
       return { ok: false, error: '点击失败（元素可能不存在或不可见）: ' + (e && e.message ? e.message : e) };
     }
   },
 
   async type(args = {}) {
-    const selector = String(args.selector || '').trim();
+    const t = this._resolveTarget(args);
+    if (t.error) return { ok: false, error: t.error };
     const text = String(args.text == null ? '' : args.text);
-    if (!selector) return { ok: false, error: 'selector 不能为空' };
     const pr = await this._pageReady();
     if (!pr.ok) return pr;
     try {
-      await pr.page.type(selector, text);
-      return { ok: true, content: `已在 ${selector} 输入文本（${text.length} 字符）` };
+      await pr.page.focus(t.selector);
+      await pr.page.type(t.selector, text);
+      this._record('type', t.selector, { text });
+      return { ok: true, content: `已在 ${t.selector} 输入文本（${text.length} 字符）` };
     } catch (e) {
       return { ok: false, error: '输入失败: ' + (e && e.message ? e.message : e) };
     }
@@ -167,6 +273,8 @@ export const BROWSER = {
     if (!pr.ok) return pr;
     try {
       await pr.page.goBack({ waitUntil: 'domcontentloaded' });
+      this._refs = null;
+      this._record('back', 'history');
       return { ok: true, content: '已后退到上一页' };
     } catch (e) {
       return { ok: false, error: '后退失败: ' + (e && e.message ? e.message : e) };
@@ -181,10 +289,19 @@ export const BROWSER = {
     try {
       const delta = direction === 'up' ? -Math.abs(amount) : Math.abs(amount);
       await pr.page.evaluate((d) => window.scrollBy(0, d), delta);
+      this._record('scroll', direction);
       return { ok: true, content: `已向${direction === 'up' ? '上' : '下'}滚动 ${amount}px` };
     } catch (e) {
       return { ok: false, error: '滚动失败: ' + (e && e.message ? e.message : e) };
     }
+  },
+
+  async log() {
+    const actions = this._recentActions(50);
+    const lines = actions.length
+      ? actions.map((a) => `${a.time}  ${a.action}  ${a.target}${a.detail ? '  ' + a.detail : ''}`).join('\n')
+      : '（暂无操作记录）';
+    return { ok: true, content: '【操作审计轨迹】\n' + lines, actions };
   },
 
   async close() {
@@ -193,6 +310,8 @@ export const BROWSER = {
     }
     this._browser = null;
     this._page = null;
+    this._refs = null;
+    this._actions = null;
     return { ok: true, content: '已关闭浏览器。' };
   },
 
@@ -205,7 +324,7 @@ export const BROWSER = {
       return { ok: false, available: false, open: false, error: ensured.error };
     }
     if (!this._page || this._page.isClosed()) {
-      return { ok: true, available: true, open: false, url: null, title: null };
+      return { ok: true, available: true, open: false, url: null, title: null, actions: this._recentActions() };
     }
     try {
       const info = await this._page.evaluate(() => ({ title: document.title, url: location.href }));
@@ -214,7 +333,11 @@ export const BROWSER = {
         const buf = await this._page.screenshot({ type: 'png', fullPage: false });
         screenshot = 'data:image/png;base64,' + buf.toString('base64');
       } catch { /* screenshot optional */ }
-      return { ok: true, available: true, open: true, url: info.url, title: info.title, screenshot };
+      return {
+        ok: true, available: true, open: true,
+        url: info.url, title: info.title, screenshot,
+        actions: this._recentActions()
+      };
     } catch (e) {
       return { ok: true, available: true, open: false, url: null, title: null, error: e.message };
     }

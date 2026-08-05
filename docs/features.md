@@ -454,12 +454,14 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 
 #### 8.9.13.1 工具与控制器
 
-`src/core/browser.js` 新增浏览器控制器 `BROWSER`（懒加载 `puppeteer-core`、自动探测本机 Chrome、找不到时优雅降级返回错误），方法 `navigate` / `snapshot` / `screenshot` / `click` / `type` / `back` / `scroll` / `close` / `status`，单例 page 进程级共享。`src/core/tools.js` 注册 7 个工具（观察类 `navigate`/`snapshot`/`screenshot`/`back`/`scroll` 为 `danger:false`，操作类 `click`/`type` 为 `danger:true`，与 `write_file` 同级需开启「电脑操作权限」+ 审批），`dispatch` 经 `browserTool` 助手路由到 `opts.browser`（注入的 `BROWSER` 单例）或测试用假控制器。
+`src/core/browser.js` 新增浏览器控制器 `BROWSER`（懒加载 `puppeteer-core`、自动探测本机 Chrome、找不到时优雅降级返回错误），方法 `navigate` / `snapshot` / `screenshot` / `click` / `type` / `back` / `scroll` / `log` / `close` / `status`，单例 page 进程级共享。`src/core/tools.js` 注册 8 个工具（观察类 `navigate`/`snapshot`/`screenshot`/`back`/`scroll`/`log` 为 `danger:false`，操作类 `click`/`type` 为 `danger:true`，与 `write_file` 同级需开启「电脑操作权限」+ 审批），`dispatch` 经 `browserTool` 助手路由到 `opts.browser`（注入的 `BROWSER` 单例）或测试用假控制器。
+
+（`v0.21.0` 升级）**确定性元素引用**：`snapshot` 在页面每个可见可交互元素上注入临时 `data-agenite-ref="@eN"` 并返回清单（含 tag/role/名称/href），`click`/`type` 优先吃 `ref`（`_resolveTarget` 从 `_refs` 映射解出稳定选择器），不再依赖易碎的 CSS 选择器或像素坐标 —— 借鉴 2026 Vercel Agent Browser / 阿里 Page-Agent 的 accessibility-tree 思路，纯本地即可。**操作审计轨迹**：`navigate`/`click`/`type`/`back`/`scroll` 均经 `_record` 写入环形缓冲（时间戳 + 目标 + 详情），`log()` 取回最近 50 条，`status()` 也带上 `actions`，前端「🌐 浏览器」面板新增「操作审计轨迹」折叠区实时回看，回应"agentic browsing 需要可审计痕迹"的监管趋势。
 
 #### 8.9.13.2 服务端 + 前端
 
-- 服务端：注入 `toolContext.browser = BROWSER`；新增 `GET /api/browser`（实时状态 + 截图 data URL）、`POST /api/browser/close`。**零架构债**。
-- 前端：侧栏「🌐 浏览器」面板直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），开面板后每 4s 轮询刷新。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。
+- 服务端：注入 `toolContext.browser = BROWSER`；新增 `GET /api/browser`（实时状态 + 截图 data URL + 最近操作）、`POST /api/browser/close`。**零架构债**。
+- 前端：侧栏「🌐 浏览器」面板直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），开面板后每 4s 轮询刷新；v0.21.0 起面板底部新增「操作审计轨迹」折叠区，渲染 `GET /api/browser` 返回的 `actions`。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。
 
 ## 9. 设计原则
 
