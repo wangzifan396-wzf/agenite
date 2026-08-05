@@ -57,6 +57,12 @@
   - 🛡️ **预算护栏（成本熔断）**：交互式对话累计花费达到上限（设置里可调，默认 $3）时，自动注入「停止并总结」指令，让模型做最后一次收尾，而不是任由它在死循环里烧钱。与「自治目标」已有的预算护栏互不干扰。
   - 🩺 **运行自检报告**：每次运行结束，`diagnoseTrace` 把轨迹打成 **ok / warn / bad** 三级体检报告——空转死循环（参数完全相同的重复调用）= bad 重点点名；工具高频复用、多次失败、超预算 = warn。报告既作为聊天里的「自检卡片」贴在当前回复下方，也显示在「执行轨迹」面板里，让「返回 200 但藏着问题」无所遁形。
   - 🧩 纯函数 `diagnoseTrace` + `traceCost` 新增于 `src/core/trace.js`，复用既有 `detectConsecutiveLoops`；护栏逻辑落在 `src/core/agent.js` 的 `runAgent` 循环里（成本达标即优雅收尾 + 发 `guardrail` 事件），服务端新增 `diagnosis` SSE 事件与默认预算注入，**零架构债**。
+- **评估 Eval：轨迹驱动的本地回归测试（v0.19.0）**：可观测 + 可干预之后，下一步是**可改进**——把「能不能测」从玄学变成工程。2026 年的共识（LangChain 调研：89% 团队有可观测、仅 52% 部署前跑离线评估）是「golden replay」：把一次真实运行冻结成测试用例，重放时**模型是唯一变量**。Agenite 天生适合这件事——每次运行都已本机存档，你的真实对话直接变成测试集，无需合成 benchmark、不上云、冻结工具结果因此连 API 额度都省了。包含：
+  - 🎯 **轨迹 → 用例**：选任意历史运行，自动抽成评估用例（用户输入 + 冻结的工具调用序列与结果）。
+  - 🔁 **冻结重放**：重放时工具结果直接回放黄金记录，模型任何「跑偏」（调了黄金集之外的工具 = 漂移）都会被标记，且完全确定性、不依赖外部环境。
+  - 📊 **CLASSic 评分**：每个用例按 Cost / Latency / Accuracy / Stability / Security 多维打分——是否跑到结论、工具调用顺序是否一致（toolAdherence）、成本相对参考运行的 delta、复用 `diagnoseTrace` 的体检等级。
+  - 📉 **基线对比 / 回归告警**：每次评估与上一次运行比较，通过率 / 均耗 / 均轮下滑即标红告警，相当于给 Agent 上了 CI 质量门禁（Arthur AI / Braintrust 同款思路）。
+  - 🧩 纯函数 `traceToCase` / `frozenExecuteTool` / `scoreCase` / `runEval` / `diffBaseline` 新增于 `src/core/eval.js`（复用 `runAgent` 与 `diagnoseTrace`，**零架构债**）；服务端新增 `POST /api/eval`（后台运行，真实调模型）、`GET /api/evals`、`GET /api/evals/:id`、`DELETE /api/evals/:id`，落盘 `~/.agenite/evals` 并保留 `baseline.json`；前端新增「评估 Eval」面板（用例多选、运行中态、报告 chips + 回归列表 + 逐用例表、历史评估）。
 - **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **26 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
@@ -100,7 +106,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（257 个，node:test）
+npm test       # 跑核心逻辑单元测试（267 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

@@ -1554,9 +1554,48 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .th-meta { margin-top: 3px; }
 .th-del { position: absolute; top: 6px; right: 6px; font-size: 10.5px; padding: 2px 7px; }
 
+/* ---- Eval (trace-driven regression suite) ---- */
+.eval-intro { margin: 0 0 12px; line-height: 1.55; }
+.eval-cols { display: grid; grid-template-columns: 1fr 280px; gap: 14px; min-height: 0; }
+.eval-run-wrap { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.eval-traces { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: var(--panel); }
+.eval-trace-item { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.eval-trace-item:hover { background: var(--hover); }
+.eval-trace-item input { margin-top: 3px; }
+.eti-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.eti-title { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eti-meta { font-size: 11px; color: var(--muted); }
+.eval-runrow { display: flex; align-items: flex-end; gap: 10px; }
+.field.inline { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.field.inline input { width: 60px; }
+.eval-status { padding: 9px 12px; border-radius: 10px; background: rgba(120,170,255,.1); border: 1px solid rgba(120,170,255,.35); color: var(--text); font-size: 12.5px; }
+.eval-report { display: flex; flex-direction: column; gap: 10px; }
+.eval-report-head { font-size: 12.5px; color: var(--text); font-weight: 500; }
+.eval-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.echip { padding: 5px 9px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.echip b { color: var(--text); }
+.echip.ok { border-color: rgba(80,200,120,.5); color: #7ee2a0; }
+.echip.bad { border-color: rgba(255,93,93,.5); color: #ff8b8b; }
+.eval-reg { padding: 8px 11px; border-radius: 10px; background: rgba(255,180,60,.12); border: 1px solid rgba(255,180,60,.4); color: #ffcf7a; font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.eval-reg-item { background: rgba(0,0,0,.15); padding: 1px 7px; border-radius: 6px; }
+.eval-ok { color: #7ee2a0; font-size: 12px; }
+.eval-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.eval-table th, .eval-table td { text-align: left; padding: 5px 7px; border-bottom: 1px solid var(--border); }
+.eval-table th { color: var(--muted); font-weight: 500; }
+.ec-pass { font-weight: 700; color: #7ee2a0; }
+.erow-bad .ec-pass { color: #ff8b8b; }
+.ec-bad { color: #ff8b8b; }
+.diag-bad { color: #ff8b8b; font-weight: 600; }
+.diag-warn { color: #ffcf7a; }
+.diag-ok { color: #7ee2a0; }
+.eval-history-wrap { display: flex; flex-direction: column; gap: 8px; border-left: 1px solid var(--border); padding-left: 14px; min-width: 0; }
+.eval-history { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; }
+
 @media (max-width: 760px) {
   .trace-cols { grid-template-columns: 1fr; }
   .trace-history-wrap { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 10px; }
+  .eval-cols { grid-template-columns: 1fr; }
+  .eval-history-wrap { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 10px; }
 }
 
 @media (max-width: 760px) {

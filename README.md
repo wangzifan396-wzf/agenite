@@ -57,6 +57,12 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   - 🛡️ **Budget guardrail (cost circuit-breaker)**: when an interactive chat's cumulative spend crosses a cap (configurable in Settings, default $3), Agenite injects a "stop and summarize" instruction and lets the model produce one final wrap-up instead of burning money in a loop. Independent of the autonomous-goal budget rails.
   - 🩺 **Run self-check report**: at the end of every run, `diagnoseTrace` grades the trace **ok / warn / bad** — an identical-args loop (stuck burning budget) is flagged *bad* and called out by name; heavy tool reuse, repeated failures, or over-budget are *warn*. The report appears both as a self-check card under the assistant reply and inside the "执行轨迹" panel, so a "200 but broken inside" run has nowhere to hide.
   - 🧩 Pure `diagnoseTrace` + `traceCost` added to `src/core/trace.js` (reusing `detectConsecutiveLoops`); guardrail logic lives in the `runAgent` loop in `src/core/agent.js` (graceful stop + `guardrail` event); the server adds a `diagnosis` SSE event and a default-budget injection — **zero architectural debt**.
+- **Eval: trace-driven local regression suite (v0.19.0)**: after observability and intervention, the next step is *improvement* — turning "can we test it" from folklore into engineering. The 2026 consensus (LangChain survey: 89% have observability, only 52% run offline evals before deploy) is "golden replay": freeze a real run as a test case and replay it with the **model as the only variable**. Agenite is built for this — every run is already saved locally, so your real conversations become the test set: no synthetic benchmark, no cloud, and because tool results are frozen, no extra API spend either. Includes:
+  - 🎯 **Trace → case**: pick any historical run; it is auto-extracted into an eval case (user input + frozen tool-call sequence and results).
+  - 🔁 **Frozen replay**: during replay, tool results are served from the golden record; any model "drift" (calling a tool outside the golden set) is flagged, and the run is fully deterministic and independent of external state.
+  - 📊 **CLASSic scoring**: each case is graded on Cost / Latency / Accuracy / Stability / Security — did it reach a conclusion, is the tool-call order identical (toolAdherence), how does cost compare to the reference run, and the reused `diagnoseTrace` health grade.
+  - 📉 **Baseline diff / regression alert**: every eval is compared to the previous run; a drop in pass-rate / avg-cost / avg-turns is flagged red — a CI quality gate for your agent (the Arthur AI / Braintrust pattern).
+  - 🧩 Pure `traceToCase` / `frozenExecuteTool` / `scoreCase` / `runEval` / `diffBaseline` added to `src/core/eval.js` (reusing `runAgent` and `diagnoseTrace`, **zero architectural debt**); the server adds `POST /api/eval` (runs in the background, calls the model for real), `GET /api/evals`, `GET /api/evals/:id`, `DELETE /api/evals/:id`, persisting to `~/.agenite/evals` with a `baseline.json`; the UI adds an "评估 Eval" panel (case multi-select, running state, report chips + regression list + per-case table, eval history).
 - **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 26 built-in tools (plus whatever MCP servers you connect):
   - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `codebase_search` (semantic search the project), `memory_recall`, `memory_save`, `memory_log`, `atlas` (memory graph), `plan`, `delegate`, `fanout`, `save_skill`, `skill_recall`
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `run_code` (local code interpreter), `apply_patch` (multi-file unified diff)
@@ -91,7 +97,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (257, via node:test)
+npm test       # run core unit tests (267, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

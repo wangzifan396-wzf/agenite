@@ -29,6 +29,9 @@ import {
 import {
   newTrace, addStep, classifyTool, saveTrace, listTraces, loadTrace, deleteTrace, pruneTraces, traceSummary, diagnoseTrace, TRACES_DIR
 } from './src/core/trace.js';
+import {
+  traceToCase, runEval, listEvals, loadEval, deleteEval, pruneEvals, EVALS_DIR
+} from './src/core/eval.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -140,6 +143,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/traces') return handleTracesList(req, res);
   if (req.method === 'GET' && url.startsWith('/api/traces/')) return handleTraceGet(req, res, req.url);
   if (req.method === 'DELETE' && url.startsWith('/api/traces/')) return handleTraceDelete(req, res, req.url);
+
+  // ---- Agenite Eval: local-first, trace-driven regression suite ----
+  if (req.method === 'POST' && url === '/api/eval') return handleEvalCreate(req, res);
+  if (req.method === 'GET' && url === '/api/evals') return handleEvalsList(req, res);
+  if (req.method === 'GET' && url.startsWith('/api/evals/')) return handleEvalGet(req, res, req.url);
+  if (req.method === 'DELETE' && url.startsWith('/api/evals/')) return handleEvalDelete(req, res, req.url);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -565,6 +574,104 @@ async function handleTraceDelete(req, res, reqUrl) {
   return sendJson(res, ok ? 200 : 404, { ok, deleted: id });
 }
 
+// ---------- Agenite Eval handlers ----------
+// Eval replays real past runs (frozen tools) against the model, so it is a
+// long-running, multi-call operation. We accept the request, kick off the run
+// in the background (like goals), and let the client poll GET /api/evals/:id.
+const evalJobs = new Map(); // evalId -> { status, error }
+
+async function handleEvalCreate(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)) || '{}');
+  } catch {
+    return sendJson(res, 400, { ok: false, error: '无效的 JSON' });
+  }
+  const config = normalizeConfig({ ...body.config, workspace: WORKSPACE });
+  const validation = validateConfig(config);
+  if (!validation.ok || !config.apiKey || !config.model) {
+    return sendJson(res, 400, { ok: false, error: '未配置模型或 API Key，无法运行评估（评估会真实调用模型）。' });
+  }
+  // Keep eval deterministic: no MCP tools (they would break frozen replay).
+  const agentEnabled = body.agentEnabled !== false && config.agentEnabled;
+  const tools = agentEnabled ? activeTools(config) : [];
+  // Same default budget guardrail as chat, so a runaway eval can't burn money.
+  if (!config.budget || !(Number(config.budget.maxCostUSD) > 0)) {
+    config.budget = { ...(config.budget || {}), maxCostUSD: 3 };
+  }
+
+  const traceIds = Array.isArray(body.traceIds) ? body.traceIds : [];
+  if (!traceIds.length) {
+    return sendJson(res, 400, { ok: false, error: '请至少选择一个轨迹作为评估用例。' });
+  }
+  const cases = [];
+  for (const id of traceIds) {
+    try {
+      const t = await loadTrace(TRACES_DIR, id);
+      cases.push(traceToCase(t));
+    } catch { /* skip unreadable / corrupt */ }
+  }
+  if (!cases.length) {
+    return sendJson(res, 400, { ok: false, error: '没有可用的轨迹（可能已被清理）。' });
+  }
+
+  const trials = Math.min(5, Math.max(1, Number(body.trials) || 1));
+  const ac = new AbortController();
+  const callModel = buildCallModel(config, tools, ac.signal);
+
+  // Start the background run and remember the job so GET /api/evals/:id can
+  // report "running" until the report is persisted.
+  const placeholder = { status: 'running' };
+  // runEval generates its own evalId; capture it via the returned report. We
+  // can't know the id before running, so stash by a temp key and re-key after.
+  const tempKey = 'tmp_' + Date.now().toString(36);
+  evalJobs.set(tempKey, placeholder);
+  void runEval({ cases, callModel, config, tools, trials, dir: EVALS_DIR })
+    .then((report) => {
+      evalJobs.delete(tempKey);
+      evalJobs.set(report.evalId, { status: 'done' });
+      return pruneEvals(EVALS_DIR);
+    })
+    .catch((e) => {
+      evalJobs.delete(tempKey);
+      evalJobs.set(tempKey, { status: 'error', error: e && e.message ? e.message : String(e) });
+    });
+
+  return sendJson(res, 202, {
+    ok: true, status: 'running', tempKey, cases: cases.length, trials,
+    note: '评估在后台运行（会真实调用模型并消耗额度），完成后可在「历史评估」中查看报告。'
+  });
+}
+
+async function handleEvalsList(req, res) {
+  const evals = await listEvals(EVALS_DIR);
+  return sendJson(res, 200, { ok: true, evals });
+}
+
+async function handleEvalGet(req, res, reqUrl) {
+  const u = new URL(reqUrl || '/', 'http://localhost');
+  const id = decodeURIComponent(u.pathname.replace(/^\/api\/evals\/?/, '').trim());
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少 evalId' });
+  // A temp job still running?
+  const job = evalJobs.get(id);
+  if (job && job.status === 'running') return sendJson(res, 200, { ok: true, status: 'running' });
+  if (job && job.status === 'error') return sendJson(res, 200, { ok: true, status: 'error', error: job.error });
+  try {
+    const r = await loadEval(EVALS_DIR, id);
+    return sendJson(res, 200, { ok: true, status: 'done', report: r });
+  } catch {
+    return sendJson(res, 404, { ok: false, error: '未找到该评估（可能仍在运行或已被清理）。' });
+  }
+}
+
+async function handleEvalDelete(req, res, reqUrl) {
+  const u = new URL(reqUrl || '/', 'http://localhost');
+  const id = decodeURIComponent(u.pathname.replace(/^\/api\/evals\/?/, '').trim());
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少 evalId' });
+  const ok = await deleteEval(EVALS_DIR, id);
+  return sendJson(res, ok ? 200 : 404, { ok, deleted: id });
+}
+
 // Embedding via a local Ollama model — powers fully-on-device semantic memory.
 // Returns a number[] or null on any failure (recall then falls back to keyword).
 const OLLAMA_EMBED_MODEL = process.env.AGENITE_EMBED_MODEL || 'nomic-embed-text';
@@ -657,6 +764,13 @@ async function resolvePersonaText(config, memoryBase) {
   } catch {
     return '';
   }
+}
+
+// Build the per-request model caller. Shared by the chat loop and the eval
+// replay loop so they always speak to the provider identically.
+function buildCallModel(config, tools, signal) {
+  return (msgs, { onDelta } = {}) =>
+    callModelStream({ config, messages: msgs, tools, onDelta, signal });
 }
 
 async function handleChat(req, res) {
@@ -768,8 +882,7 @@ async function handleChat(req, res) {
   const atlasBlock = config.atlasInject !== false ? graphToContext(await loadAtlas(MEMORY_DIR)) : '';
   const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText, atlasBlock) }, ...incoming];
 
-  const callModel = (msgs, { onDelta }) =>
-    callModelStream({ config, messages: msgs, tools, onDelta, signal: ac.signal });
+  const callModel = buildCallModel(config, tools, ac.signal);
 
   // Ask the browser for permission and wait (with a timeout) for the click.
   const requestApproval = ({ name, args, description }) => new Promise((resolveVote) => {
@@ -798,8 +911,10 @@ async function handleChat(req, res) {
   // context compactions. A healthy 200 can still hide a wrong tool or a loop;
   // the trace surfaces it. Persisted in finally() so it survives disconnects.
   const cap = (s, n = 1500) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `…(${s.length - n}字已省略)` : s);
+  const firstUser = (incoming.find((m) => m.role === 'user')?.content || '').toString();
   const trace = newTrace({
-    title: (incoming.find((m) => m.role === 'user')?.content || '').toString().slice(0, 80),
+    title: firstUser.slice(0, 80),
+    input: firstUser,
     model: config.model,
     provider: config.provider
   });

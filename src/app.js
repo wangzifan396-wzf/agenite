@@ -2557,6 +2557,175 @@ function refreshTrace() {
   loadTraceHistory();
 }
 
+// ---------- Eval (trace-driven local regression suite) ----------
+// Turn the machine's own saved runs into a deterministic test set: freeze each
+// run's tool results and replay against the model, so the model is the only
+// variable. Each run is graded on CLASSic dimensions and compared to the
+// previous run (baseline) to surface regressions. See src/core/eval.js.
+let evalPolling = null;
+
+function evalPct(x) { return Math.round((x || 0) * 100) + '%'; }
+function evalFmtDate(ts) { try { return new Date(ts).toLocaleString(); } catch { return String(ts); } }
+
+async function loadEvalTraces() {
+  const box = $('eval-traces');
+  try {
+    const r = await fetch('/api/traces');
+    const j = await r.json();
+    const traces = (j.traces || []).slice(0, 80);
+    if (!traces.length) {
+      box.innerHTML = '<div class="muted small">还没有运行记录。先对话几次，轨迹会自动保存到本机 <code>~/.agenite/traces</code>。</div>';
+      return;
+    }
+    box.innerHTML = traces.map((t) => `
+      <label class="eval-trace-item">
+        <input type="checkbox" class="eval-trace-cb" value="${escapeHtml(t.runId)}" />
+        <span class="eti-main">
+          <span class="eti-title">${escapeHtml(t.title || t.runId)}</span>
+          <span class="eti-meta">${t.steps} 步 · ${escapeHtml(t.stopped || '—')} · ${evalFmtDate(t.createdAt)}</span>
+        </span>
+      </label>`).join('');
+  } catch {
+    box.innerHTML = '<div class="muted small">加载失败。</div>';
+  }
+}
+
+async function loadEvalHistory() {
+  const box = $('eval-history');
+  try {
+    const r = await fetch('/api/evals');
+    const j = await r.json();
+    const evals = j.evals || [];
+    $('eval-hist-count').textContent = evals.length ? `(${evals.length})` : '';
+    if (!evals.length) { box.innerHTML = '<div class="muted small">还没有评估运行。</div>'; return; }
+    box.innerHTML = evals.map((e) => `
+      <div class="th-item" data-evalid="${escapeHtml(e.evalId)}">
+        <div class="th-top">
+          <span class="th-title">${evalFmtDate(e.createdAt)}</span>
+          <button class="th-del" data-del="${escapeHtml(e.evalId)}" title="删除">🗑</button>
+        </div>
+        <div class="th-meta">模型 ${escapeHtml(e.model || '—')} · ${e.cases} 用例 · 通过率 ${evalPct(e.summary.passRate)} · 均耗 $${Number(e.summary.avgCost || 0).toFixed(4)}</div>
+        ${e.regressions ? `<div class="th-loop">⚠ ${e.regressions} 项回归</div>` : ''}
+      </div>`).join('');
+    box.querySelectorAll('.th-item').forEach((el) => el.addEventListener('click', (ev) => {
+      if (ev.target.classList.contains('th-del')) return;
+      openEvalHistory(el.dataset.evalid);
+    }));
+    box.querySelectorAll('.th-del').forEach((b) => b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await fetch('/api/evals/' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
+      loadEvalHistory();
+    }));
+  } catch {
+    box.innerHTML = '<div class="muted small">加载失败。</div>';
+  }
+}
+
+async function openEvalHistory(evalId) {
+  try {
+    const r = await fetch('/api/evals/' + encodeURIComponent(evalId));
+    const j = await r.json();
+    if (j.status === 'running') { $('eval-status').classList.remove('hidden'); $('eval-status').textContent = '该评估仍在后台运行…'; return; }
+    if (j.report) { $('eval-status').classList.add('hidden'); renderEvalReport(j.report); }
+  } catch { /* ignore */ }
+}
+
+function renderEvalReport(report) {
+  const box = $('eval-report');
+  box.classList.remove('hidden');
+  const s = report.summary || {};
+  const reg = report.regressions || [];
+  const chips = `
+    <div class="eval-chips">
+      <span class="echip"><b>${report.cases != null ? report.cases : s.cases}</b> 用例</span>
+      <span class="echip ${s.passRate >= 0.999 ? 'ok' : 'bad'}">通过率 <b>${evalPct(s.passRate)}</b></span>
+      <span class="echip">均耗 <b>$${Number(s.avgCost || 0).toFixed(4)}</b></span>
+      <span class="echip">均轮 <b>${Number(s.avgTurns || 0).toFixed(1)}</b></span>
+      <span class="echip">工具一致 <b>${evalPct(s.avgToolAdherence)}</b></span>
+      <span class="echip">体检合格 <b>${evalPct(s.diagnosisOkRate)}</b></span>
+    </div>`;
+  const regHtml = reg.length
+    ? `<div class="eval-reg">⚠ 检测到 ${reg.length} 项回归：${reg.map((r) => `<span class="eval-reg-item">${escapeHtml(r.metric)} ${r.before}→${r.after}</span>`).join('')}</div>`
+    : (report.hasBaseline ? `<div class="eval-ok">✓ 相比上一次运行无回归</div>` : `<div class="muted small">这是首次运行，已设为基线。</div>`);
+  const rows = (report.results || []).map((r) => `
+    <tr class="${r.pass ? '' : 'erow-bad'}">
+      <td class="ec-pass">${r.pass ? '✓' : '✗'}</td>
+      <td>${escapeHtml(r.title || r.caseId)}</td>
+      <td>${escapeHtml(r.stopped || '—')}</td>
+      <td>${r.turns}</td>
+      <td>$${Number(r.avgCost || 0).toFixed(4)}</td>
+      <td class="${r.toolAdherence ? '' : 'ec-bad'}">${r.toolAdherence ? '一致' : '漂移'}</td>
+      <td class="diag-${r.diagnosisWorst}">${r.diagnosisWorst}</td>
+    </tr>`).join('');
+  box.innerHTML = `
+    <div class="eval-report-head">报告 · ${evalFmtDate(report.createdAt)} · 模型 ${escapeHtml(report.model || '—')} · ${report.trials} 次/用例</div>
+    ${chips}
+    ${regHtml}
+    <table class="eval-table">
+      <thead><tr><th></th><th>用例</th><th>状态</th><th>轮</th><th>成本</th><th>工具</th><th>体检</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function runEval() {
+  const cbs = Array.from(document.querySelectorAll('.eval-trace-cb:checked'));
+  const traceIds = cbs.map((c) => c.value);
+  if (!traceIds.length) { alert('请至少选择一个历史运行作为评估用例。'); return; }
+  const trials = Math.min(5, Math.max(1, Number($('eval-trials').value) || 1));
+  $('eval-status').classList.remove('hidden');
+  $('eval-status').textContent = '⏳ 评估已在后台启动（会真实调用模型并消耗额度）…';
+  $('eval-report').classList.add('hidden');
+  $('eval-run').disabled = true;
+  try {
+    const r = await fetch('/api/eval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, traceIds, trials })
+    });
+    const j = await r.json();
+    if (!j.ok) { $('eval-status').textContent = '✗ ' + (j.error || '创建失败'); $('eval-run').disabled = false; return; }
+    pollEval(j.evalId);
+  } catch (e) {
+    $('eval-status').textContent = '✗ ' + e.message;
+    $('eval-run').disabled = false;
+  }
+}
+
+function pollEval(evalId) {
+  if (evalPolling) clearInterval(evalPolling);
+  const tick = async () => {
+    try {
+      const r = await fetch('/api/evals/' + encodeURIComponent(evalId));
+      const j = await r.json();
+      if (j.status === 'running') return;
+      if (j.status === 'error') { $('eval-status').textContent = '✗ 评估失败：' + (j.error || ''); $('eval-run').disabled = false; clearInterval(evalPolling); return; }
+      if (j.report) {
+        $('eval-status').classList.add('hidden');
+        renderEvalReport(j.report);
+        loadEvalHistory();
+        $('eval-run').disabled = false;
+        clearInterval(evalPolling);
+      }
+    } catch { /* keep polling */ }
+  };
+  evalPolling = setInterval(tick, 1500);
+  tick();
+}
+
+function openEval() {
+  $('eval-modal').classList.remove('hidden');
+  $('eval-report').classList.add('hidden');
+  $('eval-status').classList.add('hidden');
+  $('eval-run').disabled = false;
+  loadEvalTraces();
+  loadEvalHistory();
+}
+
+function closeEval() {
+  $('eval-modal').classList.add('hidden');
+  if (evalPolling) { clearInterval(evalPolling); evalPolling = null; }
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
@@ -2566,6 +2735,9 @@ function wire() {
   $('open-trace').onclick = openTrace;
   $('close-trace').onclick = closeTrace;
   $('trace-refresh').onclick = refreshTrace;
+  $('open-eval').onclick = openEval;
+  $('close-eval').onclick = closeEval;
+  $('eval-run').onclick = runEval;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
   $('atlas-reset').onclick = atlasReset;
@@ -2732,6 +2904,7 @@ function wire() {
   $('goals-modal').addEventListener('mousedown', (e) => { if (e.target === $('goals-modal')) closeGoals(); });
   $('atlas-modal').addEventListener('mousedown', (e) => { if (e.target === $('atlas-modal')) closeAtlas(); });
   $('trace-modal').addEventListener('mousedown', (e) => { if (e.target === $('trace-modal')) closeTrace(); });
+  $('eval-modal').addEventListener('mousedown', (e) => { if (e.target === $('eval-modal')) closeEval(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -2786,6 +2959,7 @@ function wire() {
       else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
       else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
       else if (!$('trace-modal').classList.contains('hidden')) closeTrace();
+      else if (!$('eval-modal').classList.contains('hidden')) closeEval();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

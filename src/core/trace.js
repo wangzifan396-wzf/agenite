@@ -48,6 +48,7 @@ export function newTrace(meta = {}) {
     version: TRACE_VERSION,
     runId: meta.runId || rid(),
     title: meta.title || '',
+    input: meta.input || '',
     model: meta.model || '',
     provider: meta.provider || '',
     createdAt: meta.createdAt || Date.now(),

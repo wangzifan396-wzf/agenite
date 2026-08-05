@@ -430,9 +430,27 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 
 `traceCost(trace)` 兼容 `number` 与 `{amount}` 两种成本形状。每次运行结束，服务端在 `res.end()` 前 emit 一个 `diagnosis` SSE 事件（带 `maxCostUSD`）；前端 `app.js` 既在助手回复下方渲染「运行自检」卡片（持久化到 `aMsg.selfCheck`，重渲染不丢），也在「执行轨迹」面板用 `#trace-diagnosis` 显示；`GET /api/traces/:id` 也一并返回 `diagnosis`，历史回放同样能看到体检结果。**零架构债**。
 
+### 8.9.12 评估 Eval：轨迹驱动的本地回归测试（v0.19.0）
+
+可观测 + 可干预之后，下一步是**可改进**——把「能不能测」从玄学变成工程。2026 年的共识（LangChain 调研：89% 团队有可观测、仅 52% 部署前跑离线评估）是「golden replay」：把一次真实运行冻结成测试用例，重放时**模型是唯一变量**。Agenite 天生适合：每次运行都已本机存档（`~/.agenite/traces`），你的真实对话直接变成测试集，无需合成 benchmark、不上云、冻结工具结果因此连 API 额度都省了。
+
+#### 8.9.12.1 轨迹 → 用例与冻结重放
+
+`src/core/eval.js` 新增纯函数：
+
+- `traceToCase(trace)`：从已存档轨迹抽出用例——用户 `input` + 按 `name+args` 排好序的冻结工具调用序列（含结果）。
+- `frozenExecuteTool(case)`：重放时若模型调了黄金集里的工具（name+args 命中）就回放记录结果；调了黄金集之外的工具则标记为 **漂移（EVAL_DRIFT）** 并判 `toolAdherence=false`——天然检测「模型跑偏」。完全确定性、不依赖外部环境。
+- `scoreCase(case, res, actualToolCalls, config)`：按 **CLASSic** 多维打分——是否跑到结论（Accuracy）、工具调用顺序是否一致（Stability / toolAdherence）、成本相对参考运行的 `costDelta`（Cost）、复用 `diagnoseTrace` 的体检等级（Security/Safety）。`pass = reachedEnd && toolAdherence && diagnosis!=='bad'`。
+- `runEvalCase`：同一用例跑 `trials` 次聚合出 `passRate`；`runEval`：汇总所有用例 + 与 `baseline.json` 比较产出 `regressions`（通过率↓、均耗↑5%、均轮↑10% 即标红）+ 落盘 `~/.agenite/evals` 报告。
+
+#### 8.9.12.2 服务端 + 前端
+
+- 服务端：`POST /api/eval`（校验模型 + API Key 后，加载所选轨迹→用例，后台 `runEval`，返回 `evalId` 让前端轮询；沿用默认 $3 预算护栏，且**不含 MCP 工具**以保证确定性）、`GET /api/evals`（列表）、`GET /api/evals/:id`（运行中 / 报告）、`DELETE /api/evals/:id`。
+- 前端：侧栏「评估 Eval」面板——用例多选 + 重复次数 + 运行按钮 + 运行中态（轮询）+ 报告（摘要 chips + 回归列表 + 逐用例表）+ 历史评估列表（可回看 / 删除）。**零架构债**（复用 `runAgent` 与 `diagnoseTrace`）。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `trace` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**257 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**267 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

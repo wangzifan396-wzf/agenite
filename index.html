@@ -77,6 +77,7 @@
         <button id="open-goals" class="side-link">目标任务</button>
         <button id="open-atlas" class="side-link">记忆图谱</button>
         <button id="open-trace" class="side-link">执行轨迹</button>
+        <button id="open-eval" class="side-link">评估 Eval</button>
       </div>
     </aside>
 
@@ -257,6 +258,42 @@
           <div class="trace-history-wrap">
             <div class="field-title">历史运行 <span id="trace-hist-count" class="muted small"></span></div>
             <div id="trace-history" class="trace-history">
+              <div class="muted small">加载中…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 评估 · Eval：把本机真实运行变成可复现的回归测试集 -->
+  <div id="eval-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card eval-card">
+      <div class="drawer-head">
+        <h2>评估 · Eval</h2>
+        <button id="close-eval" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body eval-body">
+        <p class="muted small eval-intro">把本机保存的真实运行（<code>~/.agenite/traces</code>）变成可复现的回归测试集：冻结工具结果后重放，<b>模型是唯一变量</b>。评估会真实调用模型并消耗额度；结果会与上一次运行比较，标出回归（通过率 / 成本 / 轮次下滑）。</p>
+        <div class="eval-cols">
+          <div class="eval-run-wrap">
+            <div class="field-title">选择评估用例（历史运行）</div>
+            <div id="eval-traces" class="eval-traces">
+              <div class="muted small">加载中…</div>
+            </div>
+            <div class="eval-runrow">
+              <label class="field inline">重复次数
+                <input id="eval-trials" type="number" min="1" max="5" value="1" />
+              </label>
+              <div class="grow"></div>
+              <button id="eval-run" class="primary-btn">运行评估</button>
+            </div>
+            <div id="eval-status" class="eval-status hidden"></div>
+            <div id="eval-report" class="eval-report hidden"></div>
+          </div>
+          <div class="eval-history-wrap">
+            <div class="field-title">历史评估 <span id="eval-hist-count" class="muted small"></span></div>
+            <div id="eval-history" class="eval-history">
               <div class="muted small">加载中…</div>
             </div>
           </div>
