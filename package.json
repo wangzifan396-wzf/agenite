@@ -1,6 +1,6 @@
 {
   "name": "agenite",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Local-first multi-provider AI agent client with tool-use. Plug in your model API key and chat, with file/web/command tools.",
   "type": "module",
   "bin": {
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "serve": "node server.js",
-    "test": "node --test \"test/*.test.js\"",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "build": "node build.js"
   },
   "engines": {

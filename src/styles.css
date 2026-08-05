@@ -1611,3 +1611,24 @@ select.text-input { appearance: auto; padding-right: 8px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* ---- Browser live preview ---- */
+.browser-card { max-width: 1000px; }
+.browser-body { display: flex; flex-direction: column; gap: 12px; }
+.browser-toolbar { display: flex; align-items: center; gap: 10px; }
+.browser-url {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-family: var(--mono); font-size: 12px;
+}
+.browser-view {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--code-bg); min-height: 340px; max-height: 72vh;
+  overflow: auto; display: flex; align-items: center; justify-content: center;
+  padding: 12px;
+}
+.browser-shot { max-width: 100%; height: auto; border-radius: 8px; box-shadow: var(--shadow-sm); }
+
+@media (max-width: 760px) {
+  .browser-body { gap: 10px; }
+  .browser-view { min-height: 260px; max-height: 60vh; }
+}

@@ -63,9 +63,14 @@
   - 📊 **CLASSic 评分**：每个用例按 Cost / Latency / Accuracy / Stability / Security 多维打分——是否跑到结论、工具调用顺序是否一致（toolAdherence）、成本相对参考运行的 delta、复用 `diagnoseTrace` 的体检等级。
   - 📉 **基线对比 / 回归告警**：每次评估与上一次运行比较，通过率 / 均耗 / 均轮下滑即标红告警，相当于给 Agent 上了 CI 质量门禁（Arthur AI / Braintrust 同款思路）。
   - 🧩 纯函数 `traceToCase` / `frozenExecuteTool` / `scoreCase` / `runEval` / `diffBaseline` 新增于 `src/core/eval.js`（复用 `runAgent` 与 `diagnoseTrace`，**零架构债**）；服务端新增 `POST /api/eval`（后台运行，真实调模型）、`GET /api/evals`、`GET /api/evals/:id`、`DELETE /api/evals/:id`，落盘 `~/.agenite/evals` 并保留 `baseline.json`；前端新增「评估 Eval」面板（用例多选、运行中态、报告 chips + 回归列表 + 逐用例表、历史评估）。
-- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **26 个工具**（再加上你接入的 MCP 工具）：
+- **浏览器 Agent：开箱即用的本地浏览器自动化（v0.20.0）**：可观测 → 可干预 → 可改进之后，把 Agent 从"聊网页"变成"真正打开网页操作"——这是 2026 年 browser-agent 浪潮里本地优先竞品（OpenJarvis / Atomic Agent 等）尚未稳定内置的能力。无需 MCP、无需额外配置，Agenite 直接内置 7 个 `browser_*` 原生工具，由**本机 Chrome 无头驱动**（数据不出本机、不上云）：
+  - 🌐 **内置工具**：`browser_navigate`（打开网页）、`browser_snapshot`（读取页面可见文本）、`browser_screenshot`（截图）、`browser_click` / `browser_type`（点击 / 输入，需开启「电脑操作权限」+ 审批）、`browser_back` / `browser_scroll`（后退 / 滚动）。
+  - 👁️ **实时预览面板**：侧栏「🌐 浏览器」直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），让"它在看什么"一目了然。
+  - 🧩 新增 `src/core/browser.js`（懒加载 `puppeteer-core`、自动探测本机 Chrome、找不到时优雅降级），`src/core/tools.js` 注册 7 个工具并经 `toolContext.browser` 注入；服务端新增 `GET /api/browser`（实时状态 + 截图）、`POST /api/browser/close`，**零架构债**。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。
+- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **33 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
+  - *浏览器（内置，无 MCP）*：`browser_navigate`、`browser_snapshot`、`browser_screenshot`、`browser_back`、`browser_scroll`（观察类，默认可用）、`browser_click`、`browser_type`（操作类，需开启电脑操作权限 + 审批）—— 由本机 Chrome 无头驱动，实时画面可在「🌐 浏览器」面板查看。
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
 - **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：
@@ -106,7 +111,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（267 个，node:test）
+npm test       # 跑核心逻辑单元测试（281 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

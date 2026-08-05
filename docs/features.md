@@ -448,9 +448,22 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - 服务端：`POST /api/eval`（校验模型 + API Key 后，加载所选轨迹→用例，后台 `runEval`，返回 `evalId` 让前端轮询；沿用默认 $3 预算护栏，且**不含 MCP 工具**以保证确定性）、`GET /api/evals`（列表）、`GET /api/evals/:id`（运行中 / 报告）、`DELETE /api/evals/:id`。
 - 前端：侧栏「评估 Eval」面板——用例多选 + 重复次数 + 运行按钮 + 运行中态（轮询）+ 报告（摘要 chips + 回归列表 + 逐用例表）+ 历史评估列表（可回看 / 删除）。**零架构债**（复用 `runAgent` 与 `diagnoseTrace`）。
 
+### 8.9.13 浏览器 Agent：开箱即用的本地浏览器自动化（v0.20.0）
+
+可观测 → 可干预 → 可改进之后，把 Agent 从"聊网页"变成"真正打开网页操作"——2026 年 browser-agent 浪潮里本地优先竞品（OpenJarvis / Atomic Agent 等）尚未稳定内置的能力。无需 MCP、无需额外配置，Agenite 直接内置 7 个 `browser_*` 原生工具，由**本机 Chrome 无头驱动**（数据不出本机、不上云）。
+
+#### 8.9.13.1 工具与控制器
+
+`src/core/browser.js` 新增浏览器控制器 `BROWSER`（懒加载 `puppeteer-core`、自动探测本机 Chrome、找不到时优雅降级返回错误），方法 `navigate` / `snapshot` / `screenshot` / `click` / `type` / `back` / `scroll` / `close` / `status`，单例 page 进程级共享。`src/core/tools.js` 注册 7 个工具（观察类 `navigate`/`snapshot`/`screenshot`/`back`/`scroll` 为 `danger:false`，操作类 `click`/`type` 为 `danger:true`，与 `write_file` 同级需开启「电脑操作权限」+ 审批），`dispatch` 经 `browserTool` 助手路由到 `opts.browser`（注入的 `BROWSER` 单例）或测试用假控制器。
+
+#### 8.9.13.2 服务端 + 前端
+
+- 服务端：注入 `toolContext.browser = BROWSER`；新增 `GET /api/browser`（实时状态 + 截图 data URL）、`POST /api/browser/close`。**零架构债**。
+- 前端：侧栏「🌐 浏览器」面板直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），开面板后每 4s 轮询刷新。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**267 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util`）无 DOM，**281 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

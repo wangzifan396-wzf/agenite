@@ -14,6 +14,7 @@ import { normalizeConfig, validateConfig, PROVIDER_PRESETS, APPROVAL_MODES } fro
 import { runAgent } from './src/core/agent.js';
 import { callModelStream } from './src/core/client.js';
 import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
+import { BROWSER } from './src/core/browser.js';
 import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
@@ -149,6 +150,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/evals') return handleEvalsList(req, res);
   if (req.method === 'GET' && url.startsWith('/api/evals/')) return handleEvalGet(req, res, req.url);
   if (req.method === 'DELETE' && url.startsWith('/api/evals/')) return handleEvalDelete(req, res, req.url);
+
+  // ---- Agenite Browser: built-in live web browsing (local Chrome) ----
+  if (req.method === 'GET' && url === '/api/browser') return handleBrowserGet(req, res);
+  if (req.method === 'POST' && url === '/api/browser/close') return handleBrowserClose(req, res);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
@@ -672,6 +677,28 @@ async function handleEvalDelete(req, res, reqUrl) {
   return sendJson(res, ok ? 200 : 404, { ok, deleted: id });
 }
 
+// ---------- Agenite Browser handlers ----------
+// Returns the live state of the built-in browser so the UI can show exactly
+// what the agent is looking at (URL, title, fresh screenshot). Never throws —
+// when Chrome/puppeteer-core are missing it reports available:false.
+async function handleBrowserGet(req, res) {
+  try {
+    const st = await BROWSER.status();
+    return sendJson(res, 200, st);
+  } catch (e) {
+    return sendJson(res, 200, { ok: false, available: false, open: false, error: e && e.message ? e.message : String(e) });
+  }
+}
+
+async function handleBrowserClose(req, res) {
+  try {
+    const r = await BROWSER.close();
+    return sendJson(res, 200, r);
+  } catch (e) {
+    return sendJson(res, 200, { ok: false, error: e && e.message ? e.message : String(e) });
+  }
+}
+
 // Embedding via a local Ollama model — powers fully-on-device semantic memory.
 // Returns a number[] or null on any failure (recall then falls back to keyword).
 const OLLAMA_EMBED_MODEL = process.env.AGENITE_EMBED_MODEL || 'nomic-embed-text';
@@ -1075,7 +1102,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER }
     });
     chatStopped = result.stopped;
 

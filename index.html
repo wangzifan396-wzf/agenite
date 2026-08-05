@@ -78,6 +78,7 @@
         <button id="open-atlas" class="side-link">记忆图谱</button>
         <button id="open-trace" class="side-link">执行轨迹</button>
         <button id="open-eval" class="side-link">评估 Eval</button>
+        <button id="open-browser" class="side-link">🌐 浏览器</button>
       </div>
     </aside>
 
@@ -297,6 +298,28 @@
               <div class="muted small">加载中…</div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 浏览器 · 实时预览：把 Agent 内置的无头 Chrome 当前画面直接展示出来 -->
+  <div id="browser-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card browser-card">
+      <div class="drawer-head">
+        <h2>浏览器 · 实时预览</h2>
+        <button id="close-browser" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body browser-body">
+        <p class="muted small">内置本地 Chrome 无头驱动——Agent 用它真正打开网页、读取内容、点击操作。下面是它<b>当前正在看</b>的页面（与对话里的 <code>browser_*</code> 工具共享同一个浏览器）。</p>
+        <div class="browser-toolbar">
+          <span id="browser-url" class="browser-url muted small">尚未打开页面</span>
+          <div class="grow"></div>
+          <button id="browser-refresh" class="mini-btn" title="刷新当前视图">刷新</button>
+          <button id="browser-close" class="mini-btn danger-text" title="关闭本地浏览器进程">关闭浏览器</button>
+        </div>
+        <div id="browser-view" class="browser-view">
+          <div class="muted small">还没有打开的页面。发一条「打开 https://…」的消息，Agent 会自动导航，这里会实时显示截图。</div>
         </div>
       </div>
     </div>

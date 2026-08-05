@@ -1621,6 +1621,27 @@ select.text-input { appearance: auto; padding-right: 8px; }
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 
+/* ---- Browser live preview ---- */
+.browser-card { max-width: 1000px; }
+.browser-body { display: flex; flex-direction: column; gap: 12px; }
+.browser-toolbar { display: flex; align-items: center; gap: 10px; }
+.browser-url {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-family: var(--mono); font-size: 12px;
+}
+.browser-view {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--code-bg); min-height: 340px; max-height: 72vh;
+  overflow: auto; display: flex; align-items: center; justify-content: center;
+  padding: 12px;
+}
+.browser-shot { max-width: 100%; height: auto; border-radius: 8px; box-shadow: var(--shadow-sm); }
+
+@media (max-width: 760px) {
+  .browser-body { gap: 10px; }
+  .browser-view { min-height: 260px; max-height: 60vh; }
+}
+
 </style>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20512%20512%22%20width%3D%22512%22%20height%3D%22512%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23c9633e%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23e59a72%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20rx%3D%22112%22%20fill%3D%22url(%23g)%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M150%20150h212v78H228v134h-78z%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%22330%22%20cy%3D%22330%22%20r%3D%2234%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%3C%2Fsvg%3E%0A" />
 
@@ -1692,6 +1713,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <button id="open-atlas" class="side-link">记忆图谱</button>
         <button id="open-trace" class="side-link">执行轨迹</button>
         <button id="open-eval" class="side-link">评估 Eval</button>
+        <button id="open-browser" class="side-link">🌐 浏览器</button>
       </div>
     </aside>
 
@@ -1911,6 +1933,28 @@ select.text-input { appearance: auto; padding-right: 8px; }
               <div class="muted small">加载中…</div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 浏览器 · 实时预览：把 Agent 内置的无头 Chrome 当前画面直接展示出来 -->
+  <div id="browser-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card browser-card">
+      <div class="drawer-head">
+        <h2>浏览器 · 实时预览</h2>
+        <button id="close-browser" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body browser-body">
+        <p class="muted small">内置本地 Chrome 无头驱动——Agent 用它真正打开网页、读取内容、点击操作。下面是它<b>当前正在看</b>的页面（与对话里的 <code>browser_*</code> 工具共享同一个浏览器）。</p>
+        <div class="browser-toolbar">
+          <span id="browser-url" class="browser-url muted small">尚未打开页面</span>
+          <div class="grow"></div>
+          <button id="browser-refresh" class="mini-btn" title="刷新当前视图">刷新</button>
+          <button id="browser-close" class="mini-btn danger-text" title="关闭本地浏览器进程">关闭浏览器</button>
+        </div>
+        <div id="browser-view" class="browser-view">
+          <div class="muted small">还没有打开的页面。发一条「打开 https://…」的消息，Agent 会自动导航，这里会实时显示截图。</div>
         </div>
       </div>
     </div>
@@ -5462,6 +5506,59 @@ function closeEval() {
   if (evalPolling) { clearInterval(evalPolling); evalPolling = null; }
 }
 
+// ---------- Browser live preview ----------
+// Mirrors the eval/trace panels: open the modal, pull the shared browser's
+// live state (URL + screenshot) from /api/browser, and keep it fresh on a
+// timer while the modal is open. The agent's browser_* tools write to the
+// very same page, so this shows exactly what the model is looking at.
+let browserPolling = null;
+
+function openBrowserPanel() {
+  $('browser-modal').classList.remove('hidden');
+  refreshBrowserView();
+  if (browserPolling) clearInterval(browserPolling);
+  browserPolling = setInterval(refreshBrowserView, 4000);
+}
+
+function closeBrowserPanel() {
+  $('browser-modal').classList.add('hidden');
+  if (browserPolling) { clearInterval(browserPolling); browserPolling = null; }
+}
+
+async function refreshBrowserView() {
+  if ($('browser-modal').classList.contains('hidden')) return;
+  const box = $('browser-view');
+  const urlEl = $('browser-url');
+  try {
+    const r = await fetch('/api/browser');
+    const j = await r.json();
+    if (!j.available) {
+      urlEl.textContent = '浏览器不可用';
+      box.innerHTML = `<div class="muted small">${escapeHtml(j.error || '本机未检测到 Chrome 或 puppeteer-core。可在「设置 → MCP 工具」用 Playwright 替代；或安装 Chrome 后重试。')}</div>`;
+      return;
+    }
+    if (!j.open) {
+      urlEl.textContent = '尚未打开页面';
+      box.innerHTML = '<div class="muted small">还没有打开的页面。发一条「打开 https://…」的消息，Agent 会自动导航，这里会实时显示截图。</div>';
+      return;
+    }
+    urlEl.textContent = (j.title ? j.title + ' · ' : '') + j.url;
+    box.innerHTML = j.screenshot
+      ? `<img class="browser-shot" src="${j.screenshot}" alt="页面截图" />`
+      : '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+  } catch {
+    /* keep previous content; transient network hiccup */
+  }
+}
+
+async function closeBrowserEngine() {
+  try {
+    await fetch('/api/browser/close', { method: 'POST' });
+    toast('已关闭本地浏览器');
+    refreshBrowserView();
+  } catch { /* ignore */ }
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
@@ -5474,6 +5571,10 @@ function wire() {
   $('open-eval').onclick = openEval;
   $('close-eval').onclick = closeEval;
   $('eval-run').onclick = runEval;
+  $('open-browser').onclick = openBrowserPanel;
+  $('close-browser').onclick = closeBrowserPanel;
+  $('browser-refresh').onclick = refreshBrowserView;
+  $('browser-close').onclick = closeBrowserEngine;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
   $('atlas-reset').onclick = atlasReset;
@@ -5641,6 +5742,7 @@ function wire() {
   $('atlas-modal').addEventListener('mousedown', (e) => { if (e.target === $('atlas-modal')) closeAtlas(); });
   $('trace-modal').addEventListener('mousedown', (e) => { if (e.target === $('trace-modal')) closeTrace(); });
   $('eval-modal').addEventListener('mousedown', (e) => { if (e.target === $('eval-modal')) closeEval(); });
+  $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -5696,6 +5798,7 @@ function wire() {
       else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
       else if (!$('trace-modal').classList.contains('hidden')) closeTrace();
       else if (!$('eval-modal').classList.contains('hidden')) closeEval();
+      else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

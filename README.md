@@ -63,9 +63,14 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   - 📊 **CLASSic scoring**: each case is graded on Cost / Latency / Accuracy / Stability / Security — did it reach a conclusion, is the tool-call order identical (toolAdherence), how does cost compare to the reference run, and the reused `diagnoseTrace` health grade.
   - 📉 **Baseline diff / regression alert**: every eval is compared to the previous run; a drop in pass-rate / avg-cost / avg-turns is flagged red — a CI quality gate for your agent (the Arthur AI / Braintrust pattern).
   - 🧩 Pure `traceToCase` / `frozenExecuteTool` / `scoreCase` / `runEval` / `diffBaseline` added to `src/core/eval.js` (reusing `runAgent` and `diagnoseTrace`, **zero architectural debt**); the server adds `POST /api/eval` (runs in the background, calls the model for real), `GET /api/evals`, `GET /api/evals/:id`, `DELETE /api/evals/:id`, persisting to `~/.agenite/evals` with a `baseline.json`; the UI adds an "评估 Eval" panel (case multi-select, running state, report chips + regression list + per-case table, eval history).
-- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 26 built-in tools (plus whatever MCP servers you connect):
+- **Browser Agent: built-in local browser automation (v0.20.0)**: after observability → intervention → improvement, this turns the agent from "talks about the web" into "actually opens the page and acts" — a capability local-first peers (OpenJarvis / Atomic Agent, etc.) had not yet shipped as a stable built-in as of the 2026 browser-agent wave. No MCP, no extra setup: Agenite ships 7 native `browser_*` tools driven by a **local headless Chrome** (data stays on your machine, no cloud):
+  - 🌐 **Built-in tools**: `browser_navigate` (open a page), `browser_snapshot` (read the page's visible text), `browser_screenshot` (capture), `browser_click` / `browser_type` (click / type — require "电脑操作权限" + approval), `browser_back` / `browser_scroll` (back / scroll).
+  - 👁️ **Live preview panel**: the "🌐 浏览器" sidebar button shows exactly what the agent is currently looking at (shares the same browser as the `browser_*` tools), so "what is it seeing" is never a mystery.
+  - 🧩 New `src/core/browser.js` (lazy-loads `puppeteer-core`, auto-detects local Chrome, degrades gracefully when absent), 7 tools registered in `src/core/tools.js` and injected via `toolContext.browser`; the server adds `GET /api/browser` (live status + screenshot) and `POST /api/browser/close`, **zero architectural debt**. Enable with a one-liner `npm i puppeteer-core` (bring your own Chrome, or use the MCP Playwright option in Settings).
+- **Tool-use agent loop**: the model decides when to call a tool; the server executes it and feeds the result back, repeating until a final answer (SSE streaming). 33 built-in tools (plus whatever MCP servers you connect):
   - *Safe (always on)*: `calculator`, `current_datetime`, `system_info`, `web_fetch`, `web_search`, `read_file` (with line ranges), `list_dir`, `find_files`, `grep_files` (search file contents), `codebase_search` (semantic search the project), `memory_recall`, `memory_save`, `memory_log`, `atlas` (memory graph), `plan`, `delegate`, `fanout`, `save_skill`, `skill_recall`
   - *Danger (opt-in + approval)*: `write_file`, `edit_file`, `make_dir`, `run_command`, `open_path`, `run_code` (local code interpreter), `apply_patch` (multi-file unified diff)
+  - *Browser (built-in, no MCP)*: `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_back`, `browser_scroll` (observe, on by default), `browser_click`, `browser_type` (act, require "电脑操作权限" + approval) — driven by local headless Chrome; live view in the "🌐 浏览器" panel.
 - **Plan Mode** — toggle `Plan` in the header: the agent first returns a step-by-step plan (recorded as an inspectable checklist via the `plan` tool) and waits for your **批准并执行** before touching anything. Ideal for risky or multi-step tasks.
 - **Diff preview + one-click undo** — every file mutation (`write_file` / `edit_file` / `apply_patch`) shows a live `diff` in its tool card, with a **↩ 撤销** button that restores the previous content via a server-held snapshot.
 - **Local computer control** — a **workspace sandbox** pins every file operation under one root directory, and a **3-mode approval gate** decides when a human must approve:
@@ -97,7 +102,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (267, via node:test)
+npm test       # run core unit tests (281, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

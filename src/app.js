@@ -2726,6 +2726,59 @@ function closeEval() {
   if (evalPolling) { clearInterval(evalPolling); evalPolling = null; }
 }
 
+// ---------- Browser live preview ----------
+// Mirrors the eval/trace panels: open the modal, pull the shared browser's
+// live state (URL + screenshot) from /api/browser, and keep it fresh on a
+// timer while the modal is open. The agent's browser_* tools write to the
+// very same page, so this shows exactly what the model is looking at.
+let browserPolling = null;
+
+function openBrowserPanel() {
+  $('browser-modal').classList.remove('hidden');
+  refreshBrowserView();
+  if (browserPolling) clearInterval(browserPolling);
+  browserPolling = setInterval(refreshBrowserView, 4000);
+}
+
+function closeBrowserPanel() {
+  $('browser-modal').classList.add('hidden');
+  if (browserPolling) { clearInterval(browserPolling); browserPolling = null; }
+}
+
+async function refreshBrowserView() {
+  if ($('browser-modal').classList.contains('hidden')) return;
+  const box = $('browser-view');
+  const urlEl = $('browser-url');
+  try {
+    const r = await fetch('/api/browser');
+    const j = await r.json();
+    if (!j.available) {
+      urlEl.textContent = '浏览器不可用';
+      box.innerHTML = `<div class="muted small">${escapeHtml(j.error || '本机未检测到 Chrome 或 puppeteer-core。可在「设置 → MCP 工具」用 Playwright 替代；或安装 Chrome 后重试。')}</div>`;
+      return;
+    }
+    if (!j.open) {
+      urlEl.textContent = '尚未打开页面';
+      box.innerHTML = '<div class="muted small">还没有打开的页面。发一条「打开 https://…」的消息，Agent 会自动导航，这里会实时显示截图。</div>';
+      return;
+    }
+    urlEl.textContent = (j.title ? j.title + ' · ' : '') + j.url;
+    box.innerHTML = j.screenshot
+      ? `<img class="browser-shot" src="${j.screenshot}" alt="页面截图" />`
+      : '<div class="muted small">无法截图当前页面（可能仍在加载）。</div>';
+  } catch {
+    /* keep previous content; transient network hiccup */
+  }
+}
+
+async function closeBrowserEngine() {
+  try {
+    await fetch('/api/browser/close', { method: 'POST' });
+    toast('已关闭本地浏览器');
+    refreshBrowserView();
+  } catch { /* ignore */ }
+}
+
 function wire() {
   $('new-chat').onclick = () => newConv();
   $('open-settings').onclick = () => openSettings();
@@ -2738,6 +2791,10 @@ function wire() {
   $('open-eval').onclick = openEval;
   $('close-eval').onclick = closeEval;
   $('eval-run').onclick = runEval;
+  $('open-browser').onclick = openBrowserPanel;
+  $('close-browser').onclick = closeBrowserPanel;
+  $('browser-refresh').onclick = refreshBrowserView;
+  $('browser-close').onclick = closeBrowserEngine;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
   $('atlas-reset').onclick = atlasReset;
@@ -2905,6 +2962,7 @@ function wire() {
   $('atlas-modal').addEventListener('mousedown', (e) => { if (e.target === $('atlas-modal')) closeAtlas(); });
   $('trace-modal').addEventListener('mousedown', (e) => { if (e.target === $('trace-modal')) closeTrace(); });
   $('eval-modal').addEventListener('mousedown', (e) => { if (e.target === $('eval-modal')) closeEval(); });
+  $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
 
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
@@ -2960,6 +3018,7 @@ function wire() {
       else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
       else if (!$('trace-modal').classList.contains('hidden')) closeTrace();
       else if (!$('eval-modal').classList.contains('hidden')) closeEval();
+      else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }

@@ -11,6 +11,7 @@ import { resolve, sep, join, relative, extname } from 'node:path';
 import os from 'node:os';
 import { sanitizeUrl } from './util.js';
 import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill } from './memory.js';
+import { BROWSER } from './browser.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -361,6 +362,70 @@ export const TOOL_DEFS = [
       required: ['action']
     },
     danger: false
+  },
+  {
+    name: 'browser_navigate',
+    description: '在内置浏览器中打开一个网页 URL（本地 Chrome 无头驱动，数据不出本机）。用于浏览网页、查看内容，或作为点击/输入的前置动作。会真实加载页面。',
+    parameters: {
+      type: 'object',
+      properties: { url: { type: 'string', description: '要打开的 http(s) 网址，例如 "https://news.ycombinator.com"。' } },
+      required: ['url']
+    },
+    danger: false
+  },
+  {
+    name: 'browser_snapshot',
+    description: '读取当前已打开页面的可见文本与标题（去掉脚本/样式噪音的可读视图），让模型"看见"页面内容后再决定下一步。每次需要了解页面时调用。',
+    parameters: { type: 'object', properties: {} },
+    danger: false
+  },
+  {
+    name: 'browser_screenshot',
+    description: '对当前页面截图并返回 PNG（data URL）。需要确认渲染结果、或让用户也能看到页面时调用。',
+    parameters: { type: 'object', properties: {} },
+    danger: false
+  },
+  {
+    name: 'browser_click',
+    description: '点击页面上匹配 CSS 选择器的元素（按钮、链接等）。会真实触发页面交互，需要用户审批。',
+    parameters: {
+      type: 'object',
+      properties: { selector: { type: 'string', description: 'CSS 选择器，如 "button#submit" 或 "a.login-link"。' } },
+      required: ['selector']
+    },
+    danger: true
+  },
+  {
+    name: 'browser_type',
+    description: '在页面上匹配 CSS 选择器的输入框中键入文本（登录框、搜索框等）。会真实输入内容，需要用户审批。',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: '目标输入框的 CSS 选择器。' },
+        text: { type: 'string', description: '要键入的文本。' }
+      },
+      required: ['selector', 'text']
+    },
+    danger: true
+  },
+  {
+    name: 'browser_back',
+    description: '浏览器后退到上一页（等同于点击浏览器后退按钮）。',
+    parameters: { type: 'object', properties: {} },
+    danger: false
+  },
+  {
+    name: 'browser_scroll',
+    description: '在页面上滚动查看长内容。direction 为 "up" 或 "down"，amount 为像素（默认 600）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', description: '"up" 或 "down"（默认 down）。' },
+        amount: { type: 'number', description: '滚动像素（默认 600）。' }
+      },
+      required: []
+    },
+    danger: false
   }
 ];
 
@@ -496,8 +561,33 @@ async function dispatch(name, args, opts) {
         return skillRecall(args, opts);
       case 'atlas':
         return atlasTool(args, opts);
+      case 'browser_navigate':
+      case 'browser_snapshot':
+      case 'browser_screenshot':
+      case 'browser_click':
+      case 'browser_type':
+      case 'browser_back':
+      case 'browser_scroll':
+        return browserTool(name, args, opts);
     default:
       return { ok: false, error: `未实现的工具: ${name}` };
+  }
+}
+
+// Route the browser_* tools to the injected controller (opts.browser) or the
+// shared BROWSER singleton. The tool name is `browser_navigate` but the
+// controller method is `navigate`, so strip the prefix. Keeps the dispatch
+// switch clean and lets tests inject a fake controller without Chrome.
+async function browserTool(name, args, opts) {
+  const method = name.startsWith('browser_') ? name.slice('browser_'.length) : name;
+  const ctrl = (opts && opts.browser) || BROWSER;
+  if (!ctrl || typeof ctrl[method] !== 'function') {
+    return { ok: false, error: '浏览器工具不可用（需要本机 Chrome 与 puppeteer-core；可在设置用 MCP 接入 Playwright 替代）。' };
+  }
+  try {
+    return await ctrl[method](args || {});
+  } catch (e) {
+    return { ok: false, error: '浏览器操作失败: ' + (e && e.message ? e.message : e) };
   }
 }
 
