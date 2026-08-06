@@ -64,7 +64,7 @@
       </button>
 
       <div class="side-scroll">
-        <div class="side-label">最近</div>
+        <input id="conv-search" class="conv-search" type="text" placeholder="搜索对话…" autocomplete="off" />
         <div id="conv-list"></div>
       </div>
 
@@ -111,6 +111,16 @@
           <button id="clear-chat" class="icon-btn" title="清空当前对话" aria-label="清空当前对话">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>
           </button>
+          <div class="menu-wrap">
+            <button id="export-menu-btn" class="icon-btn" title="导出当前对话" aria-label="导出当前对话">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+            </button>
+            <div id="export-menu" class="menu hidden">
+              <button id="export-md" class="menu-item">Markdown (.md)</button>
+              <button id="export-json" class="menu-item">JSON (.json)</button>
+              <button id="export-txt" class="menu-item">纯文本 (.txt)</button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -436,7 +446,7 @@
         <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><span>新建对话</span>
         <div><kbd>Ctrl</kbd>+<kbd>,</kbd></div><span>打开设置</span>
         <div><kbd>Ctrl</kbd>+<kbd>/</kbd></div><span>本帮助面板</span>
-        <div><kbd>Esc</kbd></div><span>关闭弹窗 / 取消审批</span>
+        <div><kbd>Esc</kbd></div><span>关闭弹窗 / 取消审批 / 停止生成（生成中）</span>
       </div>
     </div>
   </div>
@@ -709,6 +719,15 @@
           </div>
 
           <div class="field">
+            <span class="field-title">对话体验</span>
+            <p class="muted small">回复结束后由模型给出 3 条「下一步」追问建议（每次消耗极少 token，可关闭）。</p>
+          </div>
+          <label class="switch-row">
+            <span><b>智能建议下一步</b><em>回复后展示可点击的追问 chips，降低冷启动成本</em></span>
+            <input id="set-suggestFollowups" type="checkbox" checked />
+          </label>
+
+          <div class="field">
             <span class="field-title">数据</span>
             <label class="switch-row">
               <span><b>把会话同步到本机</b><em>镜像一份到 ~/.agenite/sessions，换浏览器/清缓存也能找回</em></span>
@@ -732,6 +751,13 @@
         <button id="test-conn" class="btn-ghost">测试连接</button>
         <button id="save-settings" class="btn-primary">保存</button>
       </div>
+    </div>
+  </div>
+
+  <div id="palette-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="palette">
+      <input id="palette-input" class="palette-input" type="text" placeholder="输入命令或搜索…（↑↓ 选择，Enter 执行，Esc 关闭）" autocomplete="off" spellcheck="false" />
+      <div id="palette-list" class="palette-list"></div>
     </div>
   </div>
 

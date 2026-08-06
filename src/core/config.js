@@ -278,7 +278,13 @@ export function defaultConfig() {
     // injects them as grounded context before each run. Fully local (SQLite
     // FTS5), nothing leaves the machine.
     kbEnabled: false,
-    kbTopK: 5
+    kbTopK: 5,
+    // --- conversational UX ---
+    // After each assistant reply, ask the model for 3 short follow-up prompts
+    // and render them as clickable chips ("suggested next steps"). A tiny extra
+    // call per turn (cheap, skippable); turned off here for users who dislike
+    // the suggestion or want zero added latency/cost.
+    suggestFollowups: true
   };
 }
 
@@ -322,6 +328,7 @@ export function normalizeConfig(input = {}) {
   cfg.atlasAutoOpen = cfg.atlasAutoOpen !== false;
   cfg.kbEnabled = !!cfg.kbEnabled;
   cfg.kbTopK = Math.round(clampNum(cfg.kbTopK, 1, 20, 5));
+  cfg.suggestFollowups = cfg.suggestFollowups !== false;
   return cfg;
 }
 

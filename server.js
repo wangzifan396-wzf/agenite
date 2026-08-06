@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 
 import { normalizeConfig, validateConfig, PROVIDER_PRESETS, APPROVAL_MODES } from './src/core/config.js';
 import { runAgent } from './src/core/agent.js';
-import { callModelStream } from './src/core/client.js';
+import { callModelStream, verifyKey } from './src/core/client.js';
 import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
 import { BROWSER } from './src/core/browser.js';
 import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
@@ -177,6 +177,13 @@ const server = http.createServer((req, res) => {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
     });
   }
+  // Real key validation: pings the provider with a 1-token completion so the
+  // user learns "密钥无效" before they ever send a real message.
+  if (req.method === 'POST' && url === '/api/verifykey') return handleVerifyKey(req, res);
+  // Cheap, best-effort "suggested next steps" — the model proposes 3 short
+  // follow-up prompts after each assistant reply. Never blocks the UI; the
+  // client treats an empty/error response as "no suggestions".
+  if (req.method === 'POST' && url === '/api/suggest') return handleSuggest(req, res);
   if (req.method === 'GET' && url === '/api/files') return handleFiles(req, res);
   if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(url, req, res);
   res.writeHead(405, { 'Content-Type': 'text/plain' }).end('Method Not Allowed');
@@ -715,6 +722,84 @@ async function handleBrowserClose(req, res) {
   } catch (e) {
     return sendJson(res, 200, { ok: false, error: e && e.message ? e.message : String(e) });
   }
+}
+
+// Validate the user's provider key/model by issuing a minimal completion.
+// Returns the structured { ok, errorClass, message } from client.js.
+async function handleVerifyKey(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch {
+    return sendJson(res, 400, { ok: false, error: '请求体解析失败' });
+  }
+  const config = normalizeConfig({ ...body, workspace: WORKSPACE });
+  const r = await verifyKey(config);
+  return sendJson(res, 200, r);
+}
+
+// Suggested follow-up prompts. A single tiny, tool-free completion that asks
+// the model for 3 short next-question chips. Strictly best-effort: any failure
+// returns an empty list so the client simply shows nothing.
+async function handleSuggest(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch {
+    return sendJson(res, 200, { suggestions: [] });
+  }
+  const config = normalizeConfig({ ...(body.config || {}), workspace: WORKSPACE });
+  const noKey = !config.apiKey || !config.apiKey.trim();
+  if (noKey && config.provider !== 'ollama') return sendJson(res, 200, { suggestions: [] });
+
+  const lastUser = String(body.lastUser || '').slice(0, 1200);
+  const lastAssistant = String(body.lastAssistant || '').slice(0, 2400);
+  if (!lastAssistant.trim()) return sendJson(res, 200, { suggestions: [] });
+
+  const sys =
+    '你是一个对话助手。根据用户刚收到的回复，提出 3 个简短、具体、可点击的"下一步"追问，' +
+    '帮助用户深入或行动。要求：每条不超过 22 个汉字；不要解释、不要编号外的标点；' +
+    '只输出一个 JSON 数组，例如 ["解释刚才的方案","给个可运行示例","可能有什么风险"]。' +
+    '不要输出任何额外文字或 markdown 代码块。';
+  const userText = `用户刚才问：\n${lastUser}\n\n助手刚才回答：\n${lastAssistant}\n\n请给出 3 个下一步追问（JSON 数组）：`;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  let buf = '';
+  try {
+    await callModelStream({
+      config: { ...config, maxTokens: 140, temperature: 0.4 },
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: userText }
+      ],
+      onDelta: (d) => { buf += (d.content || ''); }
+    }, ctrl.signal);
+    const suggestions = parseSuggestions(buf);
+    return sendJson(res, 200, { suggestions });
+  } catch {
+    return sendJson(res, 200, { suggestions: [] });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Tolerant extraction of a JSON string array from loosely-formatted model
+// output (may include markdown fences or stray prose). Returns <=3 strings.
+function parseSuggestions(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  let arr;
+  try { arr = JSON.parse(raw); }
+  catch {
+    const s = raw.indexOf('[');
+    const e = raw.lastIndexOf(']');
+    if (s === -1 || e === -1 || e <= s) return [];
+    try { arr = JSON.parse(raw.slice(s, e + 1)); }
+    catch { return []; }
+  }
+  if (!Array.isArray(arr)) return [];
+  const out = arr
+    .map((x) => String(x || '').replace(/^[0-9]+[.、)]\s*/, '').trim())
+    .filter((x) => x.length >= 2 && x.length <= 40)
+    .slice(0, 3);
+  return out;
 }
 
 // Embedding via a local Ollama model — powers fully-on-device semantic memory.

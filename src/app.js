@@ -4,6 +4,7 @@
 import { renderMarkdown } from './core/markdown.js';
 import { uid, escapeHtml, fuzzyFilter, formatBytes } from './core/util.js';
 import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, modelsForProvider, modelLabel } from './core/config.js';
+import { errorHint, errorSeverity } from './core/errors.js';
 import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
 
 const $ = (id) => document.getElementById(id);
@@ -200,31 +201,101 @@ function deleteConv(id) {
   renderMessages();
   updateTitle();
 }
+let convQuery = '';
+
 function renderConvList() {
   const el = $('conv-list');
   el.innerHTML = '';
-  if (!conversations.length) {
+  const q = convQuery.trim().toLowerCase();
+
+  const match = (c) =>
+    (c.title || '').toLowerCase().includes(q) ||
+    (c.messages || []).some((m) => typeof m.content === 'string' && m.content.toLowerCase().includes(q));
+
+  let pinned = conversations.filter((c) => c.pinned);
+  let rest = conversations.filter((c) => !c.pinned);
+  if (q) { pinned = pinned.filter(match); rest = rest.filter(match); }
+
+  if (!pinned.length && !rest.length) {
     const empty = document.createElement('div');
     empty.className = 'conv-empty';
-    empty.textContent = '还没有对话';
+    empty.textContent = q ? '没有匹配的对话' : '还没有对话';
     el.appendChild(empty);
     return;
   }
-  for (const c of conversations) {
-    const item = document.createElement('div');
-    item.className = 'conv-item' + (c.id === currentId ? ' active' : '');
-    const t = document.createElement('div');
-    t.className = 'conv-title';
-    t.textContent = c.title || '新对话';
-    const del = document.createElement('button');
-    del.className = 'conv-del';
-    del.title = '删除';
-    del.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
-    del.onclick = (e) => { e.stopPropagation(); deleteConv(c.id); };
-    item.append(t, del);
-    item.onclick = () => selectConv(c.id);
-    el.appendChild(item);
+
+  if (pinned.length) {
+    const lab = document.createElement('div');
+    lab.className = 'conv-group';
+    lab.textContent = '置顶';
+    el.appendChild(lab);
+    for (const c of pinned) el.appendChild(convItemEl(c));
   }
+  for (const g of groupByTime(rest)) {
+    const lab = document.createElement('div');
+    lab.className = 'conv-group';
+    lab.textContent = g.label;
+    el.appendChild(lab);
+    for (const c of g.items) el.appendChild(convItemEl(c));
+  }
+}
+
+// Build one conversation row with a hover pin (★) and delete (✕) action.
+function convItemEl(c) {
+  const item = document.createElement('div');
+  item.className = 'conv-item' + (c.id === currentId ? ' active' : '');
+  const t = document.createElement('div');
+  t.className = 'conv-title';
+  t.textContent = c.title || '新对话';
+
+  const actions = document.createElement('div');
+  actions.className = 'conv-actions';
+
+  const pin = document.createElement('button');
+  pin.className = 'conv-pin' + (c.pinned ? ' on' : '');
+  pin.title = c.pinned ? '取消置顶' : '置顶';
+  pin.textContent = c.pinned ? '★' : '☆';
+  pin.onclick = (e) => { e.stopPropagation(); togglePin(c.id); };
+
+  const del = document.createElement('button');
+  del.className = 'conv-del';
+  del.title = '删除';
+  del.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  del.onclick = (e) => { e.stopPropagation(); deleteConv(c.id); };
+
+  actions.append(pin, del);
+  item.append(t, actions);
+  item.onclick = () => selectConv(c.id);
+  return item;
+}
+
+// Bucket conversations by recency (updatedAt) while preserving order within
+// each bucket. The conversations array is already newest-first.
+function groupByTime(list) {
+  const now = new Date();
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yest0 = new Date(today0); yest0.setDate(today0.getDate() - 1);
+  const weekAgo = new Date(today0); weekAgo.setDate(today0.getDate() - 7);
+  const buckets = { 今天: [], 昨天: [], 本周: [], 更早: [] };
+  for (const c of list) {
+    const t = c.updatedAt || c.createdAt || 0;
+    const d = new Date(t);
+    if (d >= today0) buckets['今天'].push(c);
+    else if (d >= yest0) buckets['昨天'].push(c);
+    else if (d >= weekAgo) buckets['本周'].push(c);
+    else buckets['更早'].push(c);
+  }
+  return Object.entries(buckets)
+    .filter(([, items]) => items.length)
+    .map(([label, items]) => ({ label, items }));
+}
+
+function togglePin(id) {
+  const c = conversations.find((x) => x.id === id);
+  if (!c) return;
+  c.pinned = !c.pinned;
+  saveConvs();
+  renderConvList();
 }
 function updateTitle() {
   const c = currentConv();
@@ -432,11 +503,19 @@ function buildEmptyState() {
   const grid = STARTERS.map((s, i) =>
     `<button class="starter" data-i="${i}"><b>${escapeHtml(s.title)}</b><span>${escapeHtml(s.text)}</span></button>`
   ).join('');
+  // First-run guidance: if no model key is configured, surface a one-click
+  // setup CTA so a brand-new user lands on the provider/key form directly.
+  const needsKey = (!config.apiKey || !config.apiKey.trim()) && config.provider !== 'ollama';
+  const onboard = needsKey
+    ? '<button id="onboard-setup" class="onboard-btn">⚙ 一键配置模型</button>' +
+      '<p class="welcome-foot">还没配置模型密钥，点上面按钮填入 API Key 即可开始（密钥只存在本机浏览器）。</p>'
+    : '';
   wrap.innerHTML =
     '<div class="welcome-glow" aria-hidden="true"></div>' +
     '<div class="welcome-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.6L18.4 9l-4.6 1.8L12 15.4 10.2 10.8 5.6 9l4.6-1.4z"/><path d="M18 15l.9 2.3L21 18l-2.1.8L18 21l-.9-2.3L15 18l2.1-.7z"/></svg></div>' +
     '<h1 class="welcome-h">今天想让 Agenite 做点什么？</h1>' +
     '<p class="welcome-sub">运行在你自己电脑上的本地智能体 —— 能读写文件、执行命令、联网查资料，并把每一步都摊开给你看。</p>' +
+    onboard +
     `<div class="welcome-features">${feat}</div>` +
     `<div class="starter-grid">${grid}</div>` +
     '<p class="welcome-foot">提示：按 <kbd>Ctrl</kbd>+<kbd>/</kbd> 看全部快捷键 · 点左侧「🌐 浏览器」看 Agent 正在操作的网页</p>';
@@ -448,6 +527,8 @@ function buildEmptyState() {
       $('input').focus();
     };
   });
+  const ob = wrap.querySelector('#onboard-setup');
+  if (ob) ob.onclick = () => openSettings('model');
   return wrap;
 }
 
@@ -480,6 +561,7 @@ function buildMessageEl(m, index) {
     return el;
   }
   el.className = 'msg assistant';
+  if (typeof index === 'number') el.dataset.idx = index;
   el.innerHTML = '<div class="avatar">A</div><div class="bubble"><div class="notices"></div><div class="tools"></div><div class="md"></div></div>';
   el.querySelector('.md').innerHTML = renderMarkdown(m.content || '') || '';
   highlightRoot(el.querySelector('.md'));
@@ -488,6 +570,8 @@ function buildMessageEl(m, index) {
   if (m.selfCheck) renderSelfCheck(el, m.selfCheck);
   renderMsgUsage(el, m);
   if (m.canContinue) addContinueBar(el);
+  if (m.error) renderErrorCard(el, m.error);
+  if (Array.isArray(m.followups) && m.followups.length) renderFollowups(el, m.followups);
   if (typeof index === 'number') {
     const acts = document.createElement('div');
     acts.className = 'msg-acts';
@@ -515,6 +599,83 @@ function addNotice(el, n) {
   if (n.detail) div.title = n.detail;
   box.appendChild(div);
   return div;
+}
+
+// A structured error card: what went wrong + why/what to try + a one-click
+// retry. Replaces the old flat "⚠️ message" so failures are actionable, not
+// just visible — the #1 agent-UX pain point per 2026 research (what/why/next).
+function renderErrorCard(el, message) {
+  const bubble = el.querySelector('.bubble');
+  if (!bubble) return null;
+  let card = el.querySelector('.err-card');
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'err-card sev-' + errorSeverity(message);
+    card.innerHTML =
+      '<div class="err-head"><span class="err-ico">⚠️</span><span>运行出错</span></div>' +
+      '<div class="err-msg"></div>' +
+      '<div class="err-why"></div>' +
+      '<div class="err-actions">' +
+      '<button class="mini-btn err-retry">↻ 重试</button>' +
+      '<button class="mini-btn err-copy">复制错误</button>' +
+      '</div>';
+    bubble.appendChild(card);
+  }
+  card.querySelector('.err-msg').textContent = message;
+  card.querySelector('.err-why').textContent = '建议：' + errorHint(message);
+  return card;
+}
+
+// Clickable "suggested next steps" chips under an assistant reply. When
+// `loading` is true it renders a placeholder while the suggestion call is in
+// flight; an empty list removes the box entirely (no suggestions = nothing).
+function renderFollowups(el, suggestions, loading) {
+  let box = el.querySelector('.followups');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'followups';
+    const bubble = el.querySelector('.bubble');
+    if (bubble) bubble.appendChild(box);
+  }
+  if (loading) {
+    box.innerHTML = '<span class="fu-loading">建议下一步…</span>';
+    return box;
+  }
+  const list = Array.isArray(suggestions) ? suggestions.filter((s) => s && String(s).trim()) : [];
+  if (!list.length) { box.remove(); return null; }
+  box.innerHTML = list
+    .map((s) => `<button class="fu-chip" title="点击发送这条追问">${escapeHtml(String(s))}</button>`)
+    .join('');
+  return box;
+}
+
+// Fire a cheap suggestion call after a completed (non-planning, non-errored,
+// substantive) assistant turn. Best-effort: any failure silently removes the
+// placeholder. Results are persisted on the message so they survive reload.
+async function maybeSuggestFollowups(conv, aMsg, el) {
+  if (config.suggestFollowups === false) return;
+  if (!config.apiKey && config.provider !== 'ollama') return;
+  const lastUserMsg = conv.messages.filter((m) => m.role === 'user').pop();
+  const lastUser = (lastUserMsg && (lastUserMsg.display || lastUserMsg.content)) || '';
+  renderFollowups(el, null, true);
+  try {
+    const r = await fetch('/api/suggest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, lastUser, lastAssistant: aMsg.content || '' })
+    });
+    const j = await r.json().catch(() => ({ suggestions: [] }));
+    const sugs = Array.isArray(j.suggestions) ? j.suggestions : [];
+    if (sugs.length) {
+      aMsg.followups = sugs;
+      conv.updatedAt = Date.now();
+      saveConvs();
+    }
+    renderFollowups(el, sugs);
+  } catch {
+    const box = el.querySelector('.followups');
+    if (box) box.remove();
+  }
 }
 
 // A graded self-check report card appended to an assistant reply. Built from
@@ -923,8 +1084,9 @@ async function runTurn(conv, opts = {}) {
         aMsg.turns = data.turn || aMsg.turns || 1;
         renderMsgUsage(el, aMsg);
       } else if (event === 'error') {
-        aMsg.content += (aMsg.content ? '\n\n' : '') + '⚠️ ' + (data.message || '出错了');
-        paint(md, aMsg.content);
+        aMsg.error = data.message || '出错了';
+        renderErrorCard(el, aMsg.error);
+        paintFallback(md, aMsg.content, '<span class="muted small">（无文本输出）</span>');
       } else if (event === 'guardrail') {
         // The server hit the interactive cost cap and forced a stop. Toast it so
         // the user knows why the run ended early, not just that it did.
@@ -950,6 +1112,9 @@ async function runTurn(conv, opts = {}) {
           conv.planMsgIndex = conv.messages.indexOf(aMsg);
           saveConvs();
           renderMessages();
+        } else if (!aMsg.error && (aMsg.content || '').trim().length >= 12) {
+          // Surface "suggested next steps" after a real answer lands.
+          maybeSuggestFollowups(conv, aMsg, el);
         }
       }
       if (stick) scrollBottom();
@@ -959,8 +1124,9 @@ async function runTurn(conv, opts = {}) {
       const hint = /Failed to fetch|NetworkError/i.test(e.message)
         ? '无法连接本地服务，请确认 Agenite 服务正在运行（start.cmd / node server.js）。'
         : e.message;
-      aMsg.content += (aMsg.content ? '\n\n' : '') + '⚠️ ' + hint;
-      paint(md, aMsg.content);
+      aMsg.error = hint;
+      renderErrorCard(el, hint);
+      if (!aMsg.content) md.innerHTML = '<span class="muted small">（无文本输出）</span>';
     } else if (!aMsg.content) {
       el.classList.remove('is-thinking');
       md.innerHTML = '<span class="muted small">已停止</span>';
@@ -1100,7 +1266,104 @@ function exportCurrentMarkdown() {
   toast('已导出 Markdown');
 }
 
+function conversationToText(conv) {
+  const lines = [conv.title || '对话', new Date(conv.createdAt || Date.now()).toLocaleString(), ''];
+  for (const m of conv.messages) {
+    if (m.role === 'user') lines.push('我: ' + (m.display || m.content || '').trim());
+    else if (m.role === 'assistant') lines.push('Agenite: ' + (m.content || '').trim());
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+function exportCurrentJson() {
+  const c = currentConv();
+  if (!c || !c.messages.length) return toast('当前对话是空的');
+  const safe = (c.title || '对话').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+  downloadBlob(`${safe}.json`, JSON.stringify(c, null, 2), 'application/json');
+  toast('已导出 JSON');
+}
+function exportCurrentText() {
+  const c = currentConv();
+  if (!c || !c.messages.length) return toast('当前对话是空的');
+  const safe = (c.title || '对话').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+  downloadBlob(`${safe}.txt`, conversationToText(c), 'text/plain;charset=utf-8');
+  toast('已导出纯文本');
+}
+
 function openKeys() { $('keys-modal').classList.remove('hidden'); }
+
+// ---------- command palette (Ctrl+K) ----------
+let paletteState = { items: [], filtered: [], index: 0 };
+
+function openPalette() {
+  paletteState.index = 0;
+  paletteState.items = buildPaletteItems();
+  paletteState.filtered = paletteState.items;
+  renderPalette('');
+  $('palette-modal').classList.remove('hidden');
+  const inp = $('palette-input');
+  inp.value = '';
+  inp.focus();
+}
+function closePalette() { $('palette-modal').classList.add('hidden'); }
+
+function buildPaletteItems() {
+  const actions = [
+    { type: '命令', label: '新对话', hint: '开一个空白对话', run: () => newConv() },
+    { type: '命令', label: '导出当前对话 (Markdown)', hint: '/export', run: () => exportCurrentMarkdown() },
+    { type: '命令', label: '模型设置', hint: '配置供应商 / 密钥 / 模型', run: () => openSettings('model') },
+    { type: '命令', label: '工作区与权限', hint: '电脑操作权限', run: () => openSettings('power') },
+    { type: '操作', label: '切换主题（深 / 浅）', hint: '', run: () => toggleTheme() },
+    { type: '面板', label: '打开智能体画廊', hint: '', run: () => openAgents() },
+    { type: '面板', label: '打开知识库', hint: '', run: () => openKb() },
+    { type: '面板', label: '打开记忆图谱', hint: '', run: () => openAtlas() },
+    { type: '面板', label: '打开目标任务', hint: '', run: () => openGoals() },
+    { type: '面板', label: '打开执行轨迹', hint: '', run: () => openTrace() },
+    { type: '帮助', label: '快捷键速查', hint: '', run: () => openKeys() }
+  ];
+  const recents = conversations.slice()
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 6)
+    .map((c) => ({ type: '对话', label: c.title || '新对话', hint: '跳转到该对话', run: () => selectConv(c.id) }));
+  return [...actions, ...recents];
+}
+
+function renderPalette(q) {
+  const list = $('palette-list');
+  const items = q && q.trim()
+    ? fuzzyFilter(paletteState.items, q.trim(), { key: (i) => i.label + ' ' + (i.hint || ''), limit: 20 })
+    : paletteState.items;
+  paletteState.filtered = items;
+  paletteState.index = 0;
+  if (!items.length) { list.innerHTML = '<div class="palette-empty">无匹配</div>'; return; }
+  list.innerHTML = items.map((it, i) =>
+    `<div class="palette-item ${i === 0 ? 'active' : ''}" data-i="${i}">` +
+    `<span class="pi-type">${escapeHtml(it.type)}</span>` +
+    `<span class="pi-label">${escapeHtml(it.label)}</span>` +
+    `<span class="pi-hint">${escapeHtml(it.hint || '')}</span></div>`
+  ).join('');
+  list.querySelectorAll('.palette-item').forEach((el) => {
+    el.onclick = () => runPalette(Number(el.dataset.i));
+  });
+}
+
+function runPalette(i) {
+  const items = paletteState.filtered || paletteState.items;
+  const it = items[i];
+  if (!it) return;
+  closePalette();
+  it.run();
+}
+
+function movePalette(delta) {
+  const items = paletteState.filtered || paletteState.items;
+  if (!items.length) return;
+  paletteState.index = (paletteState.index + delta + items.length) % items.length;
+  const nodes = $('palette-list').querySelectorAll('.palette-item');
+  nodes.forEach((n, i) => n.classList.toggle('active', i === paletteState.index));
+  const active = nodes[paletteState.index];
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
 function closeKeys() { $('keys-modal').classList.add('hidden'); }
 
 // ---------- approvals ----------
@@ -1294,6 +1557,7 @@ function fillSettings() {
   $('set-priceOut').value = config.priceOut || 0;
   $('set-priceCurrency').value = config.priceCurrency || 'CNY';
   $('set-syncSessions').checked = config.syncSessions !== false;
+  $('set-suggestFollowups').checked = config.suggestFollowups !== false;
   $('ws-path').textContent = workspacePath || '（未连接本地服务）';
   renderApprovalModes();
   renderAllowlist();
@@ -1472,7 +1736,8 @@ function saveSettings() {
     priceIn: Math.max(0, Number($('set-priceIn').value) || 0),
     priceOut: Math.max(0, Number($('set-priceOut').value) || 0),
     priceCurrency: $('set-priceCurrency').value || 'CNY',
-    syncSessions: $('set-syncSessions').checked
+    syncSessions: $('set-syncSessions').checked,
+    suggestFollowups: $('set-suggestFollowups').checked
   };
   saveConfig();
   renderPermChip();
@@ -1491,19 +1756,31 @@ function clampNum(v, min, max, fallback) {
 
 async function testConnection() {
   const msgEl = $('settings-msg');
-  msgEl.textContent = '检测中…';
+  msgEl.className = 'muted small';
+  msgEl.textContent = '正在校验密钥…';
+  const payload = {
+    provider: $('set-provider').value,
+    baseURL: $('set-baseURL').value.trim(),
+    apiKey: $('set-apiKey').value.trim(),
+    model: $('set-model').value.trim()
+  };
   try {
-    const res = await fetch('/api/health');
+    const res = await fetch('/api/verifykey', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
     const j = await res.json();
-    if (res.ok && j.ok) {
-      workspacePath = j.workspace || '';
-      $('ws-path').textContent = workspacePath;
-      updateWorkspaceChip(true);
-      msgEl.textContent = '✅ 本地服务正常 · 工作区 ' + workspacePath;
-    } else msgEl.textContent = '⚠️ 本地服务返回异常。';
+    if (j.ok) {
+      msgEl.className = 'verify-ok';
+      msgEl.textContent = '✅ ' + (j.message || '密钥有效，模型可调用。');
+    } else {
+      msgEl.className = 'verify-err';
+      msgEl.textContent = '❌ ' + (j.message || '校验失败。');
+    }
   } catch {
-    updateWorkspaceChip(false);
-    msgEl.textContent = '❌ 连不上本地服务，请运行 start.cmd 或 node server.js。';
+    msgEl.className = 'verify-err';
+    msgEl.textContent = '❌ 无法连接本地服务，请确认 Agenite 已启动（start.cmd / node server.js）。';
   }
 }
 
@@ -3242,6 +3519,26 @@ function wire() {
   $('save-settings').onclick = saveSettings;
   $('persona-save').onclick = saveNewPersona;
   $('test-conn').onclick = testConnection;
+  // Sidebar conversation search: filter by title + message content live.
+  $('conv-search').addEventListener('input', (e) => { convQuery = e.target.value; renderConvList(); });
+  // Command palette: input behaviour + backdrop-to-close.
+  $('palette-input').addEventListener('input', (e) => renderPalette(e.target.value));
+  $('palette-input').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); runPalette(paletteState.index); }
+  });
+  $('palette-modal').addEventListener('click', (e) => { if (e.target === $('palette-modal')) closePalette(); });
+  // Per-conversation export menu (Markdown / JSON / plain text).
+  $('export-menu-btn').onclick = (e) => { e.stopPropagation(); $('export-menu').classList.toggle('hidden'); };
+  document.addEventListener('click', (e) => {
+    if (!$('export-menu').classList.contains('hidden') && e.target !== $('export-menu-btn') && !$('export-menu').contains(e.target)) {
+      $('export-menu').classList.add('hidden');
+    }
+  });
+  $('export-md').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentMarkdown(); };
+  $('export-json').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentJson(); };
+  $('export-txt').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentText(); };
   $('set-provider').onchange = onProviderChange;
   $('set-model').addEventListener('input', updateModelCtxBadge);
   $('ollama-refresh').onclick = refreshOllamaModels;
@@ -3421,6 +3718,21 @@ function wire() {
       return;
     }
     if (e.target.closest('.continue-btn')) { continueRun(); return; }
+    const fu = e.target.closest('.fu-chip');
+    if (fu) { sendMessage(fu.textContent); return; }
+    const er = e.target.closest('.err-retry');
+    if (er) {
+      const msgEl = er.closest('.msg');
+      const idx = msgEl ? Number(msgEl.dataset.idx) : -1;
+      if (idx >= 0) regenerateFrom(idx);
+      return;
+    }
+    const ec = e.target.closest('.err-copy');
+    if (ec) {
+      const msgEl = ec.closest('.msg');
+      copyText(msgEl ? msgEl.querySelector('.err-msg').textContent : '');
+      return;
+    }
     const act = e.target.closest('.msg-act');
     if (!act) return;
     if (act.classList.contains('act-plan')) { approvePlan(); return; }
@@ -3456,8 +3768,11 @@ function wire() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      // Confirmation-free stop: abort the in-flight run before any modal close.
+      if (abortCtrl) { abortCtrl.abort(); return; }
       if (acState) closeAc();
       else if (pendingApprovalId) resolveApproval(false);
+      else if (!$('palette-modal').classList.contains('hidden')) closePalette();
       else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
       else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
       else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
@@ -3467,7 +3782,7 @@ function wire() {
       else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
       else closeSettings();
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); newConv(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
     if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
     if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); openKeys(); }
   });
