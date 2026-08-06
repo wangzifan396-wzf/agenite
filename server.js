@@ -942,12 +942,26 @@ function handleKbClear(res) {
   kb().clear();
   sendJson(res, 200, { ok: true, stats: kb().stats() });
 }
-function handleAgents(res) {
+async function handleAgents(res) {
+  let custom = [];
+  try { custom = await listPersonas(MEMORY_DIR); } catch { custom = []; }
+  const customAgents = custom.map((p) => ({
+    name: p.name,
+    icon: '🧠',
+    tagline: p.description || '自定义智能体',
+    description: p.description || '用户自定义智能体',
+    system_prompt: p.system_prompt,
+    custom: true,
+    slug: p.slug
+  }));
   sendJson(res, 200, {
     ok: true,
-    agents: BUILTIN_PERSONAS.map((p) => ({
-      name: p.name, icon: p.icon, tagline: p.tagline, description: p.description, system_prompt: p.system_prompt
-    }))
+    agents: [
+      ...BUILTIN_PERSONAS.map((p) => ({
+        name: p.name, icon: p.icon, tagline: p.tagline, description: p.description, system_prompt: p.system_prompt
+      })),
+      ...customAgents
+    ]
   });
 }
 

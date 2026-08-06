@@ -492,9 +492,17 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - `server.js` 的 `BUILTIN_PERSONAS` 从 4 个扩到 **14** 个（default / fullstack / strict-reviewer / warm-writer / researcher / data-analyst / translator / security-auditor / devops / product-manager / interviewer / meeting-notes / resume-coach / brainstorm），每个带 `icon` 与 `tagline`，并补写中文 `system_prompt`；新增 `GET /api/agents` 返回 `{name, icon, tagline, description, system_prompt}`。
 - 前端：侧栏「🤖 智能体」打开卡片网格（hover 上浮 + 强调色描边），一键 `applyAgent` 把对应 system_prompt 注入。对标 Cherry 的 1000+ 预置助手与 Hermes 的 agentskills 角色，开箱即用。
 
+### 8.9.16 智能体画廊可自定义 + 滚动修复（v0.26.0）
+
+- **自定义智能体（落盘）**：画廊「＋ 新建智能体」表单（名称 / 图标 emoji / 一句话简介 / 系统提示词）→ `POST /api/personas` → `savePersona` 写入 `~/.agenite/memory/personas/<slug>.md`（frontmatter `name`/`description` + 正文即 system_prompt）。对标 Cherry「用户自定义助手」与 Hermes「自沉淀技能」，让平台能长出用户自己的生态。
+- **删除**：卡片 hover 出现 ✕ → `DELETE /api/personas/:slug` → `deletePersona` 删文件。
+- **画廊合并渲染**：`/api/agents` 把 `BUILTIN_PERSONAS` 与 `listPersonas(MEMORY_DIR)` 合并返回，自定义项带 `custom:true`；前端 `renderAgents` 分「我的智能体 / 预置智能体」两组，自定义卡带删除按钮。`applyAgent` 沿用旧逻辑（写 `config.persona` + `config.systemPrompt`），`resolvePersonaText` 已能按名解析自定义人格，刷新后依旧生效。
+- **滚动修复**：聊天主区 `#scroller`、侧栏 `.side-scroll`、`#main` 补 `min-height:0`（flex 滚动容器经典 bug，原内容撑开而非内部滚动 → 滑轮失效）；所有 `.modal-card` 加 `max-height: calc(100dvh - 32px); overflow-y:auto` 防止小屏 / 长内容弹窗内容溢出不可滚动；`scrollBottom()` 改用 `scrollTo({behavior:'auto'})` 让流式自动滚动瞬时跟进。
+- 新增 `test/agents.test.js` 4 例（save/list/read/delete + 空校验 + 同名覆盖），**零架构债**。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `knowledge` / `util` / `snippets` / `reliability`）无 DOM，**311 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库 / 可靠性 / 实时 HTML 预览工件 / 本地知识库 RAG / 多服务商模型中枢各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `knowledge` / `util` / `snippets` / `reliability` / `agents`）无 DOM，**315 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库 / 可靠性 / 实时 HTML 预览工件 / 本地知识库 RAG / 多服务商模型中枢 / 自定义智能体各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

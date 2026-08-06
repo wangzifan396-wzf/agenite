@@ -213,7 +213,7 @@ button { cursor: pointer; background: none; border: none; }
 .btn-new:active { transform: scale(.99); }
 .btn-new .plus { color: var(--accent); font-size: 17px; line-height: 1; font-weight: 500; }
 
-.side-scroll { flex: 1; overflow-y: auto; margin: 2px -4px 0; padding: 0 4px; }
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 2px -4px 0; padding: 0 4px; }
 
 .side-label {
   font-size: 11.5px;
@@ -307,7 +307,7 @@ button { cursor: pointer; background: none; border: none; }
 .side-link:hover { background: var(--panel-3); color: var(--text); }
 
 /* --- main --- */
-#main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+#main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 
 #topbar {
   display: flex;
@@ -376,7 +376,7 @@ button { cursor: pointer; background: none; border: none; }
 .icon-btn:hover { background: var(--panel-2); color: var(--text); }
 
 /* --- message scroller --- */
-#scroller { flex: 1; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
+#scroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
 #messages { max-width: var(--read-w); margin: 0 auto; padding: 26px 20px 8px; }
 
 .msg { display: flex; gap: 13px; margin-bottom: 24px; animation: rise .28s var(--ease) both; }
@@ -901,6 +901,9 @@ kbd {
 .modal-card {
   margin: auto;
   width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -1824,14 +1827,36 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .agents-body { display: grid; gap: 14px; padding-top: 14px; }
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .agent-card {
-  text-align: left; cursor: pointer; padding: 14px; border: 1px solid var(--line);
-  border-radius: 14px; background: var(--panel); color: var(--fg);
+  position: relative;
+  text-align: left; cursor: pointer; padding: 14px; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--panel); color: var(--text);
   display: grid; gap: 6px; transition: transform .15s var(--ease), border-color .15s, box-shadow .15s;
 }
 .agent-card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 8px 22px rgba(0,0,0,.18); }
 .agent-ico { font-size: 26px; line-height: 1; }
 .agent-name { font-weight: 700; font-size: 14.5px; }
 .agent-tag { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.agent-del {
+  position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 7px;
+  display: grid; place-items: center; font-size: 12px; line-height: 1; color: var(--muted);
+  background: color-mix(in srgb, var(--danger) 12%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  opacity: 0; transition: opacity .14s, color .14s, background .14s; cursor: pointer;
+}
+.agent-card:hover .agent-del { opacity: 1; }
+.agent-del:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.agent-section-label { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 6px 2px -2px; }
+.agents-body code { font-family: var(--mono); background: var(--panel-2); padding: 1px 6px; border-radius: 6px; color: var(--accent); }
+
+/* new / edit custom agent */
+.drawer-head-actions { display: flex; align-items: center; gap: 8px; }
+.agent-editor { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel-2); }
+.agent-editor-row { display: flex; gap: 10px; }
+.agent-icon-input { flex: 0 0 84px; text-align: center; }
+.agent-prompt-input { resize: vertical; min-height: 96px; line-height: 1.55; font-family: var(--mono); font-size: 13px; }
+.agent-editor-actions { display: flex; align-items: center; gap: 8px; }
+.mini-btn.accent { border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.mini-btn.accent:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.mini-btn.ghost { color: var(--muted); }
 
 </style>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20512%20512%22%20width%3D%22512%22%20height%3D%22512%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23c9633e%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23e59a72%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20rx%3D%22112%22%20fill%3D%22url(%23g)%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M150%20150h212v78H228v134h-78z%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%22330%22%20cy%3D%22330%22%20r%3D%2234%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%3C%2Fsvg%3E%0A" />
@@ -2221,10 +2246,27 @@ select.text-input { appearance: auto; padding-right: 8px; }
     <div class="modal-card atlas-card agents-card">
       <div class="drawer-head">
         <h2>🤖 智能体画廊</h2>
-        <button id="close-agents" class="icon-btn" aria-label="关闭">✕</button>
+        <div class="drawer-head-actions">
+          <button id="new-agent" class="mini-btn accent">＋ 新建智能体</button>
+          <button id="close-agents" class="icon-btn" aria-label="关闭">✕</button>
+        </div>
       </div>
       <div class="agents-body">
-        <p class="muted small">精选预置智能体——每个都带专属的系统提示词与说话方式。点一张即可套用；想自定义就先选好，再去「设置 → 电脑权限」里另存为角色。当前：<b id="agents-current">默认</b>。</p>
+        <p class="muted small">精选预置智能体——每个都带专属系统提示词与说话方式。点一张即可套用；你也可以<b>新建自己的智能体</b>（保存在本机 <code>~/.agenite/memory/personas/</code>，跨会话保留）。当前：<b id="agents-current">默认</b>。</p>
+        <form id="agent-editor" class="agent-editor hidden">
+          <div class="agent-editor-row">
+            <input id="agent-name" class="text-input" placeholder="智能体名称（如「周报助手」）" maxlength="40" />
+            <input id="agent-icon" class="text-input agent-icon-input" placeholder="图标 emoji" maxlength="4" />
+          </div>
+          <input id="agent-tagline" class="text-input" placeholder="一句话简介（如「帮你把周报写得又快又好」）" maxlength="60" />
+          <textarea id="agent-prompt" class="text-input agent-prompt-input" placeholder="系统提示词：描述这个智能体的身份、语气、职责与禁忌…" rows="5"></textarea>
+          <div class="agent-editor-actions">
+            <span id="agent-msg" class="muted small"></span>
+            <div class="grow"></div>
+            <button type="button" id="agent-cancel" class="mini-btn ghost">取消</button>
+            <button type="submit" id="agent-save" class="mini-btn accent">保存</button>
+          </div>
+        </form>
         <div id="agents-grid" class="agents-grid"></div>
       </div>
     </div>
@@ -3998,7 +4040,10 @@ function upsertToolCard(el, t) {
 
 function scrollBottom() {
   const s = $('scroller');
-  s.scrollTop = s.scrollHeight;
+  // jump instantly even though #scroller uses scroll-behavior:smooth, so
+  // streaming output doesn't lag behind while the wheel/trackbar stays usable
+  if (s.scrollTo) s.scrollTo({ top: s.scrollHeight, behavior: 'auto' });
+  else s.scrollTop = s.scrollHeight;
 }
 function nearBottom() {
   const s = $('scroller');
@@ -6344,10 +6389,12 @@ async function clearKb() {
 let _agentsCache = null;
 function openAgents() {
   $('agents-modal').classList.remove('hidden');
+  closeAgentEditor();
   $('agents-current').textContent = config.persona && config.persona !== 'default' ? config.persona : '默认';
   renderAgents();
 }
 function closeAgents() { $('agents-modal').classList.add('hidden'); }
+function refreshAgents() { _agentsCache = null; return renderAgents(); }
 async function renderAgents() {
   const grid = $('agents-grid');
   if (!grid) return;
@@ -6355,13 +6402,23 @@ async function renderAgents() {
     try { const r = await fetch('/api/agents'); const j = await r.json(); _agentsCache = j.agents || []; } catch { _agentsCache = []; }
   }
   if (!_agentsCache.length) { grid.innerHTML = '<div class="muted small">暂无预置智能体。</div>'; return; }
-  grid.innerHTML = _agentsCache.map((a) => `
-    <button class="agent-card" data-name="${escapeHtml(a.name)}">
+  const builtins = _agentsCache.filter((a) => !a.custom);
+  const customs = _agentsCache.filter((a) => a.custom);
+  const card = (a) => `
+    <div class="agent-card" data-name="${escapeHtml(a.name)}" title="${escapeHtml(a.tagline || a.description || '')}">
+      ${a.custom ? `<button class="agent-del" data-slug="${escapeHtml(a.slug || a.name)}" title="删除该智能体">✕</button>` : ''}
       <div class="agent-ico">${a.icon || '🤖'}</div>
       <div class="agent-name">${escapeHtml(a.name)}</div>
-      <div class="agent-tag">${escapeHtml(a.tagline || '')}</div>
-    </button>`).join('');
-  grid.querySelectorAll('.agent-card').forEach((c) => { c.onclick = () => applyAgent(c.dataset.name); });
+      <div class="agent-tag">${escapeHtml(a.tagline || (a.custom ? '自定义智能体' : ''))}</div>
+    </div>`;
+  let html = '';
+  if (customs.length) {
+    html += '<div class="agent-section-label">我的智能体</div>' + customs.map(card).join('');
+  }
+  html += '<div class="agent-section-label">预置智能体</div>' + builtins.map(card).join('');
+  grid.innerHTML = html;
+  grid.querySelectorAll('.agent-card').forEach((c) => { c.onclick = (e) => { if (e.target.closest('.agent-del')) return; applyAgent(c.dataset.name); }; });
+  grid.querySelectorAll('.agent-del').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); deleteCustomAgent(b.dataset.slug); }; });
 }
 async function applyAgent(name) {
   const a = (_agentsCache || []).find((x) => x.name === name);
@@ -6374,6 +6431,47 @@ async function applyAgent(name) {
   if ($('set-systemPrompt')) $('set-systemPrompt').value = config.systemPrompt;
   closeAgents();
   toast('已切换到智能体：' + name);
+}
+
+// ── 自定义智能体（新建 / 删除，落盘到 ~/.agenite/memory/personas/）──
+function openAgentEditor() {
+  $('agent-editor').classList.remove('hidden');
+  $('agent-msg').textContent = '';
+  $('new-agent').classList.add('hidden');
+  $('agent-name').value = ''; $('agent-icon').value = '🧠'; $('agent-tagline').value = ''; $('agent-prompt').value = '';
+  setTimeout(() => $('agent-name').focus(), 30);
+}
+function closeAgentEditor() {
+  $('agent-editor').classList.add('hidden');
+  $('new-agent').classList.remove('hidden');
+}
+async function saveCustomAgent(e) {
+  if (e) e.preventDefault();
+  const name = ($('agent-name').value || '').trim();
+  const system_prompt = ($('agent-prompt').value || '').trim();
+  const msg = $('agent-msg');
+  if (!name || !system_prompt) { msg.textContent = '名称和系统提示词都不能为空。'; return; }
+  msg.textContent = '保存中…';
+  try {
+    const r = await fetch('/api/personas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: ($('agent-tagline').value || '').trim(), system_prompt, icon: ($('agent-icon').value || '').trim() })
+    });
+    const j = await r.json();
+    if (!r.ok) { msg.textContent = '失败：' + (j.error || r.status); return; }
+    closeAgentEditor();
+    await refreshAgents();
+    toast('已保存智能体：' + name);
+  } catch (err) { msg.textContent = '失败：' + err.message; }
+}
+async function deleteCustomAgent(slug) {
+  if (!confirm('删除这个自定义智能体？该操作不可恢复。')) return;
+  try {
+    const r = await fetch('/api/personas/' + encodeURIComponent(slug), { method: 'DELETE' });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); toast('删除失败：' + (j.error || r.status)); return; }
+    await refreshAgents();
+    toast('已删除智能体');
+  } catch (err) { toast('删除失败：' + err.message); }
 }
 function renderSnippetList() {
   const list = $('snippet-list');
@@ -6451,6 +6549,9 @@ function wire() {
   };
   $('open-agents').onclick = openAgents;
   $('close-agents').onclick = closeAgents;
+  $('new-agent').onclick = openAgentEditor;
+  $('agent-cancel').onclick = closeAgentEditor;
+  $('agent-editor').addEventListener('submit', saveCustomAgent);
   $('snippet-add').onclick = addSnippetFromForm;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;

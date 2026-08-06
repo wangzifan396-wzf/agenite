@@ -721,7 +721,10 @@ function upsertToolCard(el, t) {
 
 function scrollBottom() {
   const s = $('scroller');
-  s.scrollTop = s.scrollHeight;
+  // jump instantly even though #scroller uses scroll-behavior:smooth, so
+  // streaming output doesn't lag behind while the wheel/trackbar stays usable
+  if (s.scrollTo) s.scrollTo({ top: s.scrollHeight, behavior: 'auto' });
+  else s.scrollTop = s.scrollHeight;
 }
 function nearBottom() {
   const s = $('scroller');
@@ -3061,10 +3064,12 @@ async function clearKb() {
 let _agentsCache = null;
 function openAgents() {
   $('agents-modal').classList.remove('hidden');
+  closeAgentEditor();
   $('agents-current').textContent = config.persona && config.persona !== 'default' ? config.persona : '默认';
   renderAgents();
 }
 function closeAgents() { $('agents-modal').classList.add('hidden'); }
+function refreshAgents() { _agentsCache = null; return renderAgents(); }
 async function renderAgents() {
   const grid = $('agents-grid');
   if (!grid) return;
@@ -3072,13 +3077,23 @@ async function renderAgents() {
     try { const r = await fetch('/api/agents'); const j = await r.json(); _agentsCache = j.agents || []; } catch { _agentsCache = []; }
   }
   if (!_agentsCache.length) { grid.innerHTML = '<div class="muted small">暂无预置智能体。</div>'; return; }
-  grid.innerHTML = _agentsCache.map((a) => `
-    <button class="agent-card" data-name="${escapeHtml(a.name)}">
+  const builtins = _agentsCache.filter((a) => !a.custom);
+  const customs = _agentsCache.filter((a) => a.custom);
+  const card = (a) => `
+    <div class="agent-card" data-name="${escapeHtml(a.name)}" title="${escapeHtml(a.tagline || a.description || '')}">
+      ${a.custom ? `<button class="agent-del" data-slug="${escapeHtml(a.slug || a.name)}" title="删除该智能体">✕</button>` : ''}
       <div class="agent-ico">${a.icon || '🤖'}</div>
       <div class="agent-name">${escapeHtml(a.name)}</div>
-      <div class="agent-tag">${escapeHtml(a.tagline || '')}</div>
-    </button>`).join('');
-  grid.querySelectorAll('.agent-card').forEach((c) => { c.onclick = () => applyAgent(c.dataset.name); });
+      <div class="agent-tag">${escapeHtml(a.tagline || (a.custom ? '自定义智能体' : ''))}</div>
+    </div>`;
+  let html = '';
+  if (customs.length) {
+    html += '<div class="agent-section-label">我的智能体</div>' + customs.map(card).join('');
+  }
+  html += '<div class="agent-section-label">预置智能体</div>' + builtins.map(card).join('');
+  grid.innerHTML = html;
+  grid.querySelectorAll('.agent-card').forEach((c) => { c.onclick = (e) => { if (e.target.closest('.agent-del')) return; applyAgent(c.dataset.name); }; });
+  grid.querySelectorAll('.agent-del').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); deleteCustomAgent(b.dataset.slug); }; });
 }
 async function applyAgent(name) {
   const a = (_agentsCache || []).find((x) => x.name === name);
@@ -3091,6 +3106,47 @@ async function applyAgent(name) {
   if ($('set-systemPrompt')) $('set-systemPrompt').value = config.systemPrompt;
   closeAgents();
   toast('已切换到智能体：' + name);
+}
+
+// ── 自定义智能体（新建 / 删除，落盘到 ~/.agenite/memory/personas/）──
+function openAgentEditor() {
+  $('agent-editor').classList.remove('hidden');
+  $('agent-msg').textContent = '';
+  $('new-agent').classList.add('hidden');
+  $('agent-name').value = ''; $('agent-icon').value = '🧠'; $('agent-tagline').value = ''; $('agent-prompt').value = '';
+  setTimeout(() => $('agent-name').focus(), 30);
+}
+function closeAgentEditor() {
+  $('agent-editor').classList.add('hidden');
+  $('new-agent').classList.remove('hidden');
+}
+async function saveCustomAgent(e) {
+  if (e) e.preventDefault();
+  const name = ($('agent-name').value || '').trim();
+  const system_prompt = ($('agent-prompt').value || '').trim();
+  const msg = $('agent-msg');
+  if (!name || !system_prompt) { msg.textContent = '名称和系统提示词都不能为空。'; return; }
+  msg.textContent = '保存中…';
+  try {
+    const r = await fetch('/api/personas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: ($('agent-tagline').value || '').trim(), system_prompt, icon: ($('agent-icon').value || '').trim() })
+    });
+    const j = await r.json();
+    if (!r.ok) { msg.textContent = '失败：' + (j.error || r.status); return; }
+    closeAgentEditor();
+    await refreshAgents();
+    toast('已保存智能体：' + name);
+  } catch (err) { msg.textContent = '失败：' + err.message; }
+}
+async function deleteCustomAgent(slug) {
+  if (!confirm('删除这个自定义智能体？该操作不可恢复。')) return;
+  try {
+    const r = await fetch('/api/personas/' + encodeURIComponent(slug), { method: 'DELETE' });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); toast('删除失败：' + (j.error || r.status)); return; }
+    await refreshAgents();
+    toast('已删除智能体');
+  } catch (err) { toast('删除失败：' + err.message); }
 }
 function renderSnippetList() {
   const list = $('snippet-list');
@@ -3168,6 +3224,9 @@ function wire() {
   };
   $('open-agents').onclick = openAgents;
   $('close-agents').onclick = closeAgents;
+  $('new-agent').onclick = openAgentEditor;
+  $('agent-cancel').onclick = closeAgentEditor;
+  $('agent-editor').addEventListener('submit', saveCustomAgent);
   $('snippet-add').onclick = addSnippetFromForm;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;

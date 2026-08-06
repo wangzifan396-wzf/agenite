@@ -395,10 +395,27 @@
     <div class="modal-card atlas-card agents-card">
       <div class="drawer-head">
         <h2>🤖 智能体画廊</h2>
-        <button id="close-agents" class="icon-btn" aria-label="关闭">✕</button>
+        <div class="drawer-head-actions">
+          <button id="new-agent" class="mini-btn accent">＋ 新建智能体</button>
+          <button id="close-agents" class="icon-btn" aria-label="关闭">✕</button>
+        </div>
       </div>
       <div class="agents-body">
-        <p class="muted small">精选预置智能体——每个都带专属的系统提示词与说话方式。点一张即可套用；想自定义就先选好，再去「设置 → 电脑权限」里另存为角色。当前：<b id="agents-current">默认</b>。</p>
+        <p class="muted small">精选预置智能体——每个都带专属系统提示词与说话方式。点一张即可套用；你也可以<b>新建自己的智能体</b>（保存在本机 <code>~/.agenite/memory/personas/</code>，跨会话保留）。当前：<b id="agents-current">默认</b>。</p>
+        <form id="agent-editor" class="agent-editor hidden">
+          <div class="agent-editor-row">
+            <input id="agent-name" class="text-input" placeholder="智能体名称（如「周报助手」）" maxlength="40" />
+            <input id="agent-icon" class="text-input agent-icon-input" placeholder="图标 emoji" maxlength="4" />
+          </div>
+          <input id="agent-tagline" class="text-input" placeholder="一句话简介（如「帮你把周报写得又快又好」）" maxlength="60" />
+          <textarea id="agent-prompt" class="text-input agent-prompt-input" placeholder="系统提示词：描述这个智能体的身份、语气、职责与禁忌…" rows="5"></textarea>
+          <div class="agent-editor-actions">
+            <span id="agent-msg" class="muted small"></span>
+            <div class="grow"></div>
+            <button type="button" id="agent-cancel" class="mini-btn ghost">取消</button>
+            <button type="submit" id="agent-save" class="mini-btn accent">保存</button>
+          </div>
+        </form>
         <div id="agents-grid" class="agents-grid"></div>
       </div>
     </div>

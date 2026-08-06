@@ -91,6 +91,12 @@
   - 🔀 **模型中枢**：模型设置升级为「供应商选择 + 模型目录（datalist 一键选取）+ 上下文窗口徽标」，切换供应商即自动带出 baseURL / 默认模型 / 窗口大小，修复了原先"已填 key 时切供应商不更新 endpoint"的隐含 bug。**零锁定多模型**，呼应 Hermes 的 `hermes model` 一键切换。
   - 🤖 **智能体画廊**：侧栏「🤖 智能体」打开 14 个预置角色卡（全栈开发 / 严厉审查 / 温柔写作 / 研究员 / 数据分析 / 翻译 / 安全审计 / 运维 / 产品经理 / 面试官 / 会议纪要 / 简历教练 / 头脑风暴 …），一键应用即把对应中文 system_prompt 注入——对标 Cherry 的 1000+ 预置助手与 Hermes 的 agentskills 角色，开箱即用。
   - 🧩 新增 `src/core/knowledge.js`（纯 RAG 引擎 + 单测 `test/knowledge.test.js` 6 例）、`src/core/config.js` 新增 `modelsForProvider` / `ALL_MODELS` / `modelLabel` 与 Gemini / SiliconFlow 预设、`server.js` 新增 `/api/kb/*` 与 `/api/agents` 端点、`src/app.js` 新增 KB / 智能体面板，**零架构债**。
+- **智能体画廊可自定义（v0.26.0）**：把"预置 14 个"升级成"**你也能造智能体**"——直接对齐 Cherry Studio「用户自定义助手」与 Hermes「自我沉淀技能」的底座体验，让 Agenite 真正像一个能长出自有生态的智能体平台：
+  - 🛠️ **新建 / 保存自定义智能体**：画廊里点「＋ 新建智能体」，填名称、图标、一句话简介与系统提示词即可保存，**落盘到本机 `~/.agenite/memory/personas/`**，跨会话、跨重启保留；对标 Cherry 把你调好的角色存成可复用助手。
+  - 🗑️ **删除自定义智能体**：悬停卡片出现 ✕ 即可删除（带确认）。
+  - 🔀 画廊现在同时列出「我的智能体」与「预置智能体」两组，套用逻辑不变；`/api/agents` 端点会把内置与自定义合并返回（自定义带 `custom:true` 标记），自定义智能体经 `resolvePersonaText` 在对话时正确解析。
+  - 🐞 **滚动修复**：修掉了聊天主区、侧栏会话列表与所有弹窗"滑轮划不动"的根因——flex 滚动容器缺少 `min-height:0` 导致内容撑开而非内部滚动；同时给所有 `.modal-card` 加了 `max-height` + `overflow` 防止小屏 / 长内容时弹窗内容溢出无法滚动，并把流式自动滚动改为瞬时跳转避免卡顿。
+  - 🧩 新增 `test/agents.test.js` 4 例（自定义智能体存取 / 校验 / 同名覆盖），**零架构债**。
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
 - **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：
@@ -131,7 +137,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（311 个，node:test）
+npm test       # 跑核心逻辑单元测试（315 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

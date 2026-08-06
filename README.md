@@ -91,6 +91,12 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   - 🔀 **Model hub**: model settings become a provider selector + one-click model catalog (datalist) + context-window badge; switching provider auto-fills baseURL / default model / window size, and fixes a latent bug where an already-set key prevented endpoint updates. **Zero-lock-in multi-model**, echoing Hermes' `hermes model` switch.
   - 🤖 **Agent gallery**: the sidebar **🤖 Agents** opens **14** preset persona cards (full-stack dev / strict reviewer / warm writer / researcher / data analyst / translator / security auditor / devops / PM / interviewer / meeting-notes / resume-coach / brainstorm …) — one click injects the matching Chinese system prompt. Echoing Cherry's 1000+ presets and Hermes' agentskills roles, ready out of the box.
   - 🧩 New `src/core/knowledge.js` (pure RAG engine + `test/knowledge.test.js`, 6 cases), `src/core/config.js` gains `modelsForProvider` / `ALL_MODELS` / `modelLabel` plus Gemini / SiliconFlow presets, `server.js` adds `/api/kb/*` and `/api/agents` endpoints, `src/app.js` adds the KB / agent panels, **zero architectural debt**.
+- **Customizable agent gallery (v0.26.0)**: turns "14 presets" into "you can also build agents" — directly matching Cherry Studio's user-defined assistants and Hermes' self-authored skills, so Agenite grows its own ecosystem like a real platform:
+  - 🛠️ **Create / save custom agents**: in the gallery click **＋ 新建智能体**, fill in name, icon, one-line tagline and system prompt to save — persisted to `~/.agenite/memory/personas/`, surviving sessions and restarts. Echoes Cherry keeping a tuned assistant as a reusable persona.
+  - 🗑️ **Delete custom agents**: hover a card to reveal a ✕ that deletes (with confirmation).
+  - 🔀 The gallery now lists "My agents" and "Preset agents" together; `/api/agents` merges built-ins with custom (custom carries a `custom:true` flag) and `resolvePersonaText` resolves them correctly at chat time.
+  - 🐞 **Scroll fix**: fixed the root cause of "the wheel does nothing" in the chat pane, the sidebar conversation list, and every modal — flex scroll containers lacked `min-height:0` so content expanded instead of scrolling internally; every `.modal-card` also got `max-height` + `overflow` so tall/small-screen content stays scrollable, and streaming auto-scroll now jumps instantly to avoid lag.
+  - 🧩 New `test/agents.test.js` (4 cases: custom agent save/list/read/delete + validation + same-name overwrite), **zero architectural debt**.
 - **Plan Mode** — toggle `Plan` in the header: the agent first returns a step-by-step plan (recorded as an inspectable checklist via the `plan` tool) and waits for your **批准并执行** before touching anything. Ideal for risky or multi-step tasks.
 - **Diff preview + one-click undo** — every file mutation (`write_file` / `edit_file` / `apply_patch`) shows a live `diff` in its tool card, with a **↩ 撤销** button that restores the previous content via a server-held snapshot.
 - **Local computer control** — a **workspace sandbox** pins every file operation under one root directory, and a **3-mode approval gate** decides when a human must approve:
@@ -122,7 +128,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (311, via node:test)
+npm test       # run core unit tests (315, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port
