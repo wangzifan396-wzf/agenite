@@ -1,6 +1,6 @@
 {
   "name": "agenite",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Local-first multi-provider AI agent client with tool-use. Plug in your model API key and chat, with file/web/command tools.",
   "type": "module",
   "bin": {
@@ -28,6 +28,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/agenite.git"
+    "url": "https://github.com/wangzifan396-wzf/agenite.git"
   }
 }

@@ -28,11 +28,17 @@ export function renderMarkdown(src) {
       }
       i++; // skip closing fence
       const idx = codeBlocks.length;
-      codeBlocks.push(
-        `<pre class="code-block" data-lang="${escapeHtml(lang)}"><button class="copy-btn" data-copy="${idx}" type="button">复制</button><code>${escapeHtml(
-          buf.join('\n')
-        )}</code></pre>`
-      );
+      const raw = buf.join('\n');
+      if (/^html?$/i.test(lang)) {
+        // Live, sandboxed preview — the signature "artifact" experience.
+        codeBlocks.push(buildArtifact(raw, idx));
+      } else {
+        codeBlocks.push(
+          `<pre class="code-block" data-lang="${escapeHtml(lang)}"><button class="copy-btn" data-copy="${idx}" type="button">复制</button><code>${escapeHtml(
+            raw
+          )}</code></pre>`
+        );
+      }
       out.push(`\u0000CODE${idx}\u0000`);
       continue;
     }
@@ -108,7 +114,6 @@ export function renderMarkdown(src) {
 }
 
 function inline(text) {
-  // protect inline code first
   const codes = [];
   let s = text.replace(/`([^`]+)`/g, (_, c) => {
     const idx = codes.length;
@@ -139,3 +144,32 @@ function inline(text) {
   s = s.replace(/\u0001(\d+)\u0001/g, (_, n) => codes[Number(n)]);
   return s;
 }
+
+// A live, sandboxed HTML preview. Rendered as a faux browser frame with a
+// preview/code toggle. The iframe is sandboxed (scripts allowed, but a unique
+// opaque origin so it can never touch the parent page) — safe even when the
+// agent hands back untrusted markup.
+function buildArtifact(raw, idx) {
+  const code = escapeHtml(raw);
+  // srcdoc is an HTML attribute: escape quotes and ampersands. `</iframe>`
+  // inside it is parsed within the iframe's own document, not the parent, so
+  // it cannot break out of the attribute.
+  const srcdoc = raw.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return (
+    `<div class="artifact" data-lang="html">` +
+      `<div class="artifact-head">` +
+        `<span class="artifact-title"><span class="artifact-ico" aria-hidden="true">🌐</span>HTML 实时预览</span>` +
+        `<div class="artifact-tabs">` +
+          `<button type="button" class="atab on" data-view="preview">预览</button>` +
+          `<button type="button" class="atab" data-view="code">代码</button>` +
+        `</div>` +
+        `<button type="button" class="copy-btn" data-copy="${idx}">复制</button>` +
+      `</div>` +
+      `<div class="artifact-views">` +
+        `<div class="artifact-view preview"><iframe class="artifact-iframe" sandbox="allow-scripts" referrerpolicy="no-referrer" srcdoc="${srcdoc}"></iframe></div>` +
+        `<div class="artifact-view code hidden"><pre class="code-block" data-lang="html"><code>${code}</code></pre></div>` +
+      `</div>` +
+    `</div>`
+  );
+}
+

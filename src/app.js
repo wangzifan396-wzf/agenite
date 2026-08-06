@@ -331,6 +331,77 @@ function renderMsgUsage(el, m) {
 // ---------- rendering ----------
 const THINKING = '<span class="thinking"><i></i><i></i><i></i></span>';
 
+// A zero-dependency, XSS-safe highlighter. It re-escapes already-escaped text
+// and wraps tokens in spans we control, so user content can never inject markup.
+const HL_KEYWORDS = new Set((
+  'const let var function return if else for while do switch case break continue new class extends super this ' +
+  'import export from default async await yield try catch finally throw typeof instanceof in of delete void ' +
+  'true false null undefined ' +
+  'def elif except raise with as pass lambda print None True False ' +
+  'public private protected static final void int double string boolean then fi echo'
+).split(/\s+/).filter(Boolean));
+
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function highlightCode(raw, lang) {
+  const l = (lang || '').toLowerCase();
+  if (/^(?:html|xml|svg|css)$/i.test(l)) return escHtml(raw); // tags/selectors: keep plain
+  const scriptLike = !/^(?:json|bash|sh|shell|sql|markdown|md|yaml|yml|toml|text|txt)$/i.test(l);
+  const hashComment = /^(?:python|py|bash|sh|shell|ruby|rb|yaml|yml|toml)$/i.test(l);
+  const re = new RegExp(
+    '(/\\*[\\s\\S]*?\\*/)' +
+    (scriptLike ? '|((?://)[^\\n]*?)' : '') +
+    (hashComment ? '|(#[^\\n]*?)' : '') +
+    '|("(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\'|`(?:\\\\.|[^`\\\\])*`)' +
+    '|(\\b\\d[\\d_]*\\.?\\d*(?:[eE][+-]?\\d+)?\\b)' +
+    '|([A-Za-z_$][\\w$]*)' +
+    '|(\\s+)' +
+    '|([\\s\\S])',
+    'g'
+  );
+  let out = '';
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m[1]) out += '<span class="tok-com">' + escHtml(m[1]) + '</span>';
+    else if (m[2]) out += '<span class="tok-com">' + escHtml(m[2]) + '</span>';
+    else if (m[3]) out += '<span class="tok-com">' + escHtml(m[3]) + '</span>';
+    else if (m[4]) out += '<span class="tok-str">' + escHtml(m[4]) + '</span>';
+    else if (m[5]) out += '<span class="tok-num">' + escHtml(m[5]) + '</span>';
+    else if (m[6]) {
+      const w = m[6];
+      out += HL_KEYWORDS.has(w) ? '<span class="tok-kw">' + escHtml(w) + '</span>' : escHtml(w);
+    } else if (m[7]) out += m[7];
+    else out += escHtml(m[8]);
+    if (m.index === re.lastIndex) re.lastIndex++;
+  }
+  return out;
+}
+
+function highlightRoot(root) {
+  if (!root) return;
+  root.querySelectorAll('pre.code-block:not([data-hl]) > code').forEach((code) => {
+    const lang = code.parentElement.getAttribute('data-lang') || '';
+    code.innerHTML = highlightCode(code.textContent, lang);
+    code.parentElement.setAttribute('data-hl', '1');
+  });
+}
+
+function paint(mdEl, src) {
+  mdEl.innerHTML = renderMarkdown(src) || '';
+  highlightRoot(mdEl);
+}
+function paintOrThinking(mdEl, src) {
+  if (src && src.trim()) paint(mdEl, src);
+  else mdEl.innerHTML = THINKING;
+}
+function paintFallback(mdEl, src, fallback) {
+  const h = renderMarkdown(src);
+  if (h) { mdEl.innerHTML = h; highlightRoot(mdEl); }
+  else mdEl.innerHTML = fallback;
+}
+
 function renderMessages() {
   const box = $('messages');
   box.innerHTML = '';
@@ -348,15 +419,27 @@ function renderMessages() {
 
 function buildEmptyState() {
   const wrap = document.createElement('div');
-  wrap.className = 'empty';
+  wrap.className = 'welcome';
+  const features = [
+    { ico: '🔒', t: '本地优先', d: '数据不出本机，API Key 只经本地服务转发' },
+    { ico: '🌐', t: '浏览器 Agent', d: '看得见、可干预的网页自动化' },
+    { ico: '🧩', t: '36 个工具', d: '文件 / 命令 / 联网 / MCP 即插即用' },
+    { ico: '🗺️', t: '记忆 + 计划', d: '长期记忆图谱，计划模式先审后做' }
+  ];
+  const feat = features.map((f) =>
+    `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
+  ).join('');
   const grid = STARTERS.map((s, i) =>
     `<button class="starter" data-i="${i}"><b>${escapeHtml(s.title)}</b><span>${escapeHtml(s.text)}</span></button>`
   ).join('');
   wrap.innerHTML =
-    '<div class="empty-mark"></div>' +
-    '<h1>今天想让它做点什么？</h1>' +
-    '<p>Agenite 跑在你自己的电脑上，能读写文件、执行命令、联网查资料。</p>' +
-    `<div class="starter-grid">${grid}</div>`;
+    '<div class="welcome-glow" aria-hidden="true"></div>' +
+    '<div class="welcome-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.6L18.4 9l-4.6 1.8L12 15.4 10.2 10.8 5.6 9l4.6-1.4z"/><path d="M18 15l.9 2.3L21 18l-2.1.8L18 21l-.9-2.3L15 18l2.1-.7z"/></svg></div>' +
+    '<h1 class="welcome-h">今天想让 Agenite 做点什么？</h1>' +
+    '<p class="welcome-sub">运行在你自己电脑上的本地智能体 —— 能读写文件、执行命令、联网查资料，并把每一步都摊开给你看。</p>' +
+    `<div class="welcome-features">${feat}</div>` +
+    `<div class="starter-grid">${grid}</div>` +
+    '<p class="welcome-foot">提示：按 <kbd>Ctrl</kbd>+<kbd>/</kbd> 看全部快捷键 · 点左侧「🌐 浏览器」看 Agent 正在操作的网页</p>';
   wrap.querySelectorAll('.starter').forEach((btn) => {
     btn.onclick = () => {
       const s = STARTERS[Number(btn.dataset.i)];
@@ -399,6 +482,7 @@ function buildMessageEl(m, index) {
   el.className = 'msg assistant';
   el.innerHTML = '<div class="avatar">A</div><div class="bubble"><div class="notices"></div><div class="tools"></div><div class="md"></div></div>';
   el.querySelector('.md').innerHTML = renderMarkdown(m.content || '') || '';
+  highlightRoot(el.querySelector('.md'));
   if (Array.isArray(m.toolCalls)) for (const t of m.toolCalls) upsertToolCard(el, t);
   if (Array.isArray(m.notices)) for (const n of m.notices) addNotice(el, n);
   if (m.selfCheck) renderSelfCheck(el, m.selfCheck);
@@ -763,6 +847,7 @@ async function runTurn(conv, opts = {}) {
   conv.messages.push(aMsg);
   const el = buildMessageEl(aMsg);
   el.querySelector('.md').innerHTML = THINKING;
+  el.classList.add('is-thinking');
   $('messages').appendChild(el);
   scrollBottom();
   setBusy(true);
@@ -786,7 +871,7 @@ async function runTurn(conv, opts = {}) {
       const stick = nearBottom();
       if (event === 'delta') {
         aMsg.content += data.content || '';
-        md.innerHTML = renderMarkdown(aMsg.content) || THINKING;
+        paintOrThinking(md, aMsg.content);
       } else if (event === 'approval') {
         handleApprovalRequest(data);
       } else if (event === 'tool_start') {
@@ -836,7 +921,7 @@ async function runTurn(conv, opts = {}) {
         renderMsgUsage(el, aMsg);
       } else if (event === 'error') {
         aMsg.content += (aMsg.content ? '\n\n' : '') + '⚠️ ' + (data.message || '出错了');
-        md.innerHTML = renderMarkdown(aMsg.content);
+        paint(md, aMsg.content);
       } else if (event === 'guardrail') {
         // The server hit the interactive cost cap and forced a stop. Toast it so
         // the user knows why the run ended early, not just that it did.
@@ -847,7 +932,8 @@ async function runTurn(conv, opts = {}) {
         aMsg.selfCheck = data;
         renderSelfCheck(el, data);
       } else if (event === 'done' || event === 'end') {
-        md.innerHTML = renderMarkdown(aMsg.content) || '<span class="muted small">（没有文本输出）</span>';
+        el.classList.remove('is-thinking');
+        paintFallback(md, aMsg.content, '<span class="muted small">（没有文本输出）</span>');
         if (event === 'done' && data.canContinue) {
           aMsg.canContinue = true;
           addContinueBar(el);
@@ -871,9 +957,12 @@ async function runTurn(conv, opts = {}) {
         ? '无法连接本地服务，请确认 Agenite 服务正在运行（start.cmd / node server.js）。'
         : e.message;
       aMsg.content += (aMsg.content ? '\n\n' : '') + '⚠️ ' + hint;
-      md.innerHTML = renderMarkdown(aMsg.content);
+      paint(md, aMsg.content);
     } else if (!aMsg.content) {
+      el.classList.remove('is-thinking');
       md.innerHTML = '<span class="muted small">已停止</span>';
+    } else {
+      el.classList.remove('is-thinking');
     }
   } finally {
     closeApproval();
@@ -3111,6 +3200,16 @@ function wire() {
         copyBtn.textContent = '已复制';
         setTimeout(() => { copyBtn.textContent = '复制'; }, 1400);
       }
+      return;
+    }
+    const atab = e.target.closest('.atab');
+    if (atab) {
+      const art = atab.closest('.artifact');
+      if (!art) return;
+      const view = atab.dataset.view;
+      art.querySelectorAll('.atab').forEach((b) => b.classList.toggle('on', b === atab));
+      art.querySelector('.artifact-view.preview').classList.toggle('hidden', view !== 'preview');
+      art.querySelector('.artifact-view.code').classList.toggle('hidden', view !== 'code');
       return;
     }
     if (e.target.closest('.continue-btn')) { continueRun(); return; }

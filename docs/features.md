@@ -19,7 +19,7 @@
 
 ## 2. 工具说明
 
-内置 25 个工具，分「安全（默认开启）」与「高危（需开启高级工具 + 审批）」两类（下表列出基础文件 / 命令 / 搜索类，另外还有联网搜索、记忆、计划、委派、并行委派、技能、语义代码检索、代码解释器共 11 个工作流类工具，见第 8 节）。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
+内置 36 个工具，分「安全（默认开启）」「高危（需开启高级工具 + 审批）」「浏览器（内置，无 MCP）」三类（基础文件 / 命令 / 搜索类见下表，联网搜索、记忆、计划、委派、并行委派、技能、语义代码检索、代码解释器、角色人格、自治目标等见第 8 节）。除此之外，你还可以通过 MCP 接入任意数量的外部工具（见第 4 节）。
 
 | 工具 | 类型 | 说明 |
 | --- | --- | --- |
@@ -471,6 +471,6 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util` / `snippets` / `reliability`）无 DOM，**297 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库 / 可靠性各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util` / `snippets` / `reliability`）无 DOM，**299 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库 / 可靠性 / 实时 HTML 预览工件各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

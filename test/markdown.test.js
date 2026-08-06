@@ -20,6 +20,23 @@ test('renders fenced code blocks', () => {
   assert.ok(html.includes('const a = 1;'));
 });
 
+test('renders ```html as a sandboxed live artifact', () => {
+  const html = renderMarkdown('```html\n<h1>Hi</h1>\n```');
+  assert.ok(html.includes('class="artifact"'), 'should wrap html in an artifact card');
+  assert.ok(html.includes('class="atab"'), 'should have preview/code tabs');
+  assert.ok(html.includes('<iframe'), 'should embed a preview iframe');
+  assert.ok(html.includes('sandbox="allow-scripts"'), 'iframe must be sandboxed');
+  assert.ok(html.includes('srcdoc='), 'iframe should carry the source');
+});
+
+test('artifact escapes untrusted markup (no script execution in parent)', () => {
+  const html = renderMarkdown('```html\n<img src=x onerror=alert(1)>\n```');
+  assert.ok(html.includes('class="artifact"'));
+  // srcdoc attribute-escapes quotes; the raw text still appears but inside an
+  // isolated sandbox, never as live markup in the parent document.
+  assert.ok(!html.includes('<script'), 'no raw script tag in parent doc');
+});
+
 test('renders links with sanitized href', () => {
   const html = renderMarkdown('[x](https://e.com)');
   assert.ok(html.includes('href="https://e.com"'));

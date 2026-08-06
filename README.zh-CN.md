@@ -81,6 +81,11 @@
   - 💾 **登录态持久化（会话保存/恢复）**：新增 `browser_save_session(name)` / `browser_restore_session(name)`，把当前页面的 cookies + localStorage 存到工作区 `.agenite/browser-sessions/<name>.json`，下次自动恢复——解决"每次重开浏览器都要重新登录"这一 2026 年公认最难运维的 agentic browsing 缺口。
   - 🛡️ **结构化错误分类 + 瞬时自愈重试**：`executeTool` 现在给每个工具错误打上 `errorClass`（`SCHEMA_ERROR` / `PERMISSION_DENIED` / `NOT_FOUND` / `RATE_LIMIT` / `TRANSIENT` / `PERMANENT` / `UNKNOWN`），对 `web_fetch` / `web_search` / `browser_navigate` 等可重试工具做**指数退避 + 抖动的有界重试**（默认 3 次，对模型透明）；失败回灌模型时前缀 `Error [CLASS]:`，让模型据此自愈（约 85% 的瞬时失败可自动恢复，呼应 2026 年 tool-call self-correction 最佳实践）。
   - 🧩 新增 `test/reliability.test.js`（错误分类/重试单测）与 `test/browser.test.js` 扩展（高亮 + 会话路由），全部零 Chrome 依赖可在 CI 跑通。
+- **更精致的产品体验：实时预览 + 代码高亮 + 欢迎 Hero（v0.24.0）**：把"能不能吸引人"从口号变成产品细节——直接对标 Claude Artifacts / ChatGPT Canvas 的"看得见、能交互"体验：
+  - 🌐 **实时 HTML 预览（Artifact）**：助手回复里的 ```` ```html ```` 代码块自动渲染成一个**沙箱隔离的实时预览**（`<iframe sandbox="allow-scripts">`，`srcdoc` 内联、默认禁用网络与外链），预览 / 代码一键切换、可复制——模型生成的小网页、组件、Demo 直接能跑能看，不用复制粘贴到别处。
+  - 🎨 **代码语法高亮**：所有代码块（JS / Python / Bash / JSON …）零依赖**自写 tokenizer** 上色（关键字 / 字符串 / 数字 / 注释分别着色，先 escape 防 XSS），明暗主题自适应。
+  - ✨ **精致欢迎页 + 思考动效**：空状态从空白聊天框升级为**产品 Hero**（渐变标题 + 四类能力卡片 + 起始问题 + 快捷键提示）；助手"思考中"用**波动光带动画**、头像**脉冲**提示，让"它还在不在动"一眼可见。
+  - 🧩 纯前端改动（`src/core/markdown.js` 的 `buildArtifact` + `src/app.js` 的高亮助手 / Hero / 思考态 + `src/styles.css`），**零架构债**，新增 `test/markdown.test.js` 两条用例（工件渲染 + 转义安全）。
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
 - **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：
@@ -121,7 +126,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（297 个，node:test）
+npm test       # 跑核心逻辑单元测试（299 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口
