@@ -3,7 +3,7 @@
 // Talks to the local server, which is the part that can actually touch the machine.
 import { renderMarkdown } from './core/markdown.js';
 import { uid, escapeHtml, fuzzyFilter, formatBytes } from './core/util.js';
-import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES } from './core/config.js';
+import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, modelsForProvider, modelLabel } from './core/config.js';
 import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1214,7 +1214,27 @@ function renderPlanChip() {
 function renderModelChip() {
   const ready = !!config.model && (!!config.apiKey || config.provider === 'ollama');
   $('model-chip').classList.toggle('ready', ready);
-  $('model-label').textContent = config.model ? `${config.provider} · ${config.model}` : '未配置模型';
+  const p = PROVIDER_PRESETS.find((x) => x.id === config.provider);
+  const icon = p ? (p.icon || '') : '';
+  $('model-label').textContent = config.model ? `${icon} ${config.model}` : '未配置模型';
+}
+
+// Fill the model <datalist> from the active provider's curated catalog and
+// refresh the context-window badge next to the model field.
+function refreshModelList() {
+  const dl = $('model-list');
+  if (!dl) return;
+  const models = modelsForProvider($('set-provider').value);
+  dl.innerHTML = models
+    .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)} · ${Math.round(m.ctx / 1000)}K 上下文</option>`)
+    .join('');
+  updateModelCtxBadge();
+}
+function updateModelCtxBadge() {
+  const el = $('model-ctx');
+  if (!el) return;
+  const m = modelsForProvider($('set-provider').value).find((x) => x.id === ($('set-model').value || '').trim());
+  el.textContent = m ? `上下文 ${Math.round(m.ctx / 1000)}K` : '';
 }
 
 function populateProviders() {
@@ -1223,9 +1243,10 @@ function populateProviders() {
   for (const p of PROVIDER_PRESETS) {
     const opt = document.createElement('option');
     opt.value = p.id;
-    opt.textContent = p.label;
+    opt.textContent = (p.icon ? p.icon + ' ' : '') + p.label;
     sel.appendChild(opt);
   }
+  refreshModelList();
 }
 function renderApprovalModes() {
   const box = $('approval-modes');
@@ -1371,6 +1392,7 @@ function onProviderChange() {
   if (preset.baseURL) $('set-baseURL').value = preset.baseURL;
   if (preset.defaultModel) $('set-model').value = preset.defaultModel;
   $('set-apiKey').placeholder = preset.apiKeyPlaceholder || 'your-api-key';
+  refreshModelList();
   syncOllamaUi();
 }
 
@@ -1396,6 +1418,17 @@ async function refreshOllamaModels() {
       if (!($('set-model').value || '').trim()) $('set-model').value = j.models[0];
       hint.textContent = `本地模型 · 零成本 · 已发现 ${j.models.length} 个`;
       hint.classList.add('green');
+      const dl = $('model-list');
+      if (dl) {
+        const have = new Set([...dl.options].map((o) => o.value));
+        for (const m of j.models) {
+          if (!have.has(m)) {
+            const o = document.createElement('option');
+            o.value = m; o.textContent = `${m} · 本地`;
+            dl.appendChild(o);
+          }
+        }
+      }
     } else {
       hint.textContent = '未检测到 Ollama（先运行 ollama serve 并 pull 模型）';
     }
@@ -2956,6 +2989,109 @@ function openSnippets() {
 function closeSnippets() {
   $('snippets-modal').classList.add('hidden');
 }
+
+// ── 知识库面板（本地 RAG） ────────────────────────────────────────────────
+function openKb() {
+  $('kb-modal').classList.remove('hidden');
+  $('kb-enabled').checked = config.kbEnabled === true;
+  refreshKb();
+}
+function closeKb() { $('kb-modal').classList.add('hidden'); }
+async function refreshKb() {
+  const list = $('kb-list');
+  const stats = $('kb-stats');
+  try {
+    const r = await fetch('/api/kb/list');
+    const j = await r.json();
+    if (stats) stats.textContent = j.stats ? `${j.stats.docs} 份资料 · ${j.stats.chunks} 个片段` : '';
+    if (!list) return;
+    if (!j.docs || !j.docs.length) {
+      list.innerHTML = '<div class="muted small">还没有资料。粘贴文本或从文件导入，开始构建你的本地知识库。</div>';
+      return;
+    }
+    list.innerHTML = j.docs.map((d) => `
+      <div class="kb-item" data-id="${d.id}">
+        <div class="kb-item-main">
+          <span class="kb-item-title">${escapeHtml(d.title)}</span>
+          <span class="kb-item-meta">${escapeHtml(d.kind || 'text')} · ${d.chunk_count} 片段</span>
+        </div>
+        <button class="mini-btn danger-text kb-del" data-id="${d.id}">删除</button>
+      </div>`).join('');
+    list.querySelectorAll('.kb-del').forEach((b) => { b.onclick = () => removeKb(Number(b.dataset.id)); });
+  } catch { if (list) list.innerHTML = '<div class="muted small">读取知识库失败</div>'; }
+}
+async function addKbText() {
+  const text = ($('kb-text').value || '').trim();
+  const title = ($('kb-title').value || '').trim();
+  const msg = $('kb-msg');
+  if (!text) { msg.textContent = '请先粘贴文本内容。'; return; }
+  msg.textContent = '入库中…';
+  try {
+    const r = await fetch('/api/kb/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, title }) });
+    const j = await r.json();
+    if (!r.ok) { msg.textContent = '失败：' + (j.error || r.status); return; }
+    $('kb-text').value = ''; $('kb-title').value = '';
+    msg.textContent = `✅ 已加入《${j.doc.title}》（${j.doc.chunks} 片段）`;
+    refreshKb();
+  } catch (e) { msg.textContent = '失败：' + e.message; }
+}
+async function addKbFile() {
+  const path = ($('kb-path').value || '').trim();
+  const msg = $('kb-msg');
+  if (!path) { msg.textContent = '请填写文件路径。'; return; }
+  msg.textContent = '读取中…';
+  try {
+    const r = await fetch('/api/kb/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+    const j = await r.json();
+    if (!r.ok) { msg.textContent = '失败：' + (j.error || r.status); return; }
+    $('kb-path').value = '';
+    msg.textContent = `✅ 已导入《${j.doc.title}》（${j.doc.chunks} 片段）`;
+    refreshKb();
+  } catch (e) { msg.textContent = '失败：' + e.message; }
+}
+async function removeKb(id) {
+  try { await fetch('/api/kb/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); refreshKb(); } catch { /* ignore */ }
+}
+async function clearKb() {
+  if (!confirm('确定清空整个本地知识库？此操作不可恢复。')) return;
+  try { await fetch('/api/kb/clear', { method: 'POST' }); refreshKb(); toast('已清空知识库'); } catch { /* ignore */ }
+}
+
+// ── 智能体画廊 ───────────────────────────────────────────────────────────
+let _agentsCache = null;
+function openAgents() {
+  $('agents-modal').classList.remove('hidden');
+  $('agents-current').textContent = config.persona && config.persona !== 'default' ? config.persona : '默认';
+  renderAgents();
+}
+function closeAgents() { $('agents-modal').classList.add('hidden'); }
+async function renderAgents() {
+  const grid = $('agents-grid');
+  if (!grid) return;
+  if (!_agentsCache) {
+    try { const r = await fetch('/api/agents'); const j = await r.json(); _agentsCache = j.agents || []; } catch { _agentsCache = []; }
+  }
+  if (!_agentsCache.length) { grid.innerHTML = '<div class="muted small">暂无预置智能体。</div>'; return; }
+  grid.innerHTML = _agentsCache.map((a) => `
+    <button class="agent-card" data-name="${escapeHtml(a.name)}">
+      <div class="agent-ico">${a.icon || '🤖'}</div>
+      <div class="agent-name">${escapeHtml(a.name)}</div>
+      <div class="agent-tag">${escapeHtml(a.tagline || '')}</div>
+    </button>`).join('');
+  grid.querySelectorAll('.agent-card').forEach((c) => { c.onclick = () => applyAgent(c.dataset.name); });
+}
+async function applyAgent(name) {
+  const a = (_agentsCache || []).find((x) => x.name === name);
+  if (!a) return;
+  config.persona = name;
+  config.systemPrompt = a.system_prompt || '';
+  saveConfig();
+  $('agents-current').textContent = name;
+  if ($('set-persona')) $('set-persona').value = name;
+  if ($('set-systemPrompt')) $('set-systemPrompt').value = config.systemPrompt;
+  closeAgents();
+  toast('已切换到智能体：' + name);
+}
 function renderSnippetList() {
   const list = $('snippet-list');
   if (!list) return;
@@ -3020,6 +3156,18 @@ function wire() {
   $('browser-close').onclick = closeBrowserEngine;
   $('open-snippets').onclick = openSnippets;
   $('close-snippets').onclick = closeSnippets;
+  $('open-kb').onclick = openKb;
+  $('close-kb').onclick = closeKb;
+  $('kb-add-text').onclick = addKbText;
+  $('kb-add-file').onclick = addKbFile;
+  $('kb-clear').onclick = clearKb;
+  $('kb-enabled').onchange = (e) => {
+    config.kbEnabled = e.target.checked;
+    saveConfig();
+    toast('知识库引用：' + (config.kbEnabled ? '开' : '关'));
+  };
+  $('open-agents').onclick = openAgents;
+  $('close-agents').onclick = closeAgents;
   $('snippet-add').onclick = addSnippetFromForm;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
@@ -3036,6 +3184,7 @@ function wire() {
   $('persona-save').onclick = saveNewPersona;
   $('test-conn').onclick = testConnection;
   $('set-provider').onchange = onProviderChange;
+  $('set-model').addEventListener('input', updateModelCtxBadge);
   $('ollama-refresh').onclick = refreshOllamaModels;
   $('set-temperature').oninput = (e) => { $('temp-val').textContent = e.target.value; };
   $('theme-toggle').onclick = toggleTheme;

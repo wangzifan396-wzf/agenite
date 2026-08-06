@@ -468,9 +468,33 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 - 侧栏新增「💡 指令库」面板：把常用提示词 / 工作流存成命名片段，一键插入对话输入框（`insertSnippetInto` 合并正文）。仅存于本机 `localStorage`（key `agenite.snippets.v1`），零云零依赖，呼应 2026 本地优先 "skills 作为分发渠道" 思路。
 - 纯函数核心 `src/core/snippets.js`：`listSnippets` / `addSnippet` / `removeSnippet` / `getSnippet` / `insertSnippetInto`，无 `localStorage` 时退化为内存存储，含单测 `test/snippets.test.js`（`npm i puppeteer-core` 之外无任何依赖）。前端 `renderSnippetList` / `addSnippetFromForm` 接线；弹窗背景点击 / Esc 关闭链已接入。
 
+### 8.9.15 真·智能体平台三件套：本地知识库 RAG + 模型中枢 + 智能体画廊（v0.25.0）
+
+补齐与 Cherry Studio / Hermes Agent 对标时最关键的「多模型中枢 + 本地知识库 + 智能体画廊」缺口，把 Agenite 从「会干活的聊天 Agent」进一步推向「可托付的本地智能体平台」。
+
+#### 8.9.15.1 本地知识库 RAG（零依赖）
+
+- 新增 `src/core/knowledge.js`：纯函数 RAG 引擎，**零依赖**——用 Node 内置 `node:sqlite` 的 FTS5，分词器必须用 `trigram` 才能正确做中文子串检索（`unicode61` / `porter` 对「知识库」返回空，已探针验证）。`chunkText(text, size=900, overlap=150)` 段落感知分块（末段 `min length` 门槛降到 12 避免短文本被全滤）；`cleanFtsQuery` 剥离 FTS5 语法符、长度 <3 返回空（trigram 需 ≥3 字符）。
+- 入口：`createKnowledge(dbPath)` 返回 `ingestText({title,text,source,kind})` / `ingestFile(absPath,{title})`（仅纯文本类：md/txt/代码/json/csv/html）/ `ingestUrl({url,text,title})` / `retrieve(query,k)`（BM25 `ORDER BY rank LIMIT k`）/ `listDocs` / `removeDoc` / `clear` / `stats` / `close`。数据落在 `~/.agenite/memory/kb.sqlite`，完全离线、零隐私外泄。
+- 服务端：`server.js` 新增 `GET /api/kb/list`、`POST /api/kb/ingest`（支持 path / url+text / text 三种入参）、`POST /api/kb/retrieve`、`POST /api/kb/remove`、`POST /api/kb/clear`。`handleChat` 内当 `config.kbEnabled` 时取首条 user 消息作 query，`kb().retrieve(query, config.kbTopK||5)`，命中则拼 `## 本地知识库（检索到的参考片段）` 块传入 `buildSystemPrompt`（新增 `kb=''` 末参）。`defaultConfig` 新增 `kbEnabled:false` / `kbTopK:5`。
+- 前端：侧栏「📚 知识库」弹窗——粘贴文本 / 文件导入开关 / 启用开关 / 资料列表 / 清空。开启后每轮对话自动带资料回答。
+- 测试：`test/knowledge.test.js` 6 例（分块 / CJK 子串检索 / list / remove / clear / url  ingestion）。
+
+#### 8.9.15.2 多服务商模型中枢
+
+- `src/core/config.js` 的 `PROVIDER_PRESETS` 从 10 增至 **12**，新增 **Gemini**（`https://generativelanguage.googleapis.com/v1beta/openai/`，含 gemini-2.0-flash 等）与 **SiliconFlow**（硅基流动 `https://api.siliconflow.cn/v1`，含 DeepSeek-V3 等）；每个预设新增 `icon`（emoji）与 `models:[{id, ctx}]`（ctx = 上下文窗口 token 数）。
+- 新增导出：`modelsForProvider(id)`、`ALL_MODELS`（扁平化目录）、`modelLabel(id)`。
+- **修复关键配置 bug**：原 `normalizeConfig` 用 `if (!cfg.baseURL && preset.baseURL)` 判定，会因 default 已播种 deepseek 的 baseURL，导致切到 Gemini 时不更新 endpoint。改为仅当 `input.baseURL == null || ''` 才采纳 preset（model 同理）。
+- 前端：模型设置升级为「供应商选择（带 icon）+ 模型目录 datalist 一键选取 + 上下文窗口徽标（`📌 <模型> · Nk 上下文`）」；`refreshModelList` / `updateModelCtxBadge` 接线。
+
+#### 8.9.15.3 智能体画廊（Agent Gallery）
+
+- `server.js` 的 `BUILTIN_PERSONAS` 从 4 个扩到 **14** 个（default / fullstack / strict-reviewer / warm-writer / researcher / data-analyst / translator / security-auditor / devops / product-manager / interviewer / meeting-notes / resume-coach / brainstorm），每个带 `icon` 与 `tagline`，并补写中文 `system_prompt`；新增 `GET /api/agents` 返回 `{name, icon, tagline, description, system_prompt}`。
+- 前端：侧栏「🤖 智能体」打开卡片网格（hover 上浮 + 强调色描边），一键 `applyAgent` 把对应 system_prompt 注入。对标 Cherry 的 1000+ 预置助手与 Hermes 的 agentskills 角色，开箱即用。
+
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util` / `snippets` / `reliability`）无 DOM，**299 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库 / 可靠性 / 实时 HTML 预览工件各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `knowledge` / `util` / `snippets` / `reliability`）无 DOM，**311 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库 / 可靠性 / 实时 HTML 预览工件 / 本地知识库 RAG / 多服务商模型中枢各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

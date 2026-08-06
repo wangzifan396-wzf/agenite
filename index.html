@@ -80,6 +80,8 @@
         <button id="open-eval" class="side-link">评估 Eval</button>
         <button id="open-browser" class="side-link">🌐 浏览器</button>
         <button id="open-snippets" class="side-link">💡 指令库</button>
+        <button id="open-kb" class="side-link">📚 知识库</button>
+        <button id="open-agents" class="side-link">🤖 智能体</button>
       </div>
     </aside>
 
@@ -349,6 +351,59 @@
     </div>
   </div>
 
+  <!-- 知识库 · 本地 RAG：把文档/网页变成可检索的上下文，对话时自动引用 -->
+  <div id="kb-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card kb-card">
+      <div class="drawer-head">
+        <h2>📚 知识库 · 本地检索</h2>
+        <button id="close-kb" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body kb-body">
+        <p class="muted small">把文档、笔记或网页导入本地 SQLite（FTS5），对话时 Agent 会自动检索最相关的片段作为参考上下文。<b>完全在本机，不上云、不调外部接口。</b></p>
+        <label class="switch-row">
+          <span><b>对话时引用知识库</b><em>开启后，每条消息都会先检索本地知识库并注入上下文</em></span>
+          <input id="kb-enabled" type="checkbox" />
+        </label>
+        <div class="kb-add">
+          <div class="field-title">粘贴文本 / 笔记</div>
+          <input id="kb-title" class="text-input" type="text" placeholder="标题（可选），如「产品需求文档」" maxlength="80" />
+          <textarea id="kb-text" class="text-input" rows="4" placeholder="粘贴要入库的正文…"></textarea>
+          <div class="btn-row">
+            <button id="kb-add-text" class="mini-btn">＋ 加入知识库</button>
+            <span id="kb-msg" class="muted small"></span>
+          </div>
+        </div>
+        <details class="kb-add">
+          <summary>＋ 从工作区文件导入</summary>
+          <p class="muted small">填写工作区相对路径或绝对路径（纯文本类：md/txt/code/json/csv/html…），Agent 会读取并分块入库。</p>
+          <div class="btn-row">
+            <input id="kb-path" class="text-input grow" type="text" placeholder="例如 docs/README.md 或 C:/path/to/note.md" spellcheck="false" />
+            <button id="kb-add-file" class="mini-btn">导入文件</button>
+          </div>
+        </details>
+        <div class="kb-list-head"><span class="field-title">已入库资料</span><span id="kb-stats" class="muted small"></span></div>
+        <div id="kb-list" class="kb-list"></div>
+        <div class="btn-row kb-foot">
+          <button id="kb-clear" class="mini-btn danger-text">清空知识库</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 智能体画廊：精选的预置角色/工作流，一键切换 -->
+  <div id="agents-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card agents-card">
+      <div class="drawer-head">
+        <h2>🤖 智能体画廊</h2>
+        <button id="close-agents" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="agents-body">
+        <p class="muted small">精选预置智能体——每个都带专属的系统提示词与说话方式。点一张即可套用；想自定义就先选好，再去「设置 → 电脑权限」里另存为角色。当前：<b id="agents-current">默认</b>。</p>
+        <div id="agents-grid" class="agents-grid"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- 快捷键速查 -->
   <div id="keys-modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
@@ -416,7 +471,12 @@
             <input id="set-apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
           </label>
           <label class="field">模型名称
-            <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" list="ollama-models" />
+            <span class="field-inline">
+              <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" list="model-list" />
+              <span id="model-ctx" class="tag"></span>
+            </span>
+            <datalist id="model-list"></datalist>
+            <p class="muted small">切换「供应商」后会自动列出该服务商的常用模型（一键选择）。也可直接填写任意模型 ID。上下文窗口用于预算估算与压缩触发。</p>
           </label>
           <div id="ollama-box" class="hidden">
             <div class="btn-row">

@@ -10,7 +10,7 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 
 ## ✨ Features
 
-- **Multi-model / multi-provider**: OpenAI, DeepSeek, Qwen, Moonshot (Kimi), Zhipu (GLM), Groq, Ollama (local), OpenRouter, any OpenAI-compatible endpoint, plus Anthropic (Claude).
+- **Multi-model / multi-provider (model hub in v0.25.0)**: **12** built-in provider presets with a one-click model catalog — OpenAI, Anthropic (Claude), Google Gemini, DeepSeek, SiliconFlow, Qwen, Moonshot (Kimi), Zhipu (GLM), Groq, Ollama (local), OpenRouter, plus any OpenAI-compatible endpoint. Switching provider auto-fills its baseURL, default model, and context-window badge — matching Cherry Studio's multi-model aggregation.
 - **MCP tool ecosystem (new in v0.5.0)**: a built-in **MCP (Model Context Protocol) client** connects to any MCP server over stdio, turning the whole open-source tool ecosystem into callable tools — **browser automation, desktop/computer control, databases, GitHub** and more. One click in Settings → MCP:
   - 🌐 **Browser control** — Playwright MCP (`npx -y @playwright/mcp@latest`)
   - 🖥️ **Desktop control** — windows-computer-use-mcp (click, type, screenshot)
@@ -86,6 +86,11 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   - 🎨 **Code syntax highlighting**: every code block (JS / Python / Bash / JSON …) is colored by a **zero-dependency hand-written tokenizer** (keywords / strings / numbers / comments each shaded, HTML-escaped first to prevent XSS), adapting to light / dark theme.
   - ✨ **Polished welcome hero + thinking animation**: the empty state is upgraded from a blank chat box to a **product hero** (gradient title + four capability cards + starter prompts + shortcut hints); the assistant's "thinking" uses a **wavy light-band animation** with an **avatar pulse** so "is it still working" is obvious at a glance.
   - 🧩 Front-end only (`src/core/markdown.js`'s `buildArtifact` + `src/app.js`'s highlight helpers / hero / thinking state + `src/styles.css`), **zero architectural debt**, with two new `test/markdown.test.js` cases (artifact rendering + escape safety).
+- **Real agent platform trio (v0.25.0)**: closes the gap with Cherry Studio / Hermes Agent on the three pillars — multi-model hub + local knowledge base + agent gallery — pushing Agenite from "a chat agent that gets things done" toward "a local agent platform you can entrust":
+  - 📚 **Local knowledge-base RAG (zero-dependency)**: the sidebar **📚 Knowledge Base** ingests pasted text / local files (md/txt/code/json/csv/html) / URLs into an on-device vector store (Node built-in `node:sqlite` + FTS5 `trigram` tokenizer, **CJK substring search works**, stored at `~/.agenite/memory/kb.sqlite`, fully offline). When enabled, every turn auto-retrieves the Top-K relevant chunks and injects them into the system prompt so the model "answers with your material" — matching Cherry's local RAG and Hermes' local retrieval.
+  - 🔀 **Model hub**: model settings become a provider selector + one-click model catalog (datalist) + context-window badge; switching provider auto-fills baseURL / default model / window size, and fixes a latent bug where an already-set key prevented endpoint updates. **Zero-lock-in multi-model**, echoing Hermes' `hermes model` switch.
+  - 🤖 **Agent gallery**: the sidebar **🤖 Agents** opens **14** preset persona cards (full-stack dev / strict reviewer / warm writer / researcher / data analyst / translator / security auditor / devops / PM / interviewer / meeting-notes / resume-coach / brainstorm …) — one click injects the matching Chinese system prompt. Echoing Cherry's 1000+ presets and Hermes' agentskills roles, ready out of the box.
+  - 🧩 New `src/core/knowledge.js` (pure RAG engine + `test/knowledge.test.js`, 6 cases), `src/core/config.js` gains `modelsForProvider` / `ALL_MODELS` / `modelLabel` plus Gemini / SiliconFlow presets, `server.js` adds `/api/kb/*` and `/api/agents` endpoints, `src/app.js` adds the KB / agent panels, **zero architectural debt**.
 - **Plan Mode** — toggle `Plan` in the header: the agent first returns a step-by-step plan (recorded as an inspectable checklist via the `plan` tool) and waits for your **批准并执行** before touching anything. Ideal for risky or multi-step tasks.
 - **Diff preview + one-click undo** — every file mutation (`write_file` / `edit_file` / `apply_patch`) shows a live `diff` in its tool card, with a **↩ 撤销** button that restores the previous content via a server-held snapshot.
 - **Local computer control** — a **workspace sandbox** pins every file operation under one root directory, and a **3-mode approval gate** decides when a human must approve:
@@ -117,7 +122,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (299, via node:test)
+npm test       # run core unit tests (311, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

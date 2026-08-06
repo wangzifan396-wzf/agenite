@@ -1788,3 +1788,38 @@ select.text-input { appearance: auto; padding-right: 8px; }
   0%, 100% { box-shadow: 0 0 0 0 var(--glow); }
   50% { box-shadow: 0 0 0 6px transparent; }
 }
+
+/* ── 模型选择增强 ── */
+.field-inline { display: flex; align-items: center; gap: 8px; }
+.field-inline #set-model { flex: 1; }
+.field-inline .tag { white-space: nowrap; flex: none; }
+#model-list option { color: #222; }
+
+/* ── 知识库面板 (本地 RAG) ── */
+.kb-card { max-width: 720px; }
+.kb-body { gap: 14px; }
+.kb-add { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); display: grid; gap: 8px; }
+.kb-add .text-input { width: 100%; }
+.kb-add details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.kb-add details[open] > summary { color: var(--fg); }
+.kb-list-head { display: flex; align-items: center; justify-content: space-between; }
+.kb-list { display: grid; gap: 8px; max-height: 280px; overflow: auto; }
+.kb-item { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.kb-item-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.kb-item-title { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-item-meta { color: var(--muted); font-size: 12px; }
+.kb-foot { margin-top: 4px; }
+
+/* ── 智能体画廊 ── */
+.agents-card { max-width: 860px; }
+.agents-body { display: grid; gap: 14px; padding-top: 14px; }
+.agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.agent-card {
+  text-align: left; cursor: pointer; padding: 14px; border: 1px solid var(--line);
+  border-radius: 14px; background: var(--panel); color: var(--fg);
+  display: grid; gap: 6px; transition: transform .15s var(--ease), border-color .15s, box-shadow .15s;
+}
+.agent-card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 8px 22px rgba(0,0,0,.18); }
+.agent-ico { font-size: 26px; line-height: 1; }
+.agent-name { font-weight: 700; font-size: 14.5px; }
+.agent-tag { color: var(--muted); font-size: 12.5px; line-height: 1.45; }

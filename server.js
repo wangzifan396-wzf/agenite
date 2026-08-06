@@ -6,7 +6,7 @@
 // workspace sandbox and a human approval step. Zero dependencies.
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize, sep, dirname, resolve } from 'node:path';
+import { extname, join, normalize, sep, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
@@ -33,6 +33,7 @@ import {
 import {
   traceToCase, runEval, listEvals, loadEval, deleteEval, pruneEvals, EVALS_DIR
 } from './src/core/eval.js';
+import { createKnowledge } from './src/core/knowledge.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -42,6 +43,15 @@ const WORKSPACE = resolve(process.env.AGENITE_WORKSPACE || process.cwd());
 // Long-term memory lives in its own directory so the agent can never touch the
 // user's files by "remembering" something — it only writes to its own kitchen.
 const MEMORY_DIR = defaultMemoryDir();
+
+// Local knowledge base (RAG), stored next to the agent's long-term memory.
+// Opened lazily so importing server.js in tests doesn't create a file.
+const KB_PATH = join(MEMORY_DIR, 'kb.sqlite');
+let _kb;
+function kb() {
+  if (!_kb) _kb = createKnowledge(KB_PATH);
+  return _kb;
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -118,6 +128,14 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/mcp/status') return sendJson(res, 200, { ok: true, servers: mcp.status() });
   if (req.method === 'POST' && url === '/api/mcp/servers') return handleMcpServers(req, res);
   if (req.method === 'POST' && url === '/api/mcp/disconnect') return handleMcpDisconnect(req, res);
+  // Local knowledge base (RAG) endpoints.
+  if (req.method === 'GET' && url === '/api/kb/list') return handleKbList(res);
+  if (req.method === 'POST' && url === '/api/kb/ingest') return handleKbIngest(req, res);
+  if (req.method === 'POST' && url === '/api/kb/retrieve') return handleKbRetrieve(req, res);
+  if (req.method === 'POST' && url === '/api/kb/remove') return handleKbRemove(req, res);
+  if (req.method === 'POST' && url === '/api/kb/clear') return handleKbClear(res);
+  // Agent gallery: curated built-in personas.
+  if (req.method === 'GET' && url === '/api/agents') return handleAgents(res);
   if (req.method === 'POST' && url === '/api/mcp/import') return handleMcpImport(req, res);
   if (url === '/api/sessions' || url.startsWith('/api/sessions/')) return handleSessions(req, res, url);
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
@@ -723,28 +741,105 @@ async function ollamaEmbed(text) {
   }
 }
 
-// Built-in personas the user can adopt from Settings. Custom ones live as
-// files under ~/.agenite/memory/personas and are merged in via /api/personas.
+// Built-in personas the user can adopt from the Agent Gallery or Settings.
+// Custom ones live as files under ~/.agenite/memory/personas and are merged
+// in via /api/personas. `icon`/`tagline` drive the gallery cards.
 const BUILTIN_PERSONAS = [
-  { name: 'default', description: '均衡的通用智能体（默认）', system_prompt: '' },
+  { name: 'default', icon: '⚖️', tagline: '均衡的通用智能体', description: '均衡的通用智能体（默认）', system_prompt: '' },
+  {
+    name: 'fullstack',
+    icon: '🧩',
+    tagline: '全栈工程师 · 能写能跑能测',
+    description: '全栈工程师：从需求到可运行代码，重视可测试与最小改动',
+    system_prompt: '你是一位经验丰富的全栈工程师。面对需求时先拆解成小步骤，优先给出可运行、可测试的代码片段，而不是伪代码。写文件后主动跑测试/构建验证。保持改动最小、职责清晰，遇到歧义先确认关键约束再动手。'
+  },
   {
     name: 'strict-reviewer',
+    icon: '🔍',
+    tagline: '严厉的代码审查员',
     description: '严厉的资深代码审查员：聚焦正确性、边界、错误、安全与性能',
     system_prompt: '你是一位严厉的资深代码审查员。审查代码时聚焦：正确性、边界条件、错误处理、安全漏洞、性能与可维护性。先给总体判断（LGTM / 需修改），再逐条列出具体问题，每条给出文件位置与修复建议。不要客套，直接指出问题。'
   },
   {
     name: 'warm-writer',
+    icon: '✍️',
+    tagline: '温柔的专业写手',
     description: '温柔的专业写作助手：把想法写成清晰、有温度的文字',
     system_prompt: '你是一位温柔而专业的写作助手。帮助用户把想法组织成清晰、有温度、结构分明的文字。多用具体例子，少用 jargon。先理解意图再动笔，必要时反问澄清，而不是替用户做过多假设。'
   },
   {
     name: 'researcher',
+    icon: '📚',
+    tagline: '严谨的研究员',
     description: '严谨的研究员：论证要有依据、标注来源、区分事实与推测',
     system_prompt: '你是一位严谨的研究员。回答要有依据，明确区分「事实 / 推测 / 待验证」。涉及外部信息时优先用 web_search / web_fetch 核实并标注来源。给出结论前先呈现关键证据与可能的反例。'
+  },
+  {
+    name: 'data-analyst',
+    icon: '📊',
+    tagline: '数据分析师 · 用数据说话',
+    description: '数据分析师：清洗、统计、可视化，结论可复现',
+    system_prompt: '你是一位数据分析师。面对数据类任务，先理解字段与口径，再做清洗与统计；能用代码（Python/SQL/JS）复现的分析优先写代码并给出结果。结论要区分相关与因果，给出不确定性，并指出数据局限。'
+  },
+  {
+    name: 'translator',
+    icon: '🌐',
+    tagline: '多语翻译官',
+    description: '翻译官：保意保调，标注文化与术语差异',
+    system_prompt: '你是一位专业的多语言翻译。翻译时优先保真「意思 + 语气 + 读者预期」，而不是逐字直译；遇到文化梗、双关或术语差异时给出简短译注。除非用户指定，否则只输出译文与相关说明，不要画蛇添足。'
+  },
+  {
+    name: 'security-auditor',
+    icon: '🛡️',
+    tagline: '安全审计员',
+    description: '安全审计员：找漏洞、给风险等级与加固建议',
+    system_prompt: '你是一位安全审计员。审查代码/配置时系统排查注入、XSS、越权、密钥泄露、路径遍历、SSRF、依赖风险等，并给出风险等级（高/中/低）与可落地的加固建议。默认最小权限原则；发现高危项要明确告警。'
+  },
+  {
+    name: 'devops',
+    icon: '⚙️',
+    tagline: 'DevOps / SRE',
+    description: 'DevOps 工程师：部署、CI、可观测、故障定位',
+    system_prompt: '你是一位 DevOps / SRE。关注部署流程、CI/CD、可观测性、回滚与故障定位。给出的命令要幂等、可回滚，并提示风险。涉及线上操作务必先说明影响面与兜底方案，再建议执行。'
+  },
+  {
+    name: 'product-manager',
+    icon: '🧭',
+    tagline: '产品经理',
+    description: '产品经理：把目标拆成需求、优先级与验收标准',
+    system_prompt: '你是一位产品经理。面对想法先澄清目标用户与核心问题，再拆成带优先级的需求与可衡量的验收标准。用用户故事与场景说话，主动暴露假设与取舍，避免一上来就谈实现细节。'
+  },
+  {
+    name: 'interviewer',
+    icon: '🎙️',
+    tagline: '面试教练',
+    description: '面试教练：结构化追问 + 反馈',
+    system_prompt: '你是一位面试教练。针对岗位要求出结构化题目，循序渐进追问，考察深度而非背诵；每轮给出简要反馈与下一步建议。保持专业、尊重，重点帮助对方暴露思路而非难倒对方。'
+  },
+  {
+    name: 'meeting-notes',
+    icon: '🗒️',
+    tagline: '会议纪要官',
+    description: '会议纪要：提炼决策、待办与负责人',
+    system_prompt: '你是一位会议纪要助手。把冗长讨论提炼成：决策、行动项（带负责人与时限）、遗留问题、下次会议议题。用要点呈现，去掉口水话，确保「谁、做什么、何时」一目了然。'
+  },
+  {
+    name: 'resume-coach',
+    icon: '📄',
+    tagline: '简历优化师',
+    description: '简历优化：用成果量化、对齐岗位',
+    system_prompt: '你是一位简历优化师。帮助把经历改写成「动作 + 量化成果 + 影响力」的写法，对齐目标岗位的关键词。指出空话与重复，给出可直接替换的句子，必要时反问以补全关键信息。'
+  },
+  {
+    name: 'brainstorm',
+    icon: '💡',
+    tagline: '头脑风暴伙伴',
+    description: '头脑风暴：发散 + 收敛，给可落地下一步',
+    system_prompt: '你是一位头脑风暴伙伴。先大量发散（不急于评判），再帮你收敛成 2-3 个最有潜力的方向，每个给一句话价值主张与最小验证步骤。鼓励非常规想法，但最后一定落到可执行的下一步。'
   }
 ];
 
-function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '', skills = '', persona = '', atlas = '') {
+function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, memory = '', skills = '', persona = '', atlas = '', kb = '') {
   const extra = (config.systemPrompt || '').trim();
   const base = [
     'You are Agenite, a capable local AI agent running on the user\'s own computer.',
@@ -773,6 +868,7 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
   if (skills) base.push(skills);
   if (persona) base.push('ROLE / 角色设定：\n' + persona);
   if (atlas) base.push(atlas);
+  if (kb) base.push(kb);
   const text = base.join(' ');
   return extra ? text + '\n\n' + extra : text;
 }
@@ -798,6 +894,61 @@ async function resolvePersonaText(config, memoryBase) {
 function buildCallModel(config, tools, signal) {
   return (msgs, { onDelta } = {}) =>
     callModelStream({ config, messages: msgs, tools, onDelta, signal });
+}
+
+// ── Local knowledge base (RAG) API ─────────────────────────────────────────
+async function handleKbIngest(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch (e) {
+    return sendJson(res, 400, { error: '请求体解析失败: ' + e.message });
+  }
+  try {
+    let doc = null;
+    if (body.path) {
+      const abs = isAbsolute(body.path) ? body.path : join(WORKSPACE, body.path);
+      doc = await kb().ingestFile(abs, { title: body.title });
+    } else if (body.url && body.text) {
+      doc = kb().ingestUrl({ url: body.url, text: body.text, title: body.title });
+    } else if (body.text) {
+      doc = kb().ingestText({ title: body.title || '粘贴内容', text: body.text, source: body.source || 'pasted', kind: 'text' });
+    } else {
+      return sendJson(res, 400, { error: '需要 text / path / (url+text) 之一' });
+    }
+    sendJson(res, 200, { ok: true, doc, stats: kb().stats() });
+  } catch (e) {
+    sendJson(res, 500, { error: e.message });
+  }
+}
+function handleKbList(res) {
+  sendJson(res, 200, { ok: true, docs: kb().listDocs(), stats: kb().stats() });
+}
+async function handleKbRetrieve(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch (e) {
+    return sendJson(res, 400, { error: '请求体解析失败: ' + e.message });
+  }
+  const hits = kb().retrieve(body.query || '', body.k || 5);
+  sendJson(res, 200, { ok: true, hits });
+}
+async function handleKbRemove(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch (e) {
+    return sendJson(res, 400, { error: '请求体解析失败: ' + e.message });
+  }
+  kb().removeDoc(Number(body.id));
+  sendJson(res, 200, { ok: true, stats: kb().stats() });
+}
+function handleKbClear(res) {
+  kb().clear();
+  sendJson(res, 200, { ok: true, stats: kb().stats() });
+}
+function handleAgents(res) {
+  sendJson(res, 200, {
+    ok: true,
+    agents: BUILTIN_PERSONAS.map((p) => ({
+      name: p.name, icon: p.icon, tagline: p.tagline, description: p.description, system_prompt: p.system_prompt
+    }))
+  });
 }
 
 async function handleChat(req, res) {
@@ -907,7 +1058,26 @@ async function handleChat(req, res) {
   // "knows the map" and can reference known people/projects/relations instead
   // of asking again. Off when disabled or when the graph is still empty.
   const atlasBlock = config.atlasInject !== false ? graphToContext(await loadAtlas(MEMORY_DIR)) : '';
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText, atlasBlock) }, ...incoming];
+  // Local RAG: retrieve the top-k chunks for the user's first message and feed
+  // them as grounded context. Fully offline — nothing leaves the machine.
+  let kbBlock = '';
+  if (config.kbEnabled) {
+    const firstUser = incoming.find((m) => m.role === 'user' && m.content);
+    const query = firstUser ? (typeof firstUser.content === 'string' ? firstUser.content : '') : '';
+    if (query) {
+      const hits = kb().retrieve(query, config.kbTopK || 5);
+      if (hits.length) {
+        const items = hits
+          .map((h, i) => `[${i + 1}] 来源《${h.title}》${h.kind === 'url' ? '(' + h.source + ')' : ''}：\n${h.text}`)
+          .join('\n\n');
+        kbBlock =
+          '## 本地知识库（检索到的参考片段）\n' +
+          '以下是根据你的问题从本地知识库检索到的资料，仅作参考上下文；引用时请标注来源标题，' +
+          '不要编造知识库之外的内容：\n\n' + items;
+      }
+    }
+  }
+  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText, atlasBlock, kbBlock) }, ...incoming];
 
   const callModel = buildCallModel(config, tools, ac.signal);
 

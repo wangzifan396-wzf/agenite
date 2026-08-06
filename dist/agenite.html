@@ -1798,6 +1798,41 @@ select.text-input { appearance: auto; padding-right: 8px; }
   50% { box-shadow: 0 0 0 6px transparent; }
 }
 
+/* ── 模型选择增强 ── */
+.field-inline { display: flex; align-items: center; gap: 8px; }
+.field-inline #set-model { flex: 1; }
+.field-inline .tag { white-space: nowrap; flex: none; }
+#model-list option { color: #222; }
+
+/* ── 知识库面板 (本地 RAG) ── */
+.kb-card { max-width: 720px; }
+.kb-body { gap: 14px; }
+.kb-add { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); display: grid; gap: 8px; }
+.kb-add .text-input { width: 100%; }
+.kb-add details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.kb-add details[open] > summary { color: var(--fg); }
+.kb-list-head { display: flex; align-items: center; justify-content: space-between; }
+.kb-list { display: grid; gap: 8px; max-height: 280px; overflow: auto; }
+.kb-item { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.kb-item-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.kb-item-title { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-item-meta { color: var(--muted); font-size: 12px; }
+.kb-foot { margin-top: 4px; }
+
+/* ── 智能体画廊 ── */
+.agents-card { max-width: 860px; }
+.agents-body { display: grid; gap: 14px; padding-top: 14px; }
+.agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.agent-card {
+  text-align: left; cursor: pointer; padding: 14px; border: 1px solid var(--line);
+  border-radius: 14px; background: var(--panel); color: var(--fg);
+  display: grid; gap: 6px; transition: transform .15s var(--ease), border-color .15s, box-shadow .15s;
+}
+.agent-card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 8px 22px rgba(0,0,0,.18); }
+.agent-ico { font-size: 26px; line-height: 1; }
+.agent-name { font-weight: 700; font-size: 14.5px; }
+.agent-tag { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+
 </style>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20512%20512%22%20width%3D%22512%22%20height%3D%22512%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23c9633e%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23e59a72%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20rx%3D%22112%22%20fill%3D%22url(%23g)%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M150%20150h212v78H228v134h-78z%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%22330%22%20cy%3D%22330%22%20r%3D%2234%22%20fill%3D%22%23fff%22%20fill-opacity%3D%220.95%22%2F%3E%0A%3C%2Fsvg%3E%0A" />
 
@@ -1871,6 +1906,8 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <button id="open-eval" class="side-link">评估 Eval</button>
         <button id="open-browser" class="side-link">🌐 浏览器</button>
         <button id="open-snippets" class="side-link">💡 指令库</button>
+        <button id="open-kb" class="side-link">📚 知识库</button>
+        <button id="open-agents" class="side-link">🤖 智能体</button>
       </div>
     </aside>
 
@@ -2140,6 +2177,59 @@ select.text-input { appearance: auto; padding-right: 8px; }
     </div>
   </div>
 
+  <!-- 知识库 · 本地 RAG：把文档/网页变成可检索的上下文，对话时自动引用 -->
+  <div id="kb-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card kb-card">
+      <div class="drawer-head">
+        <h2>📚 知识库 · 本地检索</h2>
+        <button id="close-kb" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body kb-body">
+        <p class="muted small">把文档、笔记或网页导入本地 SQLite（FTS5），对话时 Agent 会自动检索最相关的片段作为参考上下文。<b>完全在本机，不上云、不调外部接口。</b></p>
+        <label class="switch-row">
+          <span><b>对话时引用知识库</b><em>开启后，每条消息都会先检索本地知识库并注入上下文</em></span>
+          <input id="kb-enabled" type="checkbox" />
+        </label>
+        <div class="kb-add">
+          <div class="field-title">粘贴文本 / 笔记</div>
+          <input id="kb-title" class="text-input" type="text" placeholder="标题（可选），如「产品需求文档」" maxlength="80" />
+          <textarea id="kb-text" class="text-input" rows="4" placeholder="粘贴要入库的正文…"></textarea>
+          <div class="btn-row">
+            <button id="kb-add-text" class="mini-btn">＋ 加入知识库</button>
+            <span id="kb-msg" class="muted small"></span>
+          </div>
+        </div>
+        <details class="kb-add">
+          <summary>＋ 从工作区文件导入</summary>
+          <p class="muted small">填写工作区相对路径或绝对路径（纯文本类：md/txt/code/json/csv/html…），Agent 会读取并分块入库。</p>
+          <div class="btn-row">
+            <input id="kb-path" class="text-input grow" type="text" placeholder="例如 docs/README.md 或 C:/path/to/note.md" spellcheck="false" />
+            <button id="kb-add-file" class="mini-btn">导入文件</button>
+          </div>
+        </details>
+        <div class="kb-list-head"><span class="field-title">已入库资料</span><span id="kb-stats" class="muted small"></span></div>
+        <div id="kb-list" class="kb-list"></div>
+        <div class="btn-row kb-foot">
+          <button id="kb-clear" class="mini-btn danger-text">清空知识库</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 智能体画廊：精选的预置角色/工作流，一键切换 -->
+  <div id="agents-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card agents-card">
+      <div class="drawer-head">
+        <h2>🤖 智能体画廊</h2>
+        <button id="close-agents" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="agents-body">
+        <p class="muted small">精选预置智能体——每个都带专属的系统提示词与说话方式。点一张即可套用；想自定义就先选好，再去「设置 → 电脑权限」里另存为角色。当前：<b id="agents-current">默认</b>。</p>
+        <div id="agents-grid" class="agents-grid"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- 快捷键速查 -->
   <div id="keys-modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
@@ -2207,7 +2297,12 @@ select.text-input { appearance: auto; padding-right: 8px; }
             <input id="set-apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
           </label>
           <label class="field">模型名称
-            <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" list="ollama-models" />
+            <span class="field-inline">
+              <input id="set-model" type="text" placeholder="deepseek-chat" spellcheck="false" list="model-list" />
+              <span id="model-ctx" class="tag"></span>
+            </span>
+            <datalist id="model-list"></datalist>
+            <p class="muted small">切换「供应商」后会自动列出该服务商的常用模型（一键选择）。也可直接填写任意模型 ID。上下文窗口用于预算估算与压缩触发。</p>
           </label>
           <div id="ollama-box" class="hidden">
             <div class="btn-row">
@@ -2761,6 +2856,10 @@ function buildArtifact(raw, idx) {
 /* config.js */
 // Configuration model + validation. Pure (no DOM, no fs).
 
+// Curated provider catalog. Each entry carries a `models` list (popular model
+// ids + their context window in tokens) so the UI can offer a one-click model
+// picker instead of asking the user to memorize model ids. `ctx` is the model's
+// context window in tokens (approximate, used for the picker badge + budget).
 const PROVIDER_PRESETS = [
   {
     id: 'openai',
@@ -2768,7 +2867,16 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://api.openai.com/v1',
     apiKeyPlaceholder: 'sk-...',
     defaultModel: 'gpt-4o-mini',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '🟢',
+    models: [
+      { id: 'gpt-4o', ctx: 128000 },
+      { id: 'gpt-4o-mini', ctx: 128000 },
+      { id: 'gpt-4.1', ctx: 1000000 },
+      { id: 'gpt-4.1-mini', ctx: 1000000 },
+      { id: 'o3-mini', ctx: 200000 },
+      { id: 'o4-mini', ctx: 200000 }
+    ]
   },
   {
     id: 'deepseek',
@@ -2776,7 +2884,12 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://api.deepseek.com/v1',
     apiKeyPlaceholder: 'sk-...',
     defaultModel: 'deepseek-chat',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '🔵',
+    models: [
+      { id: 'deepseek-chat', ctx: 64000 },
+      { id: 'deepseek-reasoner', ctx: 64000 }
+    ]
   },
   {
     id: 'moonshot',
@@ -2784,7 +2897,13 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://api.moonshot.cn/v1',
     apiKeyPlaceholder: 'sk-...',
     defaultModel: 'moonshot-v1-8k',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '🌀',
+    models: [
+      { id: 'moonshot-v1-8k', ctx: 8000 },
+      { id: 'moonshot-v1-32k', ctx: 32000 },
+      { id: 'moonshot-v1-128k', ctx: 128000 }
+    ]
   },
   {
     id: 'qwen',
@@ -2792,7 +2911,14 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiKeyPlaceholder: 'sk-...',
     defaultModel: 'qwen-plus',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '🟣',
+    models: [
+      { id: 'qwen-plus', ctx: 32768 },
+      { id: 'qwen-max', ctx: 32768 },
+      { id: 'qwen-turbo', ctx: 1000000 },
+      { id: 'qwen-long', ctx: 1000000 }
+    ]
   },
   {
     id: 'zhipu',
@@ -2800,7 +2926,14 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
     apiKeyPlaceholder: 'sk-...',
     defaultModel: 'glm-4-flash',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '🟡',
+    models: [
+      { id: 'glm-4-flash', ctx: 128000 },
+      { id: 'glm-4-air', ctx: 128000 },
+      { id: 'glm-4-plus', ctx: 128000 },
+      { id: 'glm-4-long', ctx: 1000000 }
+    ]
   },
   {
     id: 'groq',
@@ -2808,7 +2941,14 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://api.groq.com/openai/v1',
     apiKeyPlaceholder: 'gsk_...',
     defaultModel: 'llama-3.1-8b-instant',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '⚡',
+    models: [
+      { id: 'llama-3.1-8b-instant', ctx: 8000 },
+      { id: 'mixtral-8x7b-32768', ctx: 32768 },
+      { id: 'qwen-2.5-32b', ctx: 32768 },
+      { id: 'llama-3.3-70b-versatile', ctx: 128000 }
+    ]
   },
   {
     id: 'ollama',
@@ -2816,7 +2956,14 @@ const PROVIDER_PRESETS = [
     baseURL: 'http://localhost:11434/v1',
     apiKeyPlaceholder: 'ollama (可留空)',
     defaultModel: 'llama3.1',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '🦙',
+    models: [
+      { id: 'llama3.1', ctx: 128000 },
+      { id: 'qwen2.5', ctx: 32768 },
+      { id: 'deepseek-r1', ctx: 64000 },
+      { id: 'mistral', ctx: 32768 }
+    ]
   },
   {
     id: 'openrouter',
@@ -2824,7 +2971,15 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://openrouter.ai/api/v1',
     apiKeyPlaceholder: 'sk-or-...',
     defaultModel: 'openai/gpt-4o-mini',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '🔀',
+    models: [
+      { id: 'openai/gpt-4o', ctx: 128000 },
+      { id: 'anthropic/claude-3.5-sonnet', ctx: 200000 },
+      { id: 'google/gemini-2.0-pro', ctx: 1000000 },
+      { id: 'deepseek/deepseek-r1', ctx: 64000 },
+      { id: 'meta-llama/llama-3.1-70b-instruct', ctx: 131072 }
+    ]
   },
   {
     id: 'anthropic',
@@ -2832,7 +2987,45 @@ const PROVIDER_PRESETS = [
     baseURL: 'https://api.anthropic.com',
     apiKeyPlaceholder: 'sk-ant-...',
     defaultModel: 'claude-3-5-sonnet-latest',
-    protocol: 'anthropic'
+    protocol: 'anthropic',
+    icon: '🟠',
+    models: [
+      { id: 'claude-3-5-sonnet-latest', ctx: 200000 },
+      { id: 'claude-3-5-haiku-latest', ctx: 200000 },
+      { id: 'claude-3-7-sonnet-latest', ctx: 200000 },
+      { id: 'claude-3-opus-latest', ctx: 200000 }
+    ]
+  },
+  {
+    id: 'gemini',
+    label: 'Google Gemini',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    apiKeyPlaceholder: 'AIza...',
+    defaultModel: 'gemini-2.0-flash',
+    protocol: 'openai',
+    icon: '🔷',
+    models: [
+      { id: 'gemini-2.0-flash', ctx: 1000000 },
+      { id: 'gemini-2.0-pro-exp-02-05', ctx: 1000000 },
+      { id: 'gemini-1.5-pro', ctx: 1000000 },
+      { id: 'gemini-2.5-pro-preview-03-25', ctx: 1000000 }
+    ]
+  },
+  {
+    id: 'siliconflow',
+    label: 'SiliconFlow (硅基流动)',
+    baseURL: 'https://api.siliconflow.cn/v1',
+    apiKeyPlaceholder: 'sk-...',
+    defaultModel: 'deepseek-ai/DeepSeek-V3',
+    protocol: 'openai',
+    icon: '💎',
+    models: [
+      { id: 'deepseek-ai/DeepSeek-V3', ctx: 64000 },
+      { id: 'deepseek-ai/DeepSeek-R1', ctx: 64000 },
+      { id: 'Qwen/Qwen2.5-72B-Instruct', ctx: 32768 },
+      { id: 'meta-llama/Llama-3.3-70B-Instruct', ctx: 32768 },
+      { id: 'THUDM/glm-4-9b-chat', ctx: 32768 }
+    ]
   },
   {
     id: 'custom',
@@ -2840,9 +3033,29 @@ const PROVIDER_PRESETS = [
     baseURL: '',
     apiKeyPlaceholder: 'your-api-key',
     defaultModel: '',
-    protocol: 'openai'
+    protocol: 'openai',
+    icon: '⚙️',
+    models: []
   }
 ];
+
+// Models for one provider's picker (empty list => free-text entry).
+function modelsForProvider(id) {
+  const p = PROVIDER_PRESETS.find((x) => x.id === id);
+  return p && Array.isArray(p.models) ? p.models : [];
+}
+
+// Every known model id, flattened, for a global <datalist> autocomplete.
+const ALL_MODELS = PROVIDER_PRESETS.flatMap((p) =>
+  (p.models || []).map((m) => ({ ...m, provider: p.id, providerLabel: p.label }))
+);
+
+// Short human label for a model id (used in chips / usage lines).
+function modelLabel(id) {
+  if (!id) return '';
+  const hit = ALL_MODELS.find((m) => m.id === id);
+  return hit ? `${hit.providerLabel} · ${id}` : id;
+}
 
 // How the agent asks for permission before touching the machine.
 // - 'ask'  : every write / command needs a human click (default, safest useful mode)
@@ -2915,7 +3128,13 @@ function defaultConfig() {
     // On app launch, if the memory graph has content, open the Atlas panel
     // automatically so the user lands on their living memory (the "second
     // brain" landing). On by default; turn off if the auto-modal annoys you.
-    atlasAutoOpen: true
+    atlasAutoOpen: true,
+    // --- local knowledge base (RAG) ---
+    // When on, the agent retrieves the top-k chunks from your local KB and
+    // injects them as grounded context before each run. Fully local (SQLite
+    // FTS5), nothing leaves the machine.
+    kbEnabled: false,
+    kbTopK: 5
   };
 }
 
@@ -2926,8 +3145,11 @@ function normalizeConfig(input = {}) {
   const preset = PROVIDER_PRESETS.find((p) => p.id === cfg.provider);
   if (preset) {
     cfg.protocol = preset.protocol;
-    if (!cfg.baseURL && preset.baseURL) cfg.baseURL = preset.baseURL;
-    if (!cfg.model && preset.defaultModel) cfg.model = preset.defaultModel;
+    // Only adopt the preset's baseURL/model when the caller didn't supply its
+    // own — otherwise a fresh config keeps the deepseek default and switching
+    // provider (Gemini, etc.) would silently keep the wrong endpoint.
+    if ((input.baseURL == null || input.baseURL === '') && preset.baseURL) cfg.baseURL = preset.baseURL;
+    if ((input.model == null || input.model === '') && preset.defaultModel) cfg.model = preset.defaultModel;
   }
   cfg.temperature = clampNum(cfg.temperature, 0, 2, 0.7);
   cfg.maxTokens = clampNum(cfg.maxTokens, 1, 128000, 2048);
@@ -2954,6 +3176,8 @@ function normalizeConfig(input = {}) {
   cfg.atlasInject = cfg.atlasInject !== false;
   cfg.atlasAutoBuild = !!cfg.atlasAutoBuild;
   cfg.atlasAutoOpen = cfg.atlasAutoOpen !== false;
+  cfg.kbEnabled = !!cfg.kbEnabled;
+  cfg.kbTopK = Math.round(clampNum(cfg.kbTopK, 1, 20, 5));
   return cfg;
 }
 
@@ -4270,7 +4494,27 @@ function renderPlanChip() {
 function renderModelChip() {
   const ready = !!config.model && (!!config.apiKey || config.provider === 'ollama');
   $('model-chip').classList.toggle('ready', ready);
-  $('model-label').textContent = config.model ? `${config.provider} · ${config.model}` : '未配置模型';
+  const p = PROVIDER_PRESETS.find((x) => x.id === config.provider);
+  const icon = p ? (p.icon || '') : '';
+  $('model-label').textContent = config.model ? `${icon} ${config.model}` : '未配置模型';
+}
+
+// Fill the model <datalist> from the active provider's curated catalog and
+// refresh the context-window badge next to the model field.
+function refreshModelList() {
+  const dl = $('model-list');
+  if (!dl) return;
+  const models = modelsForProvider($('set-provider').value);
+  dl.innerHTML = models
+    .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)} · ${Math.round(m.ctx / 1000)}K 上下文</option>`)
+    .join('');
+  updateModelCtxBadge();
+}
+function updateModelCtxBadge() {
+  const el = $('model-ctx');
+  if (!el) return;
+  const m = modelsForProvider($('set-provider').value).find((x) => x.id === ($('set-model').value || '').trim());
+  el.textContent = m ? `上下文 ${Math.round(m.ctx / 1000)}K` : '';
 }
 
 function populateProviders() {
@@ -4279,9 +4523,10 @@ function populateProviders() {
   for (const p of PROVIDER_PRESETS) {
     const opt = document.createElement('option');
     opt.value = p.id;
-    opt.textContent = p.label;
+    opt.textContent = (p.icon ? p.icon + ' ' : '') + p.label;
     sel.appendChild(opt);
   }
+  refreshModelList();
 }
 function renderApprovalModes() {
   const box = $('approval-modes');
@@ -4427,6 +4672,7 @@ function onProviderChange() {
   if (preset.baseURL) $('set-baseURL').value = preset.baseURL;
   if (preset.defaultModel) $('set-model').value = preset.defaultModel;
   $('set-apiKey').placeholder = preset.apiKeyPlaceholder || 'your-api-key';
+  refreshModelList();
   syncOllamaUi();
 }
 
@@ -4452,6 +4698,17 @@ async function refreshOllamaModels() {
       if (!($('set-model').value || '').trim()) $('set-model').value = j.models[0];
       hint.textContent = `本地模型 · 零成本 · 已发现 ${j.models.length} 个`;
       hint.classList.add('green');
+      const dl = $('model-list');
+      if (dl) {
+        const have = new Set([...dl.options].map((o) => o.value));
+        for (const m of j.models) {
+          if (!have.has(m)) {
+            const o = document.createElement('option');
+            o.value = m; o.textContent = `${m} · 本地`;
+            dl.appendChild(o);
+          }
+        }
+      }
     } else {
       hint.textContent = '未检测到 Ollama（先运行 ollama serve 并 pull 模型）';
     }
@@ -6015,6 +6272,109 @@ function openSnippets() {
 function closeSnippets() {
   $('snippets-modal').classList.add('hidden');
 }
+
+// ── 知识库面板（本地 RAG） ────────────────────────────────────────────────
+function openKb() {
+  $('kb-modal').classList.remove('hidden');
+  $('kb-enabled').checked = config.kbEnabled === true;
+  refreshKb();
+}
+function closeKb() { $('kb-modal').classList.add('hidden'); }
+async function refreshKb() {
+  const list = $('kb-list');
+  const stats = $('kb-stats');
+  try {
+    const r = await fetch('/api/kb/list');
+    const j = await r.json();
+    if (stats) stats.textContent = j.stats ? `${j.stats.docs} 份资料 · ${j.stats.chunks} 个片段` : '';
+    if (!list) return;
+    if (!j.docs || !j.docs.length) {
+      list.innerHTML = '<div class="muted small">还没有资料。粘贴文本或从文件导入，开始构建你的本地知识库。</div>';
+      return;
+    }
+    list.innerHTML = j.docs.map((d) => `
+      <div class="kb-item" data-id="${d.id}">
+        <div class="kb-item-main">
+          <span class="kb-item-title">${escapeHtml(d.title)}</span>
+          <span class="kb-item-meta">${escapeHtml(d.kind || 'text')} · ${d.chunk_count} 片段</span>
+        </div>
+        <button class="mini-btn danger-text kb-del" data-id="${d.id}">删除</button>
+      </div>`).join('');
+    list.querySelectorAll('.kb-del').forEach((b) => { b.onclick = () => removeKb(Number(b.dataset.id)); });
+  } catch { if (list) list.innerHTML = '<div class="muted small">读取知识库失败</div>'; }
+}
+async function addKbText() {
+  const text = ($('kb-text').value || '').trim();
+  const title = ($('kb-title').value || '').trim();
+  const msg = $('kb-msg');
+  if (!text) { msg.textContent = '请先粘贴文本内容。'; return; }
+  msg.textContent = '入库中…';
+  try {
+    const r = await fetch('/api/kb/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, title }) });
+    const j = await r.json();
+    if (!r.ok) { msg.textContent = '失败：' + (j.error || r.status); return; }
+    $('kb-text').value = ''; $('kb-title').value = '';
+    msg.textContent = `✅ 已加入《${j.doc.title}》（${j.doc.chunks} 片段）`;
+    refreshKb();
+  } catch (e) { msg.textContent = '失败：' + e.message; }
+}
+async function addKbFile() {
+  const path = ($('kb-path').value || '').trim();
+  const msg = $('kb-msg');
+  if (!path) { msg.textContent = '请填写文件路径。'; return; }
+  msg.textContent = '读取中…';
+  try {
+    const r = await fetch('/api/kb/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+    const j = await r.json();
+    if (!r.ok) { msg.textContent = '失败：' + (j.error || r.status); return; }
+    $('kb-path').value = '';
+    msg.textContent = `✅ 已导入《${j.doc.title}》（${j.doc.chunks} 片段）`;
+    refreshKb();
+  } catch (e) { msg.textContent = '失败：' + e.message; }
+}
+async function removeKb(id) {
+  try { await fetch('/api/kb/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); refreshKb(); } catch { /* ignore */ }
+}
+async function clearKb() {
+  if (!confirm('确定清空整个本地知识库？此操作不可恢复。')) return;
+  try { await fetch('/api/kb/clear', { method: 'POST' }); refreshKb(); toast('已清空知识库'); } catch { /* ignore */ }
+}
+
+// ── 智能体画廊 ───────────────────────────────────────────────────────────
+let _agentsCache = null;
+function openAgents() {
+  $('agents-modal').classList.remove('hidden');
+  $('agents-current').textContent = config.persona && config.persona !== 'default' ? config.persona : '默认';
+  renderAgents();
+}
+function closeAgents() { $('agents-modal').classList.add('hidden'); }
+async function renderAgents() {
+  const grid = $('agents-grid');
+  if (!grid) return;
+  if (!_agentsCache) {
+    try { const r = await fetch('/api/agents'); const j = await r.json(); _agentsCache = j.agents || []; } catch { _agentsCache = []; }
+  }
+  if (!_agentsCache.length) { grid.innerHTML = '<div class="muted small">暂无预置智能体。</div>'; return; }
+  grid.innerHTML = _agentsCache.map((a) => `
+    <button class="agent-card" data-name="${escapeHtml(a.name)}">
+      <div class="agent-ico">${a.icon || '🤖'}</div>
+      <div class="agent-name">${escapeHtml(a.name)}</div>
+      <div class="agent-tag">${escapeHtml(a.tagline || '')}</div>
+    </button>`).join('');
+  grid.querySelectorAll('.agent-card').forEach((c) => { c.onclick = () => applyAgent(c.dataset.name); });
+}
+async function applyAgent(name) {
+  const a = (_agentsCache || []).find((x) => x.name === name);
+  if (!a) return;
+  config.persona = name;
+  config.systemPrompt = a.system_prompt || '';
+  saveConfig();
+  $('agents-current').textContent = name;
+  if ($('set-persona')) $('set-persona').value = name;
+  if ($('set-systemPrompt')) $('set-systemPrompt').value = config.systemPrompt;
+  closeAgents();
+  toast('已切换到智能体：' + name);
+}
 function renderSnippetList() {
   const list = $('snippet-list');
   if (!list) return;
@@ -6079,6 +6439,18 @@ function wire() {
   $('browser-close').onclick = closeBrowserEngine;
   $('open-snippets').onclick = openSnippets;
   $('close-snippets').onclick = closeSnippets;
+  $('open-kb').onclick = openKb;
+  $('close-kb').onclick = closeKb;
+  $('kb-add-text').onclick = addKbText;
+  $('kb-add-file').onclick = addKbFile;
+  $('kb-clear').onclick = clearKb;
+  $('kb-enabled').onchange = (e) => {
+    config.kbEnabled = e.target.checked;
+    saveConfig();
+    toast('知识库引用：' + (config.kbEnabled ? '开' : '关'));
+  };
+  $('open-agents').onclick = openAgents;
+  $('close-agents').onclick = closeAgents;
   $('snippet-add').onclick = addSnippetFromForm;
   $('atlas-add').onclick = atlasAddNode;
   $('atlas-build').onclick = atlasBuild;
@@ -6095,6 +6467,7 @@ function wire() {
   $('persona-save').onclick = saveNewPersona;
   $('test-conn').onclick = testConnection;
   $('set-provider').onchange = onProviderChange;
+  $('set-model').addEventListener('input', updateModelCtxBadge);
   $('ollama-refresh').onclick = refreshOllamaModels;
   $('set-temperature').oninput = (e) => { $('temp-val').textContent = e.target.value; };
   $('theme-toggle').onclick = toggleTheme;

@@ -10,7 +10,7 @@
 
 ## ✨ 功能
 
-- **多模型 / 多运营商**：OpenAI、DeepSeek、通义千问 (Qwen)、Kimi (Moonshot)、智谱 (GLM)、Groq、Ollama（本地）、OpenRouter，以及任意 OpenAI 兼容接口；也支持 Anthropic (Claude)。
+- **多模型 / 多运营商（v0.25.0 升级为「模型中枢」）**：内置 **12 家**供应商预设与可一键选取的模型目录——OpenAI、Anthropic (Claude)、Google Gemini、DeepSeek、硅基流动 (SiliconFlow)、通义千问 (Qwen)、Kimi (Moonshot)、智谱 (GLM)、Groq、Ollama（本地）、OpenRouter，以及任意 OpenAI 兼容接口。切换供应商会自动带出对应的 baseURL 与默认模型、上下文窗口徽标，对标 Cherry Studio 的「多模型聚合」。
 - **MCP 工具生态（v0.5.0 新增）**：内置 **MCP（Model Context Protocol）客户端**，通过 stdio 连接任意 MCP 服务器，把整个开源工具生态变成模型可调用的工具——**浏览器自动化、桌面/电脑控制、数据库、GitHub** 等等。设置里点一下即可接入：
   - 🌐 **浏览器控制** — Playwright MCP（`npx -y @playwright/mcp@latest`）
   - 🖥️ **桌面控制** — windows-computer-use-mcp（点击、键入、截屏）
@@ -86,6 +86,11 @@
   - 🎨 **代码语法高亮**：所有代码块（JS / Python / Bash / JSON …）零依赖**自写 tokenizer** 上色（关键字 / 字符串 / 数字 / 注释分别着色，先 escape 防 XSS），明暗主题自适应。
   - ✨ **精致欢迎页 + 思考动效**：空状态从空白聊天框升级为**产品 Hero**（渐变标题 + 四类能力卡片 + 起始问题 + 快捷键提示）；助手"思考中"用**波动光带动画**、头像**脉冲**提示，让"它还在不在动"一眼可见。
   - 🧩 纯前端改动（`src/core/markdown.js` 的 `buildArtifact` + `src/app.js` 的高亮助手 / Hero / 思考态 + `src/styles.css`），**零架构债**，新增 `test/markdown.test.js` 两条用例（工件渲染 + 转义安全）。
+- **真·智能体平台三件套（v0.25.0）**：补齐与 Cherry Studio / Hermes Agent 对标时最关键的「多模型中枢 + 本地知识库 + 智能体画廊」缺口，把 Agenite 从「会干活的聊天 Agent」进一步推向「可托付的本地智能体平台」：
+  - 📚 **本地知识库 RAG（零依赖）**：侧栏「📚 知识库」可粘贴文本 / 导入本地文件（md/txt/代码/json/csv/html）/ 填 URL 灌入本机向量库（Node 内置 `node:sqlite` + FTS5 `trigram` 分词，**中文子串检索可用**，数据落在 `~/.agenite/memory/kb.sqlite`，完全离线）。开启后，每轮对话自动检索 Top-K 相关片段注入系统提示词，让模型"带着你的资料回答"——对标 Cherry 的本地 RAG 与 Hermes 的本地检索。
+  - 🔀 **模型中枢**：模型设置升级为「供应商选择 + 模型目录（datalist 一键选取）+ 上下文窗口徽标」，切换供应商即自动带出 baseURL / 默认模型 / 窗口大小，修复了原先"已填 key 时切供应商不更新 endpoint"的隐含 bug。**零锁定多模型**，呼应 Hermes 的 `hermes model` 一键切换。
+  - 🤖 **智能体画廊**：侧栏「🤖 智能体」打开 14 个预置角色卡（全栈开发 / 严厉审查 / 温柔写作 / 研究员 / 数据分析 / 翻译 / 安全审计 / 运维 / 产品经理 / 面试官 / 会议纪要 / 简历教练 / 头脑风暴 …），一键应用即把对应中文 system_prompt 注入——对标 Cherry 的 1000+ 预置助手与 Hermes 的 agentskills 角色，开箱即用。
+  - 🧩 新增 `src/core/knowledge.js`（纯 RAG 引擎 + 单测 `test/knowledge.test.js` 6 例）、`src/core/config.js` 新增 `modelsForProvider` / `ALL_MODELS` / `modelLabel` 与 Gemini / SiliconFlow 预设、`server.js` 新增 `/api/kb/*` 与 `/api/agents` 端点、`src/app.js` 新增 KB / 智能体面板，**零架构债**。
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
 - **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：
@@ -126,7 +131,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（299 个，node:test）
+npm test       # 跑核心逻辑单元测试（311 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口
