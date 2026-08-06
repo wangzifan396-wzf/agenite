@@ -895,7 +895,42 @@ function upsertToolCard(el, t) {
       pw.innerHTML = '<b>计划</b><pre class="t-res">' + escapeHtml(text) + '</pre>';
     }
   }
+  updateToolLedger(holder);
   return card;
+}
+
+// Compact, color-coded "progress ledger" so a multi-step run is scannable at a
+// glance — research ranks a live, color-coded transcript as the #1 trust lever
+// for agentic products. It only reads the cards already in the DOM, so it can
+// never interfere with tool execution or streaming.
+function updateToolLedger(holder) {
+  const cards = holder.querySelectorAll('.tool-card');
+  const total = cards.length;
+  let led = holder.querySelector('.tool-ledger');
+  if (!total) { if (led) led.remove(); return; }
+  let running = 0, ok = 0, err = 0;
+  cards.forEach((c) => {
+    const s = c.querySelector('.tstatus');
+    if (!s) return;
+    if (s.classList.contains('run')) running++;
+    else if (s.classList.contains('ok')) ok++;
+    else if (s.classList.contains('err')) err++;
+  });
+  if (!led) {
+    led = document.createElement('div');
+    led.className = 'tool-ledger';
+    led.innerHTML = '<span class="led-sum"></span><span class="led-bar"><i></i></span>';
+    holder.prepend(led);
+  }
+  const pct = Math.round(((ok + err) / total) * 100);
+  led.querySelector('.led-sum').innerHTML =
+    '工具调用 <b>' + total + '</b>' +
+    (running ? ' · <span class="led-run">执行中 ' + running + '</span>' : '') +
+    (ok ? ' · <span class="led-ok">完成 ' + ok + '</span>' : '') +
+    (err ? ' · <span class="led-err">失败 ' + err + '</span>' : '');
+  const fill = led.querySelector('.led-bar i');
+  fill.style.width = pct + '%';
+  fill.className = err ? 'led-err-fill' : 'led-ok-fill';
 }
 
 function scrollBottom() {

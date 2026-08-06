@@ -1263,6 +1263,16 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .mcp-transport { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 6px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
 .tool-chip.ro { border-style: dashed; opacity: .85; }
 
+/* ── v0.30: progress ledger — scannable multi-step run status ── */
+.tool-ledger { display: flex; align-items: center; gap: 10px; margin: 0 0 4px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--accent) 5%, var(--panel)); font-size: 12px; color: var(--muted); }
+.tool-ledger b { color: var(--text); }
+.led-run { color: var(--warn); font-weight: 600; }
+.led-ok { color: var(--ok); font-weight: 600; }
+.led-err { color: var(--danger); font-weight: 600; }
+.led-bar { flex: 1; min-width: 64px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--border) 70%, transparent); overflow: hidden; }
+.led-bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .25s ease; }
+.led-bar i.led-err-fill { background: var(--danger); }
+
 /* ==========================================================================
    Token usage, cost and context pressure
    A long agent run silently eats context and money. These surfaces make both
