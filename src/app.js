@@ -796,6 +796,11 @@ async function runTurn(conv, opts = {}) {
         conv.messages.push({ role: 'tool', tool_call_id: data.id, name: data.name, content: data.ok ? data.result : 'Error: ' + data.result });
         aMsg.toolCalls.push(data);
         upsertToolCard(el, data);
+        // Flash the overlay marker the agent just acted on so the user can see
+        // exactly which element was clicked/typed into on the live page.
+        if (data.ref && !$('browser-modal').classList.contains('hidden')) {
+          flashOverlayMark(data.ref);
+        }
         if (aMsg.content === '') md.innerHTML = THINKING;
       } else if (event === 'subagent') {
         handleSubAgentEvent(el, data);
@@ -2829,6 +2834,21 @@ function insertRefIntoInput(ref) {
   inp.value = insertSnippetInto(inp.value, ref);
   inp.focus();
   if (inp.dispatchEvent) inp.dispatchEvent(new Event('input'));
+}
+
+// Briefly pulse the overlay marker for the element the agent just acted on.
+// The ref is only meaningful against the current snapshot's markers, so if the
+// ref no longer exists (DOM changed since) we simply no-op.
+function flashOverlayMark(ref) {
+  const ov = document.getElementById('browser-overlay');
+  if (!ov) return;
+  const mark = ov.querySelector(`.ref-marker[data-ref="${ref}"]`);
+  if (!mark) return;
+  mark.classList.remove('flash');
+  // force reflow so the animation restarts on repeated hits
+  void mark.offsetWidth;
+  mark.classList.add('flash');
+  setTimeout(() => mark.classList.remove('flash'), 1200);
 }
 
 async function closeBrowserEngine() {

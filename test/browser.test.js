@@ -4,6 +4,8 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import os from 'node:os';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -14,17 +16,22 @@ const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // A stand-in controller so we can verify dispatch/return-shape without a
-// running browser. Mirrors BROWSER's method surface.
+// running browser. Mirrors BROWSER's method surface. Records calls so we can
+// assert session save/restore routed to the right method.
 function fakeBrowser() {
+  const calls = [];
   return {
+    __calls: calls,
     navigate: async (a) => ({ ok: true, content: '打开 ' + a.url }),
     snapshot: async () => ({ ok: true, content: '页面文本', url: 'https://x.test/', title: 'X', elements: [{ ref: 'e1', tag: 'a', name: 'go' }] }),
     screenshot: async () => ({ ok: true, content: '已截图', screenshot: 'data:image/png;base64,AAAA' }),
-    click: async (a) => ({ ok: true, content: '点击 ' + (a.selector || a.ref) }),
-    type: async (a) => ({ ok: true, content: '输入 ' + a.text }),
+    click: async (a) => ({ ok: true, content: '点击 ' + (a.selector || a.ref), ref: a.ref || undefined }),
+    type: async (a) => ({ ok: true, content: '输入 ' + a.text, ref: a.ref || undefined }),
     back: async () => ({ ok: true, content: '后退' }),
     scroll: async (a) => ({ ok: true, content: '滚动 ' + (a.direction || 'down') }),
     log: async () => ({ ok: true, content: 'log', actions: [] }),
+    saveSession: async (a) => { calls.push({ op: 'save', a }); return { ok: true, content: 'saved ' + (a.name || 'default') + ' dir=' + a.dir }; },
+    restoreSession: async (a) => { calls.push({ op: 'restore', a }); return { ok: true, content: 'restored ' + (a.name || 'default') + ' dir=' + a.dir }; },
     close: async () => ({ ok: true, content: '关闭' }),
     status: async () => ({ ok: true, available: true, open: true, url: 'u', title: 't' })
   };
@@ -61,6 +68,33 @@ describe('browser tools — routing & contract (injected fake)', () => {
     assert.equal(r.ok, true);
   });
 
+  test('browser_save_session / browser_restore_session route and infer dir from workspace', async () => {
+    const r = await executeTool('browser_save_session', { name: 'gh' }, { browser: fake, workspace: '/tmp/ws' });
+    assert.equal(r.ok, true);
+    const save = fake.__calls.find((c) => c.op === 'save' && c.a.name === 'gh');
+    assert.ok(save, 'saveSession should have been called');
+    assert.ok(save.a.dir.replace(/\\/g, '/').includes('/tmp/ws/.agenite/browser-sessions'), 'dir=' + save.a.dir);
+    const r2 = await executeTool('browser_restore_session', { name: 'gh' }, { browser: fake, workspace: '/tmp/ws' });
+    assert.equal(r2.ok, true);
+    assert.ok(fake.__calls.some((c) => c.op === 'restore'));
+  });
+
+  test('browser_save_session passes an explicit dir through', async () => {
+    const r = await executeTool('browser_save_session', { name: 'x', dir: '/custom/dir' }, { browser: fake });
+    assert.equal(r.ok, true);
+    const save = fake.__calls.find((c) => c.op === 'save' && c.a.name === 'x');
+    assert.ok(save.a.dir.replace(/\\/g, '/').endsWith('/custom/dir'), 'dir=' + save.a.dir);
+  });
+
+  test('click/type echo back the snapshot ref for UI flashing', async () => {
+    const c = await executeTool('browser_click', { ref: 'e3' }, { browser: fake, dangerTools: true });
+    assert.equal(c.ok, true);
+    assert.equal(c.ref, 'e3');
+    const t = await executeTool('browser_type', { ref: 'e3', text: 'hi' }, { browser: fake, dangerTools: true });
+    assert.equal(t.ok, true);
+    assert.equal(t.ref, 'e3');
+  });
+
   test('falls back to the shared BROWSER singleton when opts.browser absent', async () => {
     // BROWSER has all methods; should not be treated as "unavailable".
     const r = await BROWSER.status();
@@ -82,6 +116,53 @@ describe('browser tools — routing & contract (injected fake)', () => {
   test('read-only browser_log is available without dangerTools', async () => {
     const names = activeTools({}).map((t) => t.name);
     assert.ok(names.includes('browser_log'));
+  });
+});
+
+// Session persistence exercises the real BROWSER methods (file I/O + cookie /
+// localStorage extraction) without launching Chrome: we stub a minimal
+// browser+page on the singleton so _ensure() short-circuits.
+describe('browser — session persistence (injected fake page, no Chrome)', () => {
+  const dir = path.join(os.tmpdir(), 'agenite-test-sessions-' + Date.now());
+  const savedFile = path.join(dir, 'demo.json');
+  before(() => {
+    BROWSER._browser = { on() {} };
+    BROWSER._page = {
+      isClosed: () => false,
+      url: () => 'https://x.test/page',
+      cookies: async () => ([{ name: 'sid', value: 'abc', domain: 'x.test', path: '/' }]),
+      evaluate: async () => ({ token: 't-123', theme: 'dark' }),
+      setCookie: async () => {}
+    };
+  });
+  after(() => {
+    BROWSER._browser = null;
+    BROWSER._page = null;
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test('saveSession writes cookies + localStorage to a JSON file', async () => {
+    const r = await BROWSER.saveSession({ name: 'demo', dir });
+    assert.equal(r.ok, true);
+    assert.ok(fs.existsSync(savedFile), 'session file not written');
+    const data = JSON.parse(fs.readFileSync(savedFile, 'utf8'));
+    assert.equal(data.name, 'demo');
+    assert.equal(data.url, 'https://x.test/page');
+    assert.ok(Array.isArray(data.cookies) && data.cookies.length === 1);
+    assert.equal(data.storage.token, 't-123');
+  });
+
+  test('restoreSession reads the file and applies cookies + storage', async () => {
+    const r = await BROWSER.restoreSession({ name: 'demo', dir });
+    assert.equal(r.ok, true);
+    assert.ok(r.content.includes('demo'));
+    assert.ok(r.content.includes('Cookie 1'));
+  });
+
+  test('restoreSession fails clearly when the file is missing', async () => {
+    const r = await BROWSER.restoreSession({ name: 'nope', dir });
+    assert.equal(r.ok, false);
+    assert.ok(/找不到会话/.test(r.error));
   });
 });
 
@@ -108,7 +189,7 @@ try {
   puppeteerResolvable = true;
 } catch { /* not installed — skip the real run */ }
 
-describe('browser — real Chrome smoke', { skip: !puppeteerResolvable }, () => {
+describe('browser — real Chrome smoke', { skip: !puppeteerResolvable || process.env.AGENITE_SKIP_CHROME === '1' }, () => {
   let server;
   let url;
   before(async () => {
@@ -159,6 +240,20 @@ describe('browser — real Chrome smoke', { skip: !puppeteerResolvable }, () => 
     const r = await BROWSER.click({ ref: 'e999' });
     assert.equal(r.ok, false);
     assert.ok(/找不到元素引用/.test(r.error));
+    await BROWSER.close();
+  });
+
+  test('highlight flashes an element in-page and click returns its ref', async () => {
+    const nav = await BROWSER.navigate({ url });
+    assert.equal(nav.ok, true);
+    const snap = await BROWSER.snapshot();
+    assert.equal(snap.ok, true);
+    const ref = snap.elements[0].ref;
+    // _highlight must run on a real page without throwing.
+    await BROWSER._highlight('[data-agenite-ref="' + ref + '"]');
+    const clicked = await BROWSER.click({ ref });
+    assert.equal(clicked.ok, true);
+    assert.equal(clicked.ref, ref);
     await BROWSER.close();
   });
 

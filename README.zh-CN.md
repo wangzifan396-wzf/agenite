@@ -68,14 +68,19 @@
   - 👁️ **实时预览面板**：侧栏「🌐 浏览器」直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），让"它在看什么"一目了然。
   - 🧩 新增 `src/core/browser.js`（懒加载 `puppeteer-core`、自动探测本机 Chrome、找不到时优雅降级），`src/core/tools.js` 注册 7 个工具并经 `toolContext.browser` 注入；服务端新增 `GET /api/browser`（实时状态 + 截图）、`POST /api/browser/close`，**零架构债**。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。
 - **浏览器 Agent 升级：确定性元素引用 + 操作审计轨迹（v0.21.0）**：把浏览器自动化从"靠截图/坐标的脆弱视觉操作"升级为**确定性交互**——`browser_snapshot` 现在会给页面上每个可见可交互元素注入临时 `@eN` 引用并列出清单，模型用 `ref`（如 `e3`）调用 `browser_click` / `browser_type`，不再依赖易碎的 CSS 选择器或像素坐标（借鉴 2026 年 Vercel Agent Browser / 阿里 Page-Agent 的 accessibility-tree 思路，**纯本地即可**）。同时每次导航/点击/输入/后退/滚动都被记录为**可审计的操作轨迹**（含时间戳与目标），可在「🌐 浏览器」面板的「操作审计轨迹」里实时回看，亦可调用 `browser_log` 取回——回应了"agentic browsing 需要可审计痕迹"的监管趋势，数据依旧不出本机。内置浏览器工具由 7 个增至 **8 个**（新增 `browser_log`）。
-- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **34 个工具**（再加上你接入的 MCP 工具）：
+- **工具调用 Agent 循环**：模型可以自己决定调用工具，服务端执行后把结果喂回模型，直到给出最终答案（SSE 流式）。内置 **36 个工具**（再加上你接入的 MCP 工具）：
   - *安全（默认开启）*：`calculator`、`current_datetime`、`system_info`、`web_fetch`、`web_search`、`read_file`（支持按行范围）、`list_dir`、`find_files`、`grep_files`（搜文件内容）、`codebase_search`（语义检索整个项目）、`memory_recall`、`memory_save`、`memory_log`、`atlas`（记忆图谱）、`plan`、`delegate`、`fanout`、`save_skill`、`skill_recall`
   - *高危（需手动开启 + 审批）*：`write_file`、`edit_file`、`make_dir`、`run_command`、`open_path`、`run_code`（本地代码解释器）、`apply_patch`（一次性打多文件补丁）
-  - *浏览器（内置，无 MCP）*：`browser_navigate`、`browser_snapshot`（列出可交互元素的 `@eN` 引用，并带视口坐标供前端叠加可视化标记）、`browser_screenshot`、`browser_back`、`browser_scroll`（观察类，默认可用）、`browser_click`、`browser_type`（操作类，优先吃 `ref` 引用，需开启电脑操作权限 + 审批）、`browser_log`（只读操作审计轨迹）—— 由本机 Chrome 无头驱动，实时画面、可点击的元素标记与审计轨迹可在「🌐 浏览器」面板查看。
+  - *浏览器（内置，无 MCP）*：`browser_navigate`、`browser_snapshot`（列出可交互元素的 `@eN` 引用，并带视口坐标供前端叠加可视化标记）、`browser_screenshot`、`browser_back`、`browser_scroll`（观察类，默认可用）、`browser_click`、`browser_type`（操作类，优先吃 `ref` 引用，需开启电脑操作权限 + 审批）、`browser_log`（只读操作审计轨迹）、`browser_save_session` / `browser_restore_session`（保存/恢复 cookies + localStorage，登录态持久化）—— 由本机 Chrome 无头驱动，实时画面、可点击的元素标记与审计轨迹可在「🌐 浏览器」面板查看。
 - **浏览器 Agent 再升级：可视化覆盖层 + 指令库（v0.22.0）**：把"看不见的自动化"变成"看得见的自动化"。
   - 🎯 **可视化元素覆盖层**：实时预览不再只是一张截图——`browser_snapshot` 现在会带上每个可交互元素的视口坐标（`rect`），前端在截图上方**叠加带编号的 `@eN` 标记**，精确落在页面真实的按钮 / 链接 / 输入框上。悬停看元素信息，**点一下标记就把 `@eN` 直接填进对话输入框**，让你可以精确告诉 Agent"点这个"，无需复制粘贴。
   - 💡 **指令库（Snippets）**：侧栏新增「💡 指令库」——把常用的提示词 / 工作流存成命名片段，一键插入对话输入框。仅存在本机 `localStorage`，零云、零依赖，呼应 2026 年 "skills 作为分发渠道" 的本地优先思路。
   - 🧩 `src/core/browser.js` 固定视口（1280×800）以便截图像素与标记坐标一一对应；`status()` 仅在引用仍有效时回传 `elements` + `viewport`（导航/点击/后退后引用失效会自动隐藏覆盖层，避免错位）；前端 `positionOverlay` 按渲染尺寸缩放标记。新增 `src/core/snippets.js`（纯函数核心，含单测）与「🌐 浏览器 / 指令库」面板接线。
+- **浏览器 Agent 再打磨：点击高亮 + 会话持久化 + 工具自愈（v0.23.0）**：回应 2026 年 agentic browsing 三大痛点。
+  - 🔦 **操作高亮 + 实时预览脉冲**：`browser_click` / `browser_type` 执行前会先把目标元素 `scrollIntoView` 并注入一圈描边脉冲（本机 Chrome 里肉眼可见"Agent 正在碰这个元素"）；对话流里一旦落了 `browser_click/@e3` 这类结果，前端「🌐 浏览器」面板里对应的 `@e3` 标记会**立刻闪一下**，让"它点了哪"同步可见。
+  - 💾 **登录态持久化（会话保存/恢复）**：新增 `browser_save_session(name)` / `browser_restore_session(name)`，把当前页面的 cookies + localStorage 存到工作区 `.agenite/browser-sessions/<name>.json`，下次自动恢复——解决"每次重开浏览器都要重新登录"这一 2026 年公认最难运维的 agentic browsing 缺口。
+  - 🛡️ **结构化错误分类 + 瞬时自愈重试**：`executeTool` 现在给每个工具错误打上 `errorClass`（`SCHEMA_ERROR` / `PERMISSION_DENIED` / `NOT_FOUND` / `RATE_LIMIT` / `TRANSIENT` / `PERMANENT` / `UNKNOWN`），对 `web_fetch` / `web_search` / `browser_navigate` 等可重试工具做**指数退避 + 抖动的有界重试**（默认 3 次，对模型透明）；失败回灌模型时前缀 `Error [CLASS]:`，让模型据此自愈（约 85% 的瞬时失败可自动恢复，呼应 2026 年 tool-call self-correction 最佳实践）。
+  - 🧩 新增 `test/reliability.test.js`（错误分类/重试单测）与 `test/browser.test.js` 扩展（高亮 + 会话路由），全部零 Chrome 依赖可在 CI 跑通。
 - **计划模式（Plan Mode）**：点顶部 **Plan** 芯片开启 —— 模型先只输出分步方案（用 `plan` 工具记录成可检视的清单）、不碰任何东西，你点 **✓ 批准并执行** 后它才真正动手，适合高风险 / 多步骤任务。
 - **改动预览 + 一键撤销**：`write_file` / `edit_file` / `apply_patch` 每个写入类工具都会在卡片里展示实时 **diff**，并带一个 **↩ 撤销此改动** 按钮（服务端持有快照，点一下恢复原内容）。
 - **本地电脑控制** —— **工作区沙箱**把一切文件操作锁定在一个根目录下，**3 种审批模式**决定何时需要人工确认：
@@ -116,7 +121,7 @@ node server.js
 ### 其他命令
 
 ```bash
-npm test       # 跑核心逻辑单元测试（290 个，node:test）
+npm test       # 跑核心逻辑单元测试（297 个，node:test）
 npm run build  # 生成单文件 dist/agenite.html
 npm start      # 等价于 node server.js
 PORT=8080 node server.js   # 自定义端口

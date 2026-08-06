@@ -461,7 +461,7 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 #### 8.9.13.2 服务端 + 前端
 
 - 服务端：注入 `toolContext.browser = BROWSER`；新增 `GET /api/browser`（实时状态 + 截图 data URL + 最近操作）、`POST /api/browser/close`。**零架构债**。
-- 前端：侧栏「🌐 浏览器」面板直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），开面板后每 4s 轮询刷新；v0.21.0 起面板底部新增「操作审计轨迹」折叠区，渲染 `GET /api/browser` 返回的 `actions`；**v0.22.0 起** `snapshot` 额外返回每个可交互元素的视口坐标 `rect`，并固定视口 1280×800，前端 `positionOverlay` 在截图上方叠加带编号的 `@eN` 标记（按渲染尺寸缩放），悬停看元素信息、点击标记把 `@eN` 填入对话输入框（`insertRefIntoInput`）——把"看不见的自动化"变成"看得见的自动化"。`status()` 仅在引用仍有效（`_elementsValid`）时返回 `elements` + `viewport`，导航/点击/后退后引用失效会自动隐藏覆盖层，避免错位。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。
+- 前端：侧栏「🌐 浏览器」面板直接展示 Agent 当前正在看的页面截图（与对话里的 `browser_*` 工具共享同一个浏览器），开面板后每 4s 轮询刷新；v0.21.0 起面板底部新增「操作审计轨迹」折叠区，渲染 `GET /api/browser` 返回的 `actions`；**v0.22.0 起** `snapshot` 额外返回每个可交互元素的视口坐标 `rect`，并固定视口 1280×800，前端 `positionOverlay` 在截图上方叠加带编号的 `@eN` 标记（按渲染尺寸缩放），悬停看元素信息、点击标记把 `@eN` 填入对话输入框（`insertRefIntoInput`）——把"看不见的自动化"变成"看得见的自动化"。`status()` 仅在引用仍有效（`_elementsValid`）时返回 `elements` + `viewport`，导航/点击/后退后引用失效会自动隐藏覆盖层，避免错位。启用只需 `npm i puppeteer-core`（Chrome 请自备，或用设置里的 MCP Playwright 替代）。**v0.23.0 起**：`browser_click` / `browser_type` 执行前先 `scrollIntoView` + 注入描边脉冲（`_highlight`），对话流里落到 `browser_click/@e3` 这类结果时前端 `flashOverlayMark` 会立刻让对应 `@eN` 标记闪烁（CSS `mark-flash` 动画），让"它点了哪"同步可见；新增 `browser_save_session` / `browser_restore_session` 保存 / 恢复 cookies + localStorage（`_saveSession` / `_restoreSession`，落盘 `workspace/.agenite/browser-sessions/<name>.json`），解决登录态持久化这一 2026 年公认最难运维缺口。
 
 ### 8.9.14 指令库 Snippets（v0.22.0）
 
@@ -471,6 +471,6 @@ MCP 服务器是**在你电脑上真实运行的子进程**，桌面控制类服
 ## 9. 设计原则
 
 - **零依赖**：仅用 Node 内置模块（`http` / `fs` / `crypto` / `child_process` / `fetch`）——包括 MCP 客户端也是手写的 stdio / HTTP JSON-RPC，没引任何 SDK。
-- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util` / `snippets`）无 DOM，**290 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库各有独立测试文件）。
+- **可测试**：核心逻辑（`config` / `markdown` / `provider` / `client` / `tools` / `browser` / `atlas` / `trace` / `eval` / `mcp` / `agent` / `context` / `pricing` / `sessions` / `memory` / `subagent` / `autoskill` / `goals` / `util` / `snippets` / `reliability`）无 DOM，**297 个单元测试**覆盖（MCP 部分用 `test/mcp-mock-server.mjs` 真实 spawn 验证；远程 MCP / 压缩 / 定价 / 会话 / 记忆 / 搜索 / 子代理 / 并行委派 / 语义代码检索 / 技能自动沉淀 / 代码解释器 / 角色人格 / 自治目标 / 目标护栏与自愈重试 / 记忆图谱 / 图谱注入 / 双向同步 / 会话召回 / 执行轨迹 / 运行自检 / 评估 / 浏览器 / 指令库 / 可靠性各有独立测试文件）。
 - **本地优先**：无账号、无遥测、无外部网络请求（除你配置的模型 API 与 `web_search` 的检索）。
 - **安全**：Markdown 全转义；危险工具默认关闭；`calculator` 不使用 `eval`；MCP 进程树随服务退出而回收，目录逃逸在会话名层就被挡下；记忆与项目文件物理隔离。

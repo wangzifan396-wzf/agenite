@@ -150,15 +150,23 @@ export async function runAgent({
         args: tc.args,
         result: res.ok ? res.content : res.error,
         ok: res.ok,
+        errorClass: res.errorClass || null,
+        ref: res.ref || null,
         diff: res.diff,
         undoToken: res.undoToken,
         ms: Date.now() - started
       });
+      // Prefix failures with a structured error class so the model can
+      // self-correct: SCHEMA_ERROR → fix args, PERMISSION_DENIED → ask the
+      // user, TRANSIENT → it already retried. Plain "Error: ..." hides this.
+      const toolContent = res.ok
+        ? res.content
+        : `Error [${res.errorClass || 'UNKNOWN'}]: ${res.error}`;
       messages.push({
         role: 'tool',
         tool_call_id: tc.id,
         name: tc.name,
-        content: res.ok ? res.content : `Error: ${res.error}`
+        content: toolContent
       });
     }
   }

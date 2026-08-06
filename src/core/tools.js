@@ -54,7 +54,8 @@ export const TOOL_DEFS = [
       },
       required: ['url']
     },
-    danger: false
+    danger: false,
+    retryable: true
   },
   {
     name: 'web_search',
@@ -67,7 +68,8 @@ export const TOOL_DEFS = [
       },
       required: ['query']
     },
-    danger: false
+    danger: false,
+    retryable: true
   },
   {
     name: 'read_file',
@@ -371,7 +373,8 @@ export const TOOL_DEFS = [
       properties: { url: { type: 'string', description: '要打开的 http(s) 网址，例如 "https://news.ycombinator.com"。' } },
       required: ['url']
     },
-    danger: false
+    danger: false,
+    retryable: true
   },
   {
     name: 'browser_snapshot',
@@ -436,6 +439,32 @@ export const TOOL_DEFS = [
     description: '返回浏览器操作的审计轨迹（最近的导航/点击/输入/后退/滚动，含时间戳与目标），用于复盘 Agent 在网页上做过什么。只读，无需审批。',
     parameters: { type: 'object', properties: {} },
     danger: false
+  },
+  {
+    name: 'browser_save_session',
+    description: '保存当前浏览器的登录态（Cookie + localStorage）到本地会话文件，用于跨 Agent 运行持久化登录，避免每次重复登录。可选 name 区分多个会话；dir 默认放在工作区 .agenite/browser-sessions。保存后可用 browser_restore_session 恢复。数据不出本机。',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '会话名（默认 "default"），用于区分不同站点/账号。' },
+        dir: { type: 'string', description: '可选：会话文件目录，默认工作区 .agenite/browser-sessions。' }
+      },
+      required: []
+    },
+    danger: false
+  },
+  {
+    name: 'browser_restore_session',
+    description: '从本地会话文件恢复之前保存的登录态（Cookie + localStorage）。恢复后请调用 browser_navigate 重新打开目标网站使登录态生效。name 对应保存时的会话名。数据不出本机。',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '会话名（默认 "default"）。' },
+        dir: { type: 'string', description: '可选：会话文件目录。' }
+      },
+      required: []
+    },
+    danger: false
   }
 ];
 
@@ -493,22 +522,79 @@ async function ensureApproval(def, args, opts) {
   return { ok: false, error: (verdict && verdict.reason) || '用户拒绝了这次操作。' };
 }
 
+// ---- structured error taxonomy + bounded retry ----
+//
+// 2026 agent-reliability research is unanimous: the difference between a
+// production-grade agent and a demo is how tool failures are handled. We attach
+// an `errorClass` to every failure so the model loop can (a) self-correct on
+// SCHEMA_ERROR / PERMISSION_DENIED, and (b) stay silent on transient blips
+// that we retry internally with exponential backoff + jitter. The agent never
+// sees the retries — it only ever gets the final, classified result.
+
+const TRANSIENT_RE = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|fetch failed|network (error|timeout)|timed out|HTTP 429|HTTP 5\d\d|too many requests|rate limit|service unavailable|bad gateway|gateway timeout/i;
+
+function classifyError(name, error) {
+  const msg = String(error || '');
+  if (/未知工具|未实现的工具/.test(msg)) return 'NOT_FOUND';
+  if (/只读模式|拒绝执行|用户拒绝了|越界|不在工作区|需要.*权限|电脑操作权限/.test(msg)) return 'PERMISSION_DENIED';
+  if (/HTTP 429|too many requests|rate limit/i.test(msg)) return 'RATE_LIMIT';
+  if (/空表达式|缺少|不能为空|非法|无效|未找到|找不到|不匹配|无法解析|参数/.test(msg)) return 'SCHEMA_ERROR';
+  if (TRANSIENT_RE.test(msg)) return 'TRANSIENT';
+  return 'PERMANENT';
+}
+
+function isTransient(ec) { return ec === 'TRANSIENT' || ec === 'RATE_LIMIT'; }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function backoffMs(attempt) {
+  const base = 400;
+  const jitter = Math.random() * 200;
+  return Math.min(8000, base * Math.pow(2, attempt)) + jitter;
+}
+
 export async function executeTool(name, args = {}, opts = {}) {
   const def = TOOL_DEFS.find((t) => t.name === name);
-  if (!def) return { ok: false, error: `未知工具: ${name}` };
+  if (!def) return { ok: false, error: `未知工具: ${name}`, errorClass: 'NOT_FOUND' };
   if (def.danger && !opts.dangerTools) {
-    return { ok: false, error: `工具 ${name} 需要在设置中开启「电脑操作权限」。` };
+    return { ok: false, error: `工具 ${name} 需要在设置中开启「电脑操作权限」。`, errorClass: 'PERMISSION_DENIED' };
   }
   const denied = await ensureApproval(def, args, opts);
-  if (denied) return denied;
+  if (denied) return { ...denied, errorClass: 'PERMISSION_DENIED' };
 
-  try {
-    // NOTE: `await` matters here — without it a rejected promise would escape
-    // this try/catch and blow up the agent loop instead of becoming an error.
-    return await dispatch(name, args, opts);
-  } catch (e) {
-    return { ok: false, error: String(e && e.message ? e.message : e) };
+  // Only retry tools explicitly marked retryable (network / navigation). The
+  // default is a single attempt — side-effecting tools must never be retried
+  // blindly (that's how you double-send a refund).
+  const maxAttempts = def.retryable ? (opts.retryCount != null ? opts.retryCount : 3) : 1;
+  let lastErr = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await dispatch(name, args, opts);
+      if (res.ok) return res;
+      const ec = classifyError(name, res.error);
+      if (attempt < maxAttempts - 1 && isTransient(ec)) {
+        lastErr = res.error;
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      return { ...res, errorClass: ec, retryable: isTransient(ec) };
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      const ec = classifyError(name, msg);
+      if (attempt < maxAttempts - 1 && isTransient(ec)) {
+        lastErr = msg;
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      return { ok: false, error: msg, errorClass: ec, retryable: isTransient(ec) };
+    }
   }
+  return {
+    ok: false,
+    error: lastErr || '执行失败（瞬时错误重试后仍失败）',
+    errorClass: 'TRANSIENT',
+    retryable: true
+  };
 }
 
 async function dispatch(name, args, opts) {
@@ -580,6 +666,22 @@ async function dispatch(name, args, opts) {
       case 'browser_scroll':
       case 'browser_log':
         return browserTool(name, args, opts);
+      case 'browser_save_session':
+      case 'browser_restore_session': {
+        const ctrl = (opts && opts.browser) || BROWSER;
+        const method = name === 'browser_save_session' ? 'saveSession' : 'restoreSession';
+        if (typeof ctrl[method] !== 'function') {
+          return { ok: false, error: '浏览器工具不可用（需要本机 Chrome 与 puppeteer-core；可在设置用 MCP 接入 Playwright 替代）。' };
+        }
+        const sessionDir = opts.workspace
+          ? join(opts.workspace, '.agenite', 'browser-sessions')
+          : join(os.tmpdir(), 'agenite-browser-sessions');
+        try {
+          return await ctrl[method]({ ...(args || {}), dir: (args && args.dir) || sessionDir });
+        } catch (e) {
+          return { ok: false, error: '浏览器操作失败: ' + (e && e.message ? e.message : e) };
+        }
+      }
     default:
       return { ok: false, error: `未实现的工具: ${name}` };
   }

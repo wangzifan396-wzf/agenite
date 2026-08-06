@@ -1656,6 +1656,15 @@ select.text-input { appearance: auto; padding-right: 8px; }
   box-shadow: 0 1px 3px rgba(0,0,0,.18);
 }
 .ref-marker:hover { background: var(--accent); color: #fff; z-index: 2; }
+.ref-marker.flash {
+  animation: mark-flash 1.2s ease-out;
+  z-index: 3;
+}
+@keyframes mark-flash {
+  0% { background: var(--accent); color: #fff; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); transform: scale(1.12); }
+  70% { background: var(--accent); color: #fff; }
+  100% { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.18); transform: none; }
+}
 
 @media (max-width: 760px) {
   .browser-body { gap: 10px; }
