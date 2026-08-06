@@ -577,8 +577,26 @@ function buildMessageEl(m, index) {
     acts.className = 'msg-acts';
     const c = currentConv();
     if (c && c.awaitingPlanApproval && c.planMsgIndex === index) {
+      // Plan mode: let the human read AND edit the proposed plan before the
+      // agent executes it. The plan text is reconstructed from the `plan` tool
+      // call so the textarea starts with exactly what the model proposed.
+      const planTool = (m.toolCalls || []).find((t) => t.name === 'plan');
+      const steps = planTool && planTool.args && Array.isArray(planTool.args.steps) ? planTool.args.steps : [];
+      const initial = steps.length
+        ? steps.map((s, i) => `${i + 1}. ${s}`).join('\n')
+        : (planTool && planTool.args && planTool.args.text) || (m.content || '');
       acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) +
-        '<button class="msg-act act-plan" data-plan="1" title="批准计划并开始执行"><span>✓ 批准并执行</span></button>';
+        '<div class="plan-approve">' +
+          '<div class="plan-edit-hint">可修改计划后再执行：</div>' +
+          '<textarea class="plan-edit-area" rows="6" spellcheck="false">' + escapeHtml(initial) + '</textarea>' +
+          '<div class="plan-approve-btns">' +
+            '<button type="button" class="plan-approve-btn">✓ 批准并执行</button>' +
+            '<button type="button" class="plan-reject-btn">✕ 拒绝</button>' +
+          '</div>' +
+        '</div>';
+      const area = acts.querySelector('.plan-edit-area');
+      acts.querySelector('.plan-approve-btn').onclick = () => approvePlanWith(area.value);
+      acts.querySelector('.plan-reject-btn').onclick = () => rejectPlan();
     } else {
       acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) + actionBtn('act-redo', ICO_REDO, '重新生成', index);
     }
@@ -1001,6 +1019,39 @@ async function approvePlan() {
   saveConvs();
   renderMessages();
   await runTurn(conv, { planning: false });
+}
+
+// Plan mode: approve a (possibly edited) plan and let the agent execute it.
+// The edited text becomes the human's instruction, so the model acts on what
+// the user actually signed off on — not a stale copy of the original proposal.
+async function approvePlanWith(edited) {
+  if (abortCtrl) return;
+  const conv = currentConv();
+  if (!conv) return;
+  const plan = (edited || '').trim();
+  conv.messages.push({
+    role: 'user',
+    content: plan
+      ? '已批准（修订后）计划，请据此执行：\n' + plan
+      : '已批准上述计划，请现在开始执行。',
+    display: '（批准计划 · 开始执行）'
+  });
+  conv.awaitingPlanApproval = false;
+  saveConvs();
+  renderMessages();
+  await runTurn(conv, { planning: false });
+}
+
+// Plan mode: reject without auto-rerunning. The conversation then waits for
+// the human's next instruction, so the agent doesn't spin proposing plans in
+// a loop — the person stays in control of what happens next.
+function rejectPlan() {
+  const conv = currentConv();
+  if (!conv) return;
+  conv.awaitingPlanApproval = false;
+  saveConvs();
+  renderMessages();
+  toast('已拒绝计划，可直接给出新的指令');
 }
 
 // The streaming turn itself, split out so "regenerate" can reuse it.

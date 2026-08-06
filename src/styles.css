@@ -1940,3 +1940,28 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .fu-loading { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .fu-loading::before { content: ''; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--muted); border-top-color: transparent; animation: fu-spin .7s linear infinite; }
 @keyframes fu-spin { to { transform: rotate(360deg); } }
+
+/* ── v0.29: plan edit-and-continue ── */
+.plan-approve {
+  margin: 10px 0 2px; padding: 11px 13px; border: 1px solid var(--border);
+  border-radius: 12px; background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  width: 100%;
+}
+.plan-edit-hint { font-size: 12px; color: var(--muted); margin-bottom: 7px; }
+.plan-edit-area {
+  width: 100%; box-sizing: border-box; resize: vertical; font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px; line-height: 1.55; padding: 9px 11px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+.plan-edit-area:focus { outline: none; border-color: var(--accent); }
+.plan-approve-btns { margin-top: 9px; display: flex; gap: 8px; }
+.plan-approve-btn {
+  font-size: 12.5px; padding: 7px 14px; border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+  background: var(--accent); color: #fff; font-weight: 600;
+}
+.plan-approve-btn:hover { filter: brightness(1.06); }
+.plan-reject-btn {
+  font-size: 12.5px; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+.plan-reject-btn:hover { border-color: var(--danger); color: var(--danger); }
