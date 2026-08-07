@@ -812,6 +812,50 @@ const TOOL_ICONS = {
   edit_file: '✎', make_dir: '▢', run_command: '❯', open_path: '↗'
 };
 
+// Human-language explanation of each built-in tool, surfaced in the tool card
+// so the human always knows WHAT the agent is doing. Transparency is the #1
+// trust lever for agentic products (2026 agent-UX research) — and the piece
+// most toy agents skip. MCP tools get a generic external-call explanation.
+const TOOL_EXPLAIN = {
+  calculator: '计算数学表达式',
+  current_datetime: '获取当前日期与时间',
+  system_info: '读取本机系统信息',
+  web_fetch: '抓取指定网址的网页内容',
+  read_file: '读取文件内容',
+  list_dir: '列出目录内容',
+  find_files: '按名称或内容搜索文件',
+  write_file: '写入或覆盖文件',
+  edit_file: '就地修改文件内容',
+  make_dir: '创建新目录',
+  run_command: '在本机执行 shell 命令',
+  open_path: '用系统默认程序打开路径'
+};
+// Risk tier per tool → drives the confidence/risk badge in the card header.
+// Higher tiers (write_file / run_command) are exactly the calls a human should
+// be able to see and gate before they run.
+const TOOL_RISK = {
+  calculator: 'safe', current_datetime: 'safe', system_info: 'low', web_fetch: 'low',
+  read_file: 'safe', list_dir: 'safe', find_files: 'low', write_file: 'high',
+  edit_file: 'high', make_dir: 'low', run_command: 'high', open_path: 'med'
+};
+const RISK_META = {
+  safe: { label: '安全', cls: 'risk-safe' },
+  low: { label: '低风险', cls: 'risk-low' },
+  med: { label: '中风险', cls: 'risk-med' },
+  high: { label: '高风险', cls: 'risk-high' }
+};
+function riskOf(t) {
+  if (typeof t.name === 'string' && t.name.startsWith('mcp__')) return 'med';
+  return TOOL_RISK[t.name] || 'low';
+}
+function explainTool(t) {
+  if (typeof t.name === 'string' && t.name.startsWith('mcp__')) {
+    const short = t.name.replace(/^mcp__[^_]+__/, '');
+    return '调用已连接的 MCP 工具：' + short;
+  }
+  return TOOL_EXPLAIN[t.name] || ('调用工具 ' + (t.name || 'unknown'));
+}
+
 function peekArgs(args) {
   if (!args || typeof args !== 'object') return '';
   const key = ['path', 'command', 'url', 'expression', 'pattern', 'target'].find((k) => args[k]);
@@ -882,17 +926,21 @@ function upsertToolCard(el, t) {
     card.className = 'tool-card' + (isMcp ? ' mcp' : '');
     card.dataset.tid = String(t.id);
     const badge = isMcp ? '<span class="mcp-badge">MCP</span>' : '';
+    const rk = RISK_META[riskOf(t)];
+    const riskBadge = `<span class="risk-badge ${rk.cls}" title="工具风险等级">${rk.label}</span>`;
     card.innerHTML =
       '<div class="tool-head">' +
       `<span class="tool-ico">${isMcp ? '🔌' : escapeHtml(TOOL_ICONS[t.name] || '⚙')}</span>` +
-      `<span class="tname">${escapeHtml(t.name)}</span>${badge}` +
+      `<span class="tname">${escapeHtml(t.name)}</span>${badge}${riskBadge}` +
       '<span class="targs-peek"></span><span class="tstatus"></span><span class="tcaret">▶</span>' +
       '</div>' +
+      '<div class="tool-explain"></div>' +
       '<div class="tool-body"><div><b>参数</b><pre class="t-args"></pre></div><div><b>结果</b><pre class="t-res"></pre></div></div>';
     card.querySelector('.tool-head').onclick = () => card.classList.toggle('open');
     holder.appendChild(card);
   }
   card.querySelector('.targs-peek').textContent = peekArgs(t.args);
+  card.querySelector('.tool-explain').textContent = explainTool(t);
   card.querySelector('.t-args').textContent = JSON.stringify(t.args || {}, null, 2);
   const status = card.querySelector('.tstatus');
   if (running) {
@@ -3805,7 +3853,12 @@ function wire() {
   };
   $('clear-chat').onclick = () => clearCurrent();
   $('send').onclick = () => sendMessage();
-  $('stop').onclick = () => { if (abortCtrl) abortCtrl.abort(); };
+  $('stop').onclick = () => {
+    if (abortCtrl) abortCtrl.abort();
+    const ta = $('input');
+    if (ta) ta.focus();
+    toast('已停止 · 可直接输入新指令继续', 2600);
+  };
   $('attach-file').onclick = () => {
     const ta = $('input');
     const caret = ta.selectionStart;

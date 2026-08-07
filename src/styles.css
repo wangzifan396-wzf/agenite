@@ -589,6 +589,33 @@ button { cursor: pointer; background: none; border: none; }
 }
 .tool-body pre:last-child { margin-bottom: 0; }
 
+/* Tool-call transparency: a plain-language "what the agent is doing" line that
+   is always visible (even when the card is collapsed), plus a risk/confidence
+   badge in the header so high-impact calls (write_file / run_command) are
+   obvious at a glance. */
+.tool-explain {
+  padding: 5px 11px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+}
+.risk-badge {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.risk-safe { color: #2f9e44; border-color: color-mix(in srgb, #2f9e44 35%, transparent); background: color-mix(in srgb, #2f9e44 9%, transparent); }
+.risk-low  { color: #1f8fb0; border-color: color-mix(in srgb, #1f8fb0 35%, transparent); background: color-mix(in srgb, #1f8fb0 9%, transparent); }
+.risk-med  { color: #c08a1f; border-color: color-mix(in srgb, #c08a1f 35%, transparent); background: color-mix(in srgb, #c08a1f 9%, transparent); }
+.risk-high { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+
 /* --- empty state --- */
 .empty { max-width: var(--read-w); margin: 0 auto; padding: 6vh 4px 0; animation: rise .35s var(--ease) both; }
 .empty-mark {
