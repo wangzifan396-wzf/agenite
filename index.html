@@ -82,6 +82,7 @@
         <button id="open-snippets" class="side-link">💡 指令库</button>
         <button id="open-kb" class="side-link">📚 知识库</button>
         <button id="open-agents" class="side-link">🤖 智能体</button>
+        <button id="open-skills" class="side-link">🧩 技能</button>
       </div>
     </aside>
 
@@ -452,6 +453,27 @@
           </div>
         </form>
         <div id="agents-grid" class="agents-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 技能画廊 -->
+  <div id="skills-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card agents-card">
+      <div class="drawer-head">
+        <h2>🧩 技能画廊</h2>
+        <div class="drawer-head-actions">
+          <span id="skills-current" class="muted small"></span>
+          <button id="close-skills" class="icon-btn" aria-label="关闭">✕</button>
+        </div>
+      </div>
+      <div class="agents-body">
+        <p class="muted small">精选可复用的工程技能包——每个都是一套经过打磨的工作流（规范驱动、测试驱动、代码评审、安全审计、可访问性、性能、系统化调试、安全重构、技术写作、故障复盘）。<b>点击卡片即可启用/停用</b>；启用的包会把方法论注入系统提示词，让 agent 真正按它工作。agent 自己沉淀的技能显示在底部（只读）。</p>
+        <div id="skills-grid" class="agents-grid"></div>
+        <div id="skills-custom-wrap" class="hidden">
+          <div class="agent-section-label">agent 自沉淀技能（~/.agenite/memory/skills/，只读）</div>
+          <div id="skills-custom" class="agents-grid"></div>
+        </div>
       </div>
     </div>
   </div>

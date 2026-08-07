@@ -20,6 +20,7 @@ import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR, searchSessionsForLabel } from './src/core/sessions.js';
 import { defaultMemoryDir, injectMemory, injectSkills, listSkills, savePersona, listPersonas, readPersona, deletePersona } from './src/core/memory.js';
+import { BUILTIN_SKILLS, resolveBuiltinSkills, listBuiltinSkills } from './src/core/skills.js';
 import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
 import { autoSaveSkill } from './src/core/autoskill.js';
 import { createGoal, listGoals, getGoal, stopGoal, deleteGoal, initGoals } from './src/core/goals.js';
@@ -370,9 +371,9 @@ async function handleOllamaModels(req, res) {
 
 async function handleSkillsList(req, res) {
   try {
-    return sendJson(res, 200, { skills: await listSkills(MEMORY_DIR) });
+    return sendJson(res, 200, { builtin: listBuiltinSkills(), custom: await listSkills(MEMORY_DIR) });
   } catch {
-    return sendJson(res, 200, { skills: [] });
+    return sendJson(res, 200, { builtin: listBuiltinSkills(), custom: [] });
   }
 }
 
@@ -1151,7 +1152,12 @@ async function handleChat(req, res) {
   const hasSystem = incoming.some((m) => m.role === 'system');
   const planning = !!(config.planMode || body.planning) && agentEnabled;
   const memoryBlock = config.memoryEnabled !== false ? await injectMemory(MEMORY_DIR) : '';
-  const skillsBlock = config.memoryEnabled !== false ? await injectSkills(MEMORY_DIR) : '';
+  // Curated skill packs the user toggled on from the 🧩 技能 gallery, plus the
+  // agent's own auto-precipitated skills — combined into one system block.
+  const builtinSkillsBlock = resolveBuiltinSkills(config.skills);
+  const skillsBlock = [builtinSkillsBlock, config.memoryEnabled !== false ? await injectSkills(MEMORY_DIR) : '']
+    .filter(Boolean)
+    .join('\n\n');
   const personaText = await resolvePersonaText(config, MEMORY_DIR);
   // Local knowledge graph, compressed into the system prompt so the agent
   // "knows the map" and can reference known people/projects/relations instead

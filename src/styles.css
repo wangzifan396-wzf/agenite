@@ -1936,6 +1936,10 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .agent-ico { font-size: 26px; line-height: 1; }
 .agent-name { font-weight: 700; font-size: 14.5px; }
 .agent-tag { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.agent-desc { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 2px; }
+.skill-card.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.skill-card.is-on:hover { transform: translateY(-3px); }
+.skill-on-badge { font-size: 10.5px; font-weight: 700; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); padding: 1px 6px; border-radius: 999px; vertical-align: middle; }
 .agent-del {
   position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 7px;
   display: grid; place-items: center; font-size: 12px; line-height: 1; color: var(--muted);

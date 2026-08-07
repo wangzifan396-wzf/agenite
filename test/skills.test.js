@@ -1,76 +1,50 @@
-// Self-evolving skills: the agent crystallizes workflows into local SKILL.md
-// files that future sessions auto-load. Tests the file format + catalog logic.
-import assert from 'node:assert';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import test from 'node:test';
-import { saveSkill, listSkills, readSkill, deleteSkill, slugify, injectSkills } from '../src/core/memory.js';
+// Curated skill packs (the "Agent Skills" gallery). Validates the data shape,
+// the resolver that injects active packs into the system prompt, and that the
+// config normalizer keeps `skills` a clean string array.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { BUILTIN_SKILLS, resolveBuiltinSkills, listBuiltinSkills } from '../src/core/skills.js';
+import { normalizeConfig } from '../src/core/config.js';
 
-const base = () => mkdtempSync(join(tmpdir(), 'agenite-skills-'));
-
-test('slugify normalizes names (spaces, casing, CJK)', () => {
-  assert.equal(slugify('Deploy To Staging'), 'deploy-to-staging');
-  assert.equal(slugify('  Hello World! '), 'hello-world');
-  assert.equal(slugify('部署流程'), '部署流程');
-});
-
-test('saveSkill writes a SKILL.md with frontmatter; list/read round-trip', async () => {
-  const dir = base();
-  try {
-    const r = await saveSkill(dir, {
-      name: 'Deploy To Staging',
-      description: 'Ship the build to the staging environment.',
-      when_to_use: 'after tests pass',
-      body: '1. run tests\n2. build\n3. deploy'
-    });
-    assert.equal(r.ok, true);
-    assert.equal(r.slug, 'deploy-to-staging');
-    const file = join(dir, 'skills', 'deploy-to-staging.md');
-    assert.ok(existsSync(file));
-    const text = readFileSync(file, 'utf8');
-    assert.match(text, /name: Deploy To Staging/);
-    assert.match(text, /when_to_use: after tests pass/);
-    assert.match(text, /1\. run tests/);
-
-    const list = await listSkills(dir);
-    assert.equal(list.length, 1);
-    assert.equal(list[0].name, 'Deploy To Staging');
-
-    const full = await readSkill(dir, 'deploy-to-staging');
-    assert.equal(full.ok, true);
-    assert.match(full.content, /1\. run tests/);
-    const byName = await readSkill(dir, 'Deploy To Staging');
-    assert.equal(byName.ok, true);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+test('BUILTIN_SKILLS has the required shape and no duplicates', () => {
+  assert.ok(BUILTIN_SKILLS.length >= 8, 'expected at least 8 curated packs');
+  const names = new Set();
+  for (const s of BUILTIN_SKILLS) {
+    for (const k of ['name', 'icon', 'tagline', 'description', 'category', 'system_prompt']) {
+      assert.ok(s[k], `skill ${s.name || '?'} missing field ${k}`);
+    }
+    assert.ok(!names.has(s.name), `duplicate skill name: ${s.name}`);
+    names.add(s.name);
+    assert.ok(s.system_prompt.length >= 40, `system_prompt too short: ${s.name}`);
   }
 });
 
-test('injectSkills lists the catalog; empty when none', async () => {
-  const dir = base();
-  try {
-    assert.equal(await injectSkills(dir), '');
-    await saveSkill(dir, { name: 'A', description: 'do a', body: 'x' });
-    const block = await injectSkills(dir);
-    assert.match(block, /技能库/);
-    assert.match(block, /do a/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('listBuiltinSkills omits the full system_prompt', () => {
+  const list = listBuiltinSkills();
+  assert.equal(list.length, BUILTIN_SKILLS.length);
+  assert.equal(list[0].system_prompt, undefined);
+  assert.ok(list[0].name && list[0].category);
 });
 
-test('deleteSkill removes the file', async () => {
-  const dir = base();
-  try {
-    await saveSkill(dir, { name: 'B', description: 'do b', body: 'y' });
-    const del = await deleteSkill(dir, 'B');
-    assert.equal(del.ok, true);
-    assert.equal((await listSkills(dir)).length, 0);
-    const missing = await readSkill(dir, 'B');
-    assert.equal(missing.ok, false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveBuiltinSkills returns empty string when nothing is active', () => {
+  assert.equal(resolveBuiltinSkills([]), '');
+  assert.equal(resolveBuiltinSkills(undefined), '');
+  assert.equal(resolveBuiltinSkills(['does-not-exist']), '');
+});
+
+test('resolveBuiltinSkills injects active packs and ignores unknown names', () => {
+  const block = resolveBuiltinSkills(['tdd', 'security-audit', 'nope']);
+  assert.ok(block.startsWith('## 已启用的技能包'));
+  assert.ok(block.includes('测试驱动'), 'TDD methodology missing');
+  assert.ok(block.includes('安全审计'), 'security methodology missing');
+  assert.ok(!block.includes('nope'), 'unknown name leaked');
+});
+
+test('normalizeConfig keeps skills as a clean string array', () => {
+  const c1 = normalizeConfig({ skills: ['tdd', 1, '', ' security-audit ', null, undefined] });
+  assert.deepEqual(c1.skills, ['tdd', 'security-audit']);
+  const c2 = normalizeConfig({});
+  assert.deepEqual(c2.skills, []);
+  const c3 = normalizeConfig({ skills: 'tdd' });
+  assert.deepEqual(c3.skills, []);
 });

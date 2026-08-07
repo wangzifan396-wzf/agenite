@@ -1694,6 +1694,7 @@ function buildPaletteItems() {
     { type: '命令', label: '工作区与权限', hint: '电脑操作权限', run: () => openSettings('power') },
     { type: '操作', label: '切换主题（深 / 浅）', hint: '', run: () => toggleTheme() },
     { type: '面板', label: '打开智能体画廊', hint: '', run: () => openAgents() },
+    { type: '面板', label: '打开技能画廊', hint: '', run: () => openSkills() },
     { type: '面板', label: '打开知识库', hint: '', run: () => openKb() },
     { type: '面板', label: '打开记忆图谱', hint: '', run: () => openAtlas() },
     { type: '面板', label: '打开目标任务', hint: '', run: () => openGoals() },
@@ -3950,6 +3951,52 @@ function openAgents() {
 }
 function closeAgents() { $('agents-modal').classList.add('hidden'); }
 function refreshAgents() { _agentsCache = null; return renderAgents(); }
+
+// ── 技能画廊（🧩 技能：可复用工程技能包，一键启用/停用）──
+let _skillsCache = null;
+function openSkills() {
+  $('skills-modal').classList.remove('hidden');
+  renderSkills();
+}
+function closeSkills() { $('skills-modal').classList.add('hidden'); }
+async function renderSkills() {
+  const grid = $('skills-grid');
+  if (!grid) return;
+  if (!_skillsCache) {
+    try { const r = await fetch('/api/skills'); const j = await r.json(); _skillsCache = j || {}; } catch { _skillsCache = { builtin: [], custom: [] }; }
+  }
+  const builtin = Array.isArray(_skillsCache.builtin) ? _skillsCache.builtin : [];
+  const active = Array.isArray(config.skills) ? config.skills : [];
+  const card = (s) => {
+    const on = active.includes(s.name);
+    return `<div class="agent-card skill-card${on ? ' is-on' : ''}" data-name="${escapeHtml(s.name)}" title="${escapeHtml(s.description || '')}">
+      <div class="agent-ico">${s.icon || '🧩'}</div>
+      <div class="agent-name">${escapeHtml(s.name)}${on ? ' <span class="skill-on-badge">✓ 已启用</span>' : ''}</div>
+      <div class="agent-tag">${escapeHtml(s.tagline || (s.category || ''))}</div>
+      <div class="agent-desc">${escapeHtml(s.description || '')}</div>
+    </div>`;
+  };
+  grid.innerHTML = builtin.length ? builtin.map(card).join('') : '<div class="muted small">暂无技能包。</div>';
+  grid.querySelectorAll('.skill-card').forEach((c) => { c.onclick = () => toggleSkill(c.dataset.name); });
+  const custom = Array.isArray(_skillsCache.custom) ? _skillsCache.custom : [];
+  const wrap = $('skills-custom-wrap');
+  if (custom.length) {
+    wrap.classList.remove('hidden');
+    $('skills-custom').innerHTML = custom.map((s) => `<div class="agent-card" title="${escapeHtml(s.description || '')}">
+      <div class="agent-ico">📁</div>
+      <div class="agent-name">${escapeHtml(s.name || 'unnamed')}</div>
+      <div class="agent-desc">${escapeHtml(s.description || '')}</div>
+    </div>`).join('');
+  } else { wrap.classList.add('hidden'); }
+  $('skills-current').textContent = active.length ? ('已启用 ' + active.length + ' 个技能包') : '未启用技能包';
+}
+function toggleSkill(name) {
+  if (!Array.isArray(config.skills)) config.skills = [];
+  const i = config.skills.indexOf(name);
+  if (i >= 0) config.skills.splice(i, 1); else config.skills.push(name);
+  if (typeof saveConfig === 'function') saveConfig();
+  renderSkills();
+}
 async function renderAgents() {
   const grid = $('agents-grid');
   if (!grid) return;
@@ -4117,6 +4164,8 @@ function wire() {
   };
   $('open-agents').onclick = openAgents;
   $('close-agents').onclick = closeAgents;
+  $('open-skills').onclick = openSkills;
+  $('close-skills').onclick = closeSkills;
   $('new-agent').onclick = openAgentEditor;
   $('agent-cancel').onclick = closeAgentEditor;
   $('agent-editor').addEventListener('submit', saveCustomAgent);

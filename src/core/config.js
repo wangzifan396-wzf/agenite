@@ -230,6 +230,10 @@ export function defaultConfig() {
     autoSkill: false,
     // Active persona (role) — a built-in name, a saved custom name, or ''.
     persona: '',
+    // Curated skill packs enabled from the 🧩 技能 gallery (names from
+    // BUILTIN_SKILLS). Their methodology prompts are injected into the system
+    // message so the agent follows them. Empty = none active.
+    skills: [],
     // --- machine control ---
     approvalMode: 'ask',
     // Empty means "the folder Agenite was started from"; the server fills it in.
@@ -311,6 +315,9 @@ export function normalizeConfig(input = {}) {
   cfg.workspace = typeof cfg.workspace === 'string' ? cfg.workspace.trim() : '';
   cfg.systemPrompt = typeof cfg.systemPrompt === 'string' ? cfg.systemPrompt : '';
   cfg.persona = typeof cfg.persona === 'string' ? cfg.persona.trim() : '';
+  cfg.skills = Array.isArray(cfg.skills)
+    ? cfg.skills.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()).slice(0, 24)
+    : [];
   cfg.maxTurns = Math.round(clampNum(cfg.maxTurns, 1, 100, 20));
   cfg.contextWindow = Math.round(clampNum(cfg.contextWindow, 0, 2000000, 0));
   cfg.autoCompact = cfg.autoCompact !== false;
