@@ -212,7 +212,7 @@ function toggleTheme() {
 
 // ---------- conversations ----------
 function newConv() {
-  const c = { id: uid('conv'), title: '新对话', messages: [], createdAt: Date.now(), updatedAt: Date.now(), usage: emptyUsage() };
+  const c = { id: uid('conv'), title: '新对话', messages: [], instructions: '', createdAt: Date.now(), updatedAt: Date.now(), usage: emptyUsage() };
   conversations.unshift(c);
   currentId = c.id;
   localStorage.setItem(LS.cur, currentId);
@@ -233,6 +233,7 @@ function selectConv(id) {
   renderMessages();
   updateTitle();
   renderUsageChip();
+  renderInstrChip();
   document.body.classList.remove('side-open');
 }
 function deleteConv(id) {
@@ -548,7 +549,8 @@ function buildEmptyState() {
     { ico: '🕸️', t: '多智能体协作', d: 'delegate / fanout 并行派发子任务，干净隔离' },
     { ico: '🗺️', t: '长期记忆', d: '跨会话记住你，技能复利，越用越懂' },
     { ico: '📋', t: '计划模式', d: '先出方案、可改可拒，批准后再执行' },
-    { ico: '🖼️', t: '多模态看图', d: '附上图片，视觉模型直接看图理解、识别、分析' }
+    { ico: '🖼️', t: '多模态看图', d: '附上图片，视觉模型直接看图理解、识别、分析' },
+    { ico: '🎯', t: '对话专属指令', d: '给某次对话单独设定语气与规则，优先级高于全局提示' }
   ];
   const feat = features.map((f) =>
     `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
@@ -1229,6 +1231,7 @@ async function runTurn(conv, opts = {}) {
       config,
       agentEnabled: config.agentEnabled,
       planning,
+      instructions: conv.instructions || '',
       mcpServers: getMcpServers()
     }, (event, data) => {
       traceOnEvent(event, data);
@@ -1466,6 +1469,10 @@ function renameCurrent() {
 function conversationToMarkdown(conv) {
   const lines = [`# ${conv.title || '对话'}`, ''];
   if (conv.createdAt) lines.push(`> 创建于 ${new Date(conv.createdAt).toLocaleString()}`, '');
+  const instr = (conv.instructions || '').trim();
+  if (instr) {
+    lines.push('> **本次对话专属指令**：', '', '> ' + instr.replace(/\n/g, '\n> '), '', '---', '');
+  }
   for (const m of conv.messages) {
     if (m.role === 'user') {
       lines.push('## 🧑 我', '', (m.display || m.content || '').trim(), '');
@@ -3872,6 +3879,45 @@ function wire() {
   $('export-md').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentMarkdown(); };
   $('export-json').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentJson(); };
   $('export-txt').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentText(); };
+
+  // Per-conversation instructions: a conversation-scoped system note that
+  // overrides the global system prompt for the current chat only.
+  function renderInstrChip() {
+    const c = currentConv();
+    const has = !!(c && (c.instructions || '').trim());
+    $('instr-chip').classList.toggle('has-instr', has);
+  }
+  $('instr-chip').onclick = (e) => {
+    e.stopPropagation();
+    const c = currentConv();
+    $('instr-input').value = (c && c.instructions) || '';
+    $('instr-pop').classList.toggle('hidden');
+  };
+  document.addEventListener('click', (e) => {
+    if (!$('instr-pop').classList.contains('hidden') && e.target !== $('instr-chip') && !$('instr-pop').contains(e.target)) {
+      $('instr-pop').classList.add('hidden');
+    }
+  });
+  $('instr-save').onclick = () => {
+    const c = currentConv(); if (!c) return;
+    c.instructions = ($('instr-input').value || '').trim();
+    c.updatedAt = Date.now();
+    saveConvs();
+    renderInstrChip();
+    $('instr-pop').classList.add('hidden');
+    toast(c.instructions ? '已保存本次对话的专属指令' : '已清除专属指令');
+  };
+  $('instr-clear').onclick = () => {
+    $('instr-input').value = '';
+    const c = currentConv(); if (!c) return;
+    c.instructions = '';
+    c.updatedAt = Date.now();
+    saveConvs();
+    renderInstrChip();
+    toast('已清除专属指令');
+  };
+  renderInstrChip();
+
   $('set-provider').onchange = onProviderChange;
   $('set-model').addEventListener('input', updateModelCtxBadge);
   $('ollama-refresh').onclick = refreshOllamaModels;

@@ -1176,7 +1176,14 @@ async function handleChat(req, res) {
       }
     }
   }
-  const messages = hasSystem ? incoming : [{ role: 'system', content: buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText, atlasBlock, kbBlock) }, ...incoming];
+  const convInstructions = (body.instructions || '').trim();
+  let systemContent = buildSystemPrompt(config, WORKSPACE, planning, mcpTools.length, memoryBlock, skillsBlock, personaText, atlasBlock, kbBlock);
+  if (convInstructions) {
+    systemContent +=
+      '\n\n## 本次对话的专属指令\n以下是用户针对【当前这次对话】单独设定的要求，优先级高于上面的通用设定，请在本对话中始终遵守：\n' +
+      convInstructions;
+  }
+  const messages = hasSystem ? incoming : [{ role: 'system', content: systemContent }, ...incoming];
 
   const callModel = buildCallModel(config, tools, ac.signal);
 

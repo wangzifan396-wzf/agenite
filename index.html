@@ -101,6 +101,20 @@
           <button id="plan-toggle" class="chip" title="计划模式：先出方案，你批准后再执行">
             <span class="chip-dot"></span>Plan
           </button>
+          <div class="menu-wrap">
+            <button id="instr-chip" class="chip" title="本次对话的专属指令（仅当前对话生效，优先级高于全局系统提示）">
+              <span class="chip-dot" id="instr-dot"></span>指令
+            </button>
+            <div id="instr-pop" class="menu hidden" style="width:330px;left:0;right:auto;">
+              <div class="menu-title">本次对话专属指令</div>
+              <p class="menu-hint">只对当前对话生效，优先级高于全局系统提示。留空则无附加指令。</p>
+              <textarea id="instr-input" rows="5" placeholder="例如：始终用中文回答；每个结论都给出可运行示例；不要使用 emoji；回答要简短……"></textarea>
+              <div class="menu-actions">
+                <button id="instr-clear" class="btn-ghost">清除</button>
+                <button id="instr-save" class="btn-primary">保存</button>
+              </div>
+            </div>
+          </div>
           <button id="mcp-chip" class="chip" title="已连接的 MCP 工具服务器">
             <span class="chip-dot"></span>MCP <span id="mcp-count">0</span>
           </button>

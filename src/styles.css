@@ -1986,6 +1986,14 @@ select.text-input { appearance: auto; padding-right: 8px; }
 }
 .menu-item { display: block; width: 100%; text-align: left; padding: 9px 11px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 13px; cursor: pointer; }
 .menu-item:hover { background: var(--panel-2); color: var(--accent); }
+/* ── v0.36: per-conversation instructions popover ── */
+#instr-pop { padding: 12px; }
+#instr-pop .menu-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+#instr-pop .menu-hint { font-size: 11.5px; color: var(--text-3); margin: 0 0 9px; line-height: 1.5; }
+#instr-pop textarea { width: 100%; box-sizing: border-box; }
+#instr-pop .menu-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+#instr-pop .menu-actions .btn-primary, #instr-pop .menu-actions .btn-ghost { width: auto; padding: 7px 14px; }
+.chip.has-instr .chip-dot { background: var(--accent); opacity: 1; }
 
 /* ── v0.28: structured error surface ── */
 .err-card {

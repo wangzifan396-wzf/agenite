@@ -1995,6 +1995,14 @@ select.text-input { appearance: auto; padding-right: 8px; }
 }
 .menu-item { display: block; width: 100%; text-align: left; padding: 9px 11px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 13px; cursor: pointer; }
 .menu-item:hover { background: var(--panel-2); color: var(--accent); }
+/* ── v0.36: per-conversation instructions popover ── */
+#instr-pop { padding: 12px; }
+#instr-pop .menu-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+#instr-pop .menu-hint { font-size: 11.5px; color: var(--text-3); margin: 0 0 9px; line-height: 1.5; }
+#instr-pop textarea { width: 100%; box-sizing: border-box; }
+#instr-pop .menu-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+#instr-pop .menu-actions .btn-primary, #instr-pop .menu-actions .btn-ghost { width: auto; padding: 7px 14px; }
+.chip.has-instr .chip-dot { background: var(--accent); opacity: 1; }
 
 /* ── v0.28: structured error surface ── */
 .err-card {
@@ -2188,6 +2196,20 @@ select.text-input { appearance: auto; padding-right: 8px; }
           <button id="plan-toggle" class="chip" title="计划模式：先出方案，你批准后再执行">
             <span class="chip-dot"></span>Plan
           </button>
+          <div class="menu-wrap">
+            <button id="instr-chip" class="chip" title="本次对话的专属指令（仅当前对话生效，优先级高于全局系统提示）">
+              <span class="chip-dot" id="instr-dot"></span>指令
+            </button>
+            <div id="instr-pop" class="menu hidden" style="width:330px;left:0;right:auto;">
+              <div class="menu-title">本次对话专属指令</div>
+              <p class="menu-hint">只对当前对话生效，优先级高于全局系统提示。留空则无附加指令。</p>
+              <textarea id="instr-input" rows="5" placeholder="例如：始终用中文回答；每个结论都给出可运行示例；不要使用 emoji；回答要简短……"></textarea>
+              <div class="menu-actions">
+                <button id="instr-clear" class="btn-ghost">清除</button>
+                <button id="instr-save" class="btn-primary">保存</button>
+              </div>
+            </div>
+          </div>
           <button id="mcp-chip" class="chip" title="已连接的 MCP 工具服务器">
             <span class="chip-dot"></span>MCP <span id="mcp-count">0</span>
           </button>
@@ -3855,7 +3877,7 @@ function toggleTheme() {
 
 // ---------- conversations ----------
 function newConv() {
-  const c = { id: uid('conv'), title: '新对话', messages: [], createdAt: Date.now(), updatedAt: Date.now(), usage: emptyUsage() };
+  const c = { id: uid('conv'), title: '新对话', messages: [], instructions: '', createdAt: Date.now(), updatedAt: Date.now(), usage: emptyUsage() };
   conversations.unshift(c);
   currentId = c.id;
   localStorage.setItem(LS.cur, currentId);
@@ -3876,6 +3898,7 @@ function selectConv(id) {
   renderMessages();
   updateTitle();
   renderUsageChip();
+  renderInstrChip();
   document.body.classList.remove('side-open');
 }
 function deleteConv(id) {
@@ -4194,7 +4217,8 @@ function buildEmptyState() {
     { ico: '🕸️', t: '多智能体协作', d: 'delegate / fanout 并行派发子任务，干净隔离' },
     { ico: '🗺️', t: '长期记忆', d: '跨会话记住你，技能复利，越用越懂' },
     { ico: '📋', t: '计划模式', d: '先出方案、可改可拒，批准后再执行' },
-    { ico: '🖼️', t: '多模态看图', d: '附上图片，视觉模型直接看图理解、识别、分析' }
+    { ico: '🖼️', t: '多模态看图', d: '附上图片，视觉模型直接看图理解、识别、分析' },
+    { ico: '🎯', t: '对话专属指令', d: '给某次对话单独设定语气与规则，优先级高于全局提示' }
   ];
   const feat = features.map((f) =>
     `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
@@ -4875,6 +4899,7 @@ async function runTurn(conv, opts = {}) {
       config,
       agentEnabled: config.agentEnabled,
       planning,
+      instructions: conv.instructions || '',
       mcpServers: getMcpServers()
     }, (event, data) => {
       traceOnEvent(event, data);
@@ -5115,6 +5140,10 @@ function renameCurrent() {
 function conversationToMarkdown(conv) {
   const lines = [`# ${conv.title || '对话'}`, ''];
   if (conv.createdAt) lines.push(`> 创建于 ${new Date(conv.createdAt).toLocaleString()}`, '');
+  const instr = (conv.instructions || '').trim();
+  if (instr) {
+    lines.push('> **本次对话专属指令**：', '', '> ' + instr.replace(/\n/g, '\n> '), '', '---', '');
+  }
   for (const m of conv.messages) {
     if (m.role === 'user') {
       lines.push('## 🧑 我', '', (m.display || m.content || '').trim(), '');
@@ -7524,6 +7553,45 @@ function wire() {
   $('export-md').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentMarkdown(); };
   $('export-json').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentJson(); };
   $('export-txt').onclick = () => { $('export-menu').classList.add('hidden'); exportCurrentText(); };
+
+  // Per-conversation instructions: a conversation-scoped system note that
+  // overrides the global system prompt for the current chat only.
+  function renderInstrChip() {
+    const c = currentConv();
+    const has = !!(c && (c.instructions || '').trim());
+    $('instr-chip').classList.toggle('has-instr', has);
+  }
+  $('instr-chip').onclick = (e) => {
+    e.stopPropagation();
+    const c = currentConv();
+    $('instr-input').value = (c && c.instructions) || '';
+    $('instr-pop').classList.toggle('hidden');
+  };
+  document.addEventListener('click', (e) => {
+    if (!$('instr-pop').classList.contains('hidden') && e.target !== $('instr-chip') && !$('instr-pop').contains(e.target)) {
+      $('instr-pop').classList.add('hidden');
+    }
+  });
+  $('instr-save').onclick = () => {
+    const c = currentConv(); if (!c) return;
+    c.instructions = ($('instr-input').value || '').trim();
+    c.updatedAt = Date.now();
+    saveConvs();
+    renderInstrChip();
+    $('instr-pop').classList.add('hidden');
+    toast(c.instructions ? '已保存本次对话的专属指令' : '已清除专属指令');
+  };
+  $('instr-clear').onclick = () => {
+    $('instr-input').value = '';
+    const c = currentConv(); if (!c) return;
+    c.instructions = '';
+    c.updatedAt = Date.now();
+    saveConvs();
+    renderInstrChip();
+    toast('已清除专属指令');
+  };
+  renderInstrChip();
+
   $('set-provider').onchange = onProviderChange;
   $('set-model').addEventListener('input', updateModelCtxBadge);
   $('ollama-refresh').onclick = refreshOllamaModels;
