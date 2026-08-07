@@ -551,7 +551,8 @@ function buildEmptyState() {
     { ico: '📋', t: '计划模式', d: '先出方案、可改可拒，批准后再执行' },
     { ico: '🖼️', t: '多模态看图', d: '附上图片，视觉模型直接看图理解、识别、分析' },
     { ico: '🎯', t: '对话专属指令', d: '给某次对话单独设定语气与规则，优先级高于全局提示' },
-    { ico: '💭', t: '推理过程可见', d: 'DeepSeek-R1 / Qwen 思考模型边想边展示，可折叠回看' }
+    { ico: '💭', t: '推理过程可见', d: 'DeepSeek-R1 / Qwen 思考模型边想边展示，可折叠回看' },
+    { ico: '🔎', t: '全局搜索', d: 'Ctrl+Shift+F 跨所有对话查找消息，命中即跳转高亮' }
   ];
   const feat = features.map((f) =>
     `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
@@ -602,6 +603,7 @@ function buildMessageEl(m, index) {
   const el = document.createElement('div');
   if (m.role === 'user') {
     el.className = 'msg user';
+    if (typeof index === 'number') el.dataset.idx = index;
     el.innerHTML = '<div class="avatar">你</div><div class="bubble"></div>';
     el.querySelector('.bubble').textContent = m.display || m.content || '';
     if (Array.isArray(m.refs) && m.refs.length) {
@@ -1602,7 +1604,8 @@ function buildPaletteItems() {
     { type: '面板', label: '打开记忆图谱', hint: '', run: () => openAtlas() },
     { type: '面板', label: '打开目标任务', hint: '', run: () => openGoals() },
     { type: '面板', label: '打开执行轨迹', hint: '', run: () => openTrace() },
-    { type: '帮助', label: '快捷键速查', hint: '', run: () => openKeys() }
+    { type: '帮助', label: '快捷键速查', hint: '', run: () => openKeys() },
+    { type: '命令', label: '搜索全部对话', hint: '跨所有对话查找消息 (Ctrl+Shift+F)', run: () => openGlobalSearch() }
   ];
   const recents = conversations.slice()
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
@@ -1648,6 +1651,123 @@ function movePalette(delta) {
   if (active) active.scrollIntoView({ block: 'nearest' });
 }
 function closeKeys() { $('keys-modal').classList.add('hidden'); }
+
+// ---------- global cross-conversation search (Ctrl+Shift+F) ----------
+let gsState = { results: [], index: 0 };
+
+function openGlobalSearch() {
+  buildGsResults('');
+  const m = $('gs-modal');
+  m.classList.remove('hidden');
+  const inp = $('gs-input');
+  inp.value = '';
+  inp.focus();
+}
+function closeGlobalSearch() { $('gs-modal').classList.add('hidden'); }
+
+function gsSnippet(text, q) {
+  const qi = text.toLowerCase().indexOf(q.toLowerCase());
+  if (qi < 0) return escapeHtml(text.slice(0, 140));
+  const start = Math.max(0, qi - 42);
+  const end = Math.min(text.length, qi + q.length + 70);
+  const before = (start > 0 ? '…' : '') + text.slice(start, qi);
+  const match = text.slice(qi, qi + q.length);
+  const after = text.slice(qi + q.length, end) + (end < text.length ? '…' : '');
+  return escapeHtml(before) + '<mark>' + escapeHtml(match) + '</mark>' + escapeHtml(after);
+}
+
+function buildGsResults(q) {
+  const query = (q || '').trim().toLowerCase();
+  const list = $('gs-results');
+  if (!query) {
+    list.innerHTML = '<div class="gs-hint">输入关键词，跨全部对话搜索标题与消息内容…</div>';
+    gsState.results = [];
+    return;
+  }
+  const results = [];
+  for (const c of conversations) {
+    const title = c.title || '新对话';
+    if (title.toLowerCase().includes(query)) {
+      results.push({ convId: c.id, convTitle: title, msgIndex: -1, role: 'title', snippet: '<mark>' + escapeHtml(title) + '</mark>', score: 10 });
+    }
+    const msgs = c.messages || [];
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (m.role === 'system' || m.role === 'tool') continue;
+      const texts = [m.content || '', m.reasoning || '', m.display || ''];
+      for (const t of texts) {
+        if (typeof t !== 'string') continue;
+        const tl = t.toLowerCase();
+        let from = 0;
+        while (true) {
+          const idx = tl.indexOf(query, from);
+          if (idx < 0) break;
+          results.push({
+            convId: c.id,
+            convTitle: title,
+            msgIndex: i,
+            role: m.role,
+            snippet: gsSnippet(t, query),
+            score: (m.role === 'user' ? 1 : 0) + (idx === 0 ? 2 : 0),
+          });
+          from = idx + query.length;
+          if (results.length > 500) break;
+        }
+        if (results.length > 500) break;
+      }
+      if (results.length > 500) break;
+    }
+    if (results.length > 500) break;
+  }
+  results.sort((a, b) => b.score - a.score);
+  const top = results.slice(0, 60);
+  gsState.results = top;
+  gsState.index = 0;
+  if (!top.length) {
+    list.innerHTML = '<div class="gs-hint">没有匹配「' + escapeHtml(q) + '」的对话或消息。</div>';
+    return;
+  }
+  const roleLabel = (r) => r === 'user' ? '你' : r === 'assistant' ? 'Agenite' : r === 'title' ? '对话标题' : '';
+  list.innerHTML = top.map((r, i) =>
+    '<div class="gs-item ' + (i === 0 ? 'active' : '') + '" data-i="' + i + '">' +
+      '<div class="gs-meta"><span class="gs-conv">' + escapeHtml(r.convTitle) + '</span>' +
+      '<span class="gs-role gs-role-' + escapeHtml(r.role) + '">' + roleLabel(r.role) + '</span></div>' +
+      '<div class="gs-snippet">' + r.snippet + '</div>' +
+    '</div>'
+  ).join('');
+  list.querySelectorAll('.gs-item').forEach((el) => {
+    el.onclick = () => jumpToGs(Number(el.dataset.i));
+  });
+}
+
+function jumpToGs(i) {
+  const r = gsState.results[i];
+  if (!r) return;
+  closeGlobalSearch();
+  selectConv(r.convId);
+  if (r.msgIndex < 0) { $('messages').scrollTop = 0; return; }
+  const box = $('messages');
+  let target = box.querySelector('.msg[data-idx="' + r.msgIndex + '"]');
+  if (!target) {
+    const msgs = box.querySelectorAll('.msg');
+    target = msgs[r.msgIndex] || null;
+  }
+  if (target) {
+    target.scrollIntoView({ block: 'center' });
+    target.classList.add('gs-flash');
+    setTimeout(() => target.classList.remove('gs-flash'), 1400);
+  }
+}
+
+function moveGs(delta) {
+  const items = gsState.results;
+  if (!items.length) return;
+  gsState.index = (gsState.index + delta + items.length) % items.length;
+  const nodes = $('gs-results').querySelectorAll('.gs-item');
+  nodes.forEach((n, i) => n.classList.toggle('active', i === gsState.index));
+  const active = nodes[gsState.index];
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
 
 // ---------- approvals ----------
 let pendingApprovalId = null;
@@ -3901,6 +4021,13 @@ function wire() {
     else if (e.key === 'Enter') { e.preventDefault(); runPalette(paletteState.index); }
   });
   $('palette-modal').addEventListener('click', (e) => { if (e.target === $('palette-modal')) closePalette(); });
+  $('gs-input').addEventListener('input', (e) => buildGsResults(e.target.value));
+  $('gs-input').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveGs(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveGs(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); jumpToGs(gsState.index); }
+  });
+  $('gs-modal').addEventListener('click', (e) => { if (e.target === $('gs-modal')) closeGlobalSearch(); });
   // Per-conversation export menu (Markdown / JSON / plain text).
   $('export-menu-btn').onclick = (e) => { e.stopPropagation(); $('export-menu').classList.toggle('hidden'); };
   document.addEventListener('click', (e) => {
@@ -4295,6 +4422,7 @@ function wire() {
       if (acState) closeAc();
       else if (pendingApprovalId) resolveApproval(false);
       else if (!$('palette-modal').classList.contains('hidden')) closePalette();
+      else if (!$('gs-modal').classList.contains('hidden')) closeGlobalSearch();
       else if (!$('keys-modal').classList.contains('hidden')) closeKeys();
       else if (!$('goals-modal').classList.contains('hidden')) closeGoals();
       else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
@@ -4305,6 +4433,7 @@ function wire() {
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); openGlobalSearch(); }
     if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
     if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); openKeys(); }
   });

@@ -468,7 +468,8 @@
         <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><span>换行</span>
         <div><kbd>@</kbd></div><span>引用工作区文件</span>
         <div><kbd>/</kbd></div><span>唤起命令（行首输入）</span>
-        <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><span>新建对话</span>
+        <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><span>命令面板（新建对话 / 跳转 / 设置）</span>
+        <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></div><span>跨全部对话搜索</span>
         <div><kbd>Ctrl</kbd>+<kbd>,</kbd></div><span>打开设置</span>
         <div><kbd>Ctrl</kbd>+<kbd>/</kbd></div><span>本帮助面板</span>
         <div><kbd>Esc</kbd></div><span>关闭弹窗 / 取消审批 / 停止生成（生成中）</span>
@@ -791,6 +792,13 @@
     <div class="palette">
       <input id="palette-input" class="palette-input" type="text" placeholder="输入命令或搜索…（↑↓ 选择，Enter 执行，Esc 关闭）" autocomplete="off" spellcheck="false" />
       <div id="palette-list" class="palette-list"></div>
+    </div>
+  </div>
+
+  <div id="gs-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="palette gs">
+      <input id="gs-input" class="palette-input" type="text" placeholder="跨全部对话搜索…（↑↓ 选择，Enter 跳转，Esc 关闭，Ctrl+Shift+F）" autocomplete="off" spellcheck="false" />
+      <div id="gs-results" class="gs-results"></div>
     </div>
   </div>
 

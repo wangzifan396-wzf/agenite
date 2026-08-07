@@ -2009,6 +2009,26 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .pi-hint { flex: none; font-size: 11.5px; color: var(--muted); }
 .palette-empty { padding: 18px; text-align: center; color: var(--muted); font-size: 13px; }
 
+/* 全局跨对话搜索 (v0.38) */
+.gs-results { max-height: min(64vh, 460px); overflow-y: auto; padding: 6px; overscroll-behavior: contain; }
+.gs-hint { padding: 20px 14px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.gs-item { padding: 10px 12px; border-radius: 10px; cursor: pointer; border: 1px solid transparent; }
+.gs-item + .gs-item { margin-top: 4px; }
+.gs-item.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.gs-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.gs-conv { font-size: 12.5px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-role { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.gs-role-user { color: color-mix(in srgb, var(--accent) 80%, #fff 0%); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.gs-role-assistant { color: var(--muted); }
+.gs-role-title { color: #b8860b; border-color: color-mix(in srgb, #b8860b 40%, transparent); }
+.gs-snippet { font-size: 12.5px; color: var(--muted); line-height: 1.5; word-break: break-word; }
+.gs-snippet mark { background: color-mix(in srgb, #ffd54a 55%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
+.gs-flash { animation: gs-flash 1.4s ease-out; }
+@keyframes gs-flash {
+  0% { background: color-mix(in srgb, var(--accent) 38%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
+  100% { background: transparent; box-shadow: 0 0 0 0 transparent; }
+}
+
 /* 顶部导出菜单 */
 .menu-wrap { position: relative; display: inline-flex; }
 .menu {
