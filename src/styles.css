@@ -1975,3 +1975,44 @@ select.text-input { appearance: auto; padding-right: 8px; }
   border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
 }
 .plan-reject-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ── v0.31: MCP tool marketplace (curated catalog) ── */
+.mcp-market-note { font-size: 12px; line-height: 1.6; color: var(--muted); margin: 4px 0 10px; }
+.mcp-market-note b { color: var(--text); }
+.mcp-cat-bar { margin-bottom: 10px; }
+.mcp-cat-bar .text-input { max-width: 220px; }
+.mcp-catalog {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 10px; margin-top: 4px;
+}
+.mcp-cat-card {
+  display: flex; flex-direction: column; padding: 12px 13px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--panel);
+  border-left: 3px solid var(--accent);
+}
+.mcp-cat-card.cat-fs { border-left-color: #2f9e6e; }
+.mcp-cat-card.cat-dev { border-left-color: #c0843d; }
+.mcp-cat-card.cat-web { border-left-color: #4f7dd1; }
+.mcp-cat-card.cat-data { border-left-color: #9b59b6; }
+.mcp-cat-card.cat-mind { border-left-color: #d15a8f; }
+.mcp-cat-head { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.mcp-cat-ico { font-size: 16px; }
+.mcp-cat-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.mcp-ro-tag {
+  margin-left: auto; font-size: 10.5px; padding: 1px 7px; border-radius: 20px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.mcp-cat-desc { font-size: 12px; line-height: 1.55; color: var(--muted); flex: 1; }
+.mcp-cat-note {
+  font-size: 11px; line-height: 1.5; color: var(--muted); margin-top: 7px;
+  padding: 6px 8px; border-radius: 7px; background: var(--panel-2);
+  border: 1px dashed var(--border);
+}
+.mcp-cat-add {
+  margin-top: 10px; align-self: flex-start; font-size: 12.5px; font-weight: 600;
+  padding: 7px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; background: var(--accent); color: #fff;
+}
+.mcp-cat-add:hover { filter: brightness(1.06); }
+.mcp-cat-add.added { background: var(--panel-2); color: var(--muted); border-color: var(--border); cursor: default; }

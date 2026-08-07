@@ -599,12 +599,20 @@
           <p class="muted small">MCP（模型上下文协议）让 Agenite 接入外部工具服务器——<b>浏览器自动化、桌面/电脑控制、数据库、GitHub</b> 等。连上后它们会变成模型可调用的工具（名字以 <code>mcp__</code> 开头）。这正是它从"聊天框"变成"智能体"的关键。</p>
 
           <div class="quick-add">
-            <span class="field-title">快速添加（点一下接入流行服务器）</span>
-            <div class="btn-row">
-              <button class="btn-ghost" data-quick="playwright">🌐 浏览器控制 (Playwright)</button>
-              <button class="btn-ghost" data-quick="computer">🖥️ 桌面控制 (windows-computer-use-mcp)</button>
-              <button class="btn-ghost" data-quick="screenhand">✋ 桌面+浏览器 (ScreenHand)</button>
+            <span class="field-title">工具市场 · 精选 MCP 服务器（点一下即接入）</span>
+            <p class="mcp-market-note">MCP 让本地 Agent <b>即插即用</b>地桥接整个工具生态——浏览器、文件系统、代码仓库、搜索、数据库……无需写一行集成代码。这正是 Agenite「单文件 + 本地优先 + 数据不出本机」却能对标云端智能体的关键。</p>
+            <div class="mcp-cat-bar">
+              <select id="mcp-cat-filter" class="text-input">
+                <option value="*">全部类别</option>
+                <option value="browser">🌐 浏览器 / 桌面</option>
+                <option value="fs">📁 文件系统</option>
+                <option value="dev">🛠️ 开发 / 代码</option>
+                <option value="web">🔎 联网 / 搜索</option>
+                <option value="data">🗄️ 数据 / 数据库</option>
+                <option value="mind">🧠 思维 / 记忆</option>
+              </select>
             </div>
+            <div id="mcp-catalog" class="mcp-catalog"></div>
           </div>
 
           <div class="field">

@@ -60,12 +60,54 @@ function getMcpServers() {
 function saveMcpServers(list) {
   localStorage.setItem(LS.mcp, JSON.stringify(list));
 }
-// Popular, copy-paste-free presets so connecting real tool servers is one click.
-const MCP_PRESETS = {
-  playwright: { id: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'], env: {}, enabled: true },
-  computer: { id: 'computer', command: 'npx', args: ['-y', 'windows-computer-use-mcp'], env: {}, enabled: true },
-  screenhand: { id: 'screenhand', command: 'npx', args: ['-y', 'screenhand'], env: {}, enabled: true }
-};
+// Curated MCP server catalog — the "tool marketplace". One click connects a
+// real tool server so the local agent bridges to the wider ecosystem without
+// writing any integration code (borrowed from Cline's MCP-marketplace idea).
+// Extra fields (ico/label/category/desc/note/readOnly) are UI-only; the rest
+// is the exact server descriptor handed to the MCP manager.
+const MCP_PRESETS = [
+  { id: 'playwright', ico: '🌐', label: '浏览器控制 · Playwright', category: 'browser', readOnly: false,
+    command: 'npx', args: ['-y', '@playwright/mcp@latest'], env: {},
+    desc: '驱动真实 Chromium 打开网页、点击、填表、截图，做端到端浏览器自动化。' },
+  { id: 'computer', ico: '🖥️', label: '桌面控制 · Computer Use', category: 'browser', readOnly: false,
+    command: 'npx', args: ['-y', 'windows-computer-use-mcp'], env: {},
+    desc: '让 Agent 操作整个 Windows 桌面（鼠标/键盘/窗口），完成跨应用任务。' },
+  { id: 'screenhand', ico: '✋', label: '桌面+浏览器 · ScreenHand', category: 'browser', readOnly: false,
+    command: 'npx', args: ['-y', 'screenhand'], env: {},
+    desc: '同时具备桌面操控与浏览器能力的一站式控制服务器。' },
+  { id: 'puppeteer', ico: '🕸️', label: '网页抓取 · Puppeteer', category: 'browser', readOnly: false,
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-puppeteer'], env: {},
+    desc: '用 Puppeteer 控制无头 Chrome，适合结构化网页抓取与渲染。' },
+  { id: 'filesystem', ico: '📁', label: '文件系统', category: 'fs', readOnly: false,
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'], env: {},
+    desc: '读写本地文件与目录，是 Agent 操作你电脑上资料的基础能力。',
+    note: '默认允许当前工作目录，可在「已配置」里把 "." 改成绝对路径以放宽范围。' },
+  { id: 'github', ico: '🐙', label: 'GitHub', category: 'dev', readOnly: false,
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '<你的 token>' },
+    desc: '管理仓库、Issue、PR、代码搜索——把你的开发工作流交给 Agent。',
+    note: '需要在 env 里填入 GITHUB_TOKEN（https://github.com/settings/tokens）。' },
+  { id: 'fetch', ico: '🔗', label: '网页抓取 · Fetch', category: 'web', readOnly: true,
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'], env: {},
+    desc: '抓取并提炼任意 URL 的网页内容，给模型喂干净的正文（只读）。' },
+  { id: 'brave', ico: '🔎', label: 'Brave 搜索', category: 'web', readOnly: true,
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], env: { BRAVE_API_KEY: '<你的 key>' },
+    desc: '用 Brave Search API 做联网搜索，结果作为工具返回模型（只读）。',
+    note: '需要在 env 里填入 BRAVE_API_KEY。' },
+  { id: 'sqlite', ico: '🗄️', label: 'SQLite 数据库', category: 'data', readOnly: false,
+    command: 'uvx', args: ['mcp-server-sqlite', '--db-path', './agenite.db'], env: {},
+    desc: '直接对本地 SQLite 库执行查询与建表，适合数据类任务。',
+    note: '需要本机有 uv / Python；--db-path 可改成你的库文件路径。' },
+  { id: 'sequential-thinking', ico: '🧠', label: '结构化思考', category: 'mind', readOnly: true,
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking'], env: {},
+    desc: '给模型一个显式的「逐步推理」工作区，复杂问题拆得更清楚（只读）。' },
+  { id: 'memory', ico: '💾', label: '记忆图谱 (MCP)', category: 'mind', readOnly: false,
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], env: {},
+    desc: '基于知识图谱的持久记忆服务器，与 Agenite 自带长期记忆互补。' },
+  { id: 'time', ico: '⏰', label: '时间 / 时区', category: 'mind', readOnly: true,
+    command: 'uvx', args: ['mcp-server-time'], env: {},
+    desc: '获取当前时间、时区转换等时间工具（只读）。',
+    note: '需要本机有 uv / Python。' }
+];
 function upsertMcpServer(srv) {
   const list = getMcpServers();
   const i = list.findIndex((s) => s.id === srv.id);
@@ -492,10 +534,12 @@ function buildEmptyState() {
   const wrap = document.createElement('div');
   wrap.className = 'welcome';
   const features = [
-    { ico: '🔒', t: '本地优先', d: '数据不出本机，API Key 只经本地服务转发' },
-    { ico: '🌐', t: '浏览器 Agent', d: '看得见、可干预的网页自动化' },
-    { ico: '🧩', t: '36 个工具', d: '文件 / 命令 / 联网 / MCP 即插即用' },
-    { ico: '🗺️', t: '记忆 + 计划', d: '长期记忆图谱，计划模式先审后做' }
+    { ico: '🔒', t: '本地优先', d: '单文件 + 数据不出本机，API Key 只经本地服务转发' },
+    { ico: '🌐', t: '浏览器 Agent', d: '本机 Chrome 驱动，看得见、可干预的网页自动化' },
+    { ico: '🧩', t: 'MCP 工具市场', d: '一键接入浏览器 / 文件 / GitHub / 搜索等整个工具生态' },
+    { ico: '🕸️', t: '多智能体协作', d: 'delegate / fanout 并行派发子任务，干净隔离' },
+    { ico: '🗺️', t: '长期记忆', d: '跨会话记住你，技能复利，越用越懂' },
+    { ico: '📋', t: '计划模式', d: '先出方案、可改可拒，批准后再执行' }
   ];
   const feat = features.map((f) =>
     `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
@@ -1979,10 +2023,12 @@ function renderMcpList(servers) {
       if (b.dataset.act === 'del') {
         saveMcpServers(list2.filter((x) => x.id !== id));
         refreshMcp();
+        renderMcpCatalog();
       } else if (b.dataset.act === 'toggle') {
         item.enabled = !item.enabled;
         saveMcpServers(list2);
         refreshMcp();
+        renderMcpCatalog();
       }
     };
   });
@@ -1992,6 +2038,46 @@ function statusText(status, toolCount) {
   if (status === 'connecting') return '⏳ 连接中…';
   if (status === 'error') return '⚠️ 错误';
   return '○ 未连接';
+}
+// Render the curated MCP catalog (the "tool marketplace") as a filterable grid.
+// Reflects which servers are already installed so the button shows "已添加".
+function renderMcpCatalog() {
+  const box = $('mcp-catalog');
+  if (!box) return;
+  const filter = ($('mcp-cat-filter') && $('mcp-cat-filter').value) || '*';
+  const installed = new Set(getMcpServers().map((s) => s.id));
+  const items = MCP_PRESETS.filter((p) => filter === '*' || p.category === filter);
+  if (!items.length) {
+    box.innerHTML = '<div class="mcp-empty">该类别下暂无预设，可手动添加或用 mcp.json 导入。</div>';
+    return;
+  }
+  box.innerHTML = items.map((p) => {
+    const added = installed.has(p.id);
+    return '<div class="mcp-cat-card cat-' + p.category + '">' +
+      '<div class="mcp-cat-head"><span class="mcp-cat-ico">' + (p.ico || '🔌') + '</span>' +
+      '<span class="mcp-cat-name">' + escapeHtml(p.label) + '</span>' +
+      (p.readOnly ? '<span class="mcp-ro-tag">只读</span>' : '') + '</div>' +
+      '<div class="mcp-cat-desc">' + escapeHtml(p.desc) + '</div>' +
+      (p.note ? '<div class="mcp-cat-note">⚙ ' + escapeHtml(p.note) + '</div>' : '') +
+      '<button class="mcp-cat-add' + (added ? ' added' : '') + '" data-quick="' + escapeHtml(p.id) + '"' +
+      (added ? ' disabled' : '') + '>' + (added ? '✓ 已添加' : '＋ 添加') + '</button>' +
+      '</div>';
+  }).join('');
+}
+// One-click add from the catalog: copy the preset descriptor into the user's
+// server list (enabled), connect, and refresh the grid's "已添加" state.
+function addMcpPreset(id) {
+  const p = MCP_PRESETS.find((x) => x.id === id);
+  if (!p) return;
+  const { ico, label, category, desc, note, readOnly, ...srv } = p;
+  const list = getMcpServers();
+  const existing = list.find((x) => x.id === p.id);
+  if (existing) existing.enabled = true;
+  else list.push(Object.assign({ enabled: true }, srv));
+  saveMcpServers(list);
+  refreshMcp();
+  renderMcpCatalog();
+  toast('已添加并连接：' + p.label);
 }
 async function refreshMcp() {
   const servers = getMcpServers();
@@ -2008,6 +2094,7 @@ async function refreshMcp() {
   } catch {
     renderMcpList([]);
   }
+  renderMcpCatalog();
 }
 
 // ---------- "@" file refs & "/" commands ----------
@@ -3647,20 +3734,15 @@ function wire() {
   };
   $('mcp-chip').onclick = () => openSettings('mcp');
 
-  // MCP quick-add + manual add
-  document.querySelectorAll('[data-quick]').forEach((b) => {
-    b.onclick = () => {
-      const p = MCP_PRESETS[b.dataset.quick];
-      if (!p) return;
-      const list = getMcpServers();
-      const existing = list.find((x) => x.id === p.id);
-      if (existing) existing.enabled = true;
-      else list.push({ ...p });
-      saveMcpServers(list);
-      refreshMcp();
-      toast('已添加并连接：' + p.id);
-    };
+  // MCP tool marketplace: delegate catalog clicks + category filter + initial render
+  const catBox = $('mcp-catalog');
+  if (catBox) catBox.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-quick]');
+    if (b) addMcpPreset(b.dataset.quick);
   });
+  const catFilter = $('mcp-cat-filter');
+  if (catFilter) catFilter.onchange = () => renderMcpCatalog();
+  renderMcpCatalog();
   $('mcp-transport').onchange = () => {
     const remote = $('mcp-transport').value !== 'stdio';
     $('mcp-stdio-fields').classList.toggle('hidden', remote);
