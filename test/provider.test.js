@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   toOpenAITools,
+  toOpenAIMessages,
   toAnthropicTools,
   normalizeToolCalls,
   toAnthropicMessages,
-  anthropicBlocksToMessage
+  anthropicBlocksToMessage,
+  parseDataUrl
 } from '../src/core/provider.js';
 
 const tools = [
@@ -63,4 +65,47 @@ test('anthropicBlocksToMessage builds tool calls on tool_use stop', () => {
   assert.equal(m.content, 'thinking');
   assert.equal(m.toolCalls[0].name, 'calculator');
   assert.deepEqual(m.toolCalls[0].args, { expression: '1' });
+});
+
+// --- multimodal image support ---
+test('toOpenAIMessages keeps plain messages untouched', () => {
+  const msgs = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: 'hello' }
+  ];
+  const out = toOpenAIMessages(msgs);
+  assert.equal(out[1].content, 'hi');
+  assert.equal(out[2].content, 'hello');
+  // reference must be preserved (no accidental mutation)
+  assert.equal(out[0].content, 'sys');
+});
+
+test('toOpenAIMessages expands user images into image_url parts', () => {
+  const msgs = [{ role: 'user', content: '看这张图', images: ['data:image/png;base64,AAAA', 'data:image/jpeg;base64,BBBB'] }];
+  const out = toOpenAIMessages(msgs);
+  const content = out[0].content;
+  assert.equal(content.length, 3);
+  assert.deepEqual(content[0], { type: 'text', text: '看这张图' });
+  assert.deepEqual(content[1], { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } });
+  assert.deepEqual(content[2], { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBBB' } });
+});
+
+test('toAnthropicMessages attaches images as base64 source blocks', () => {
+  const msgs = [{ role: 'user', content: '看图', images: ['data:image/png;base64,ABC123'] }];
+  const { messages } = toAnthropicMessages(msgs);
+  const user = messages[0];
+  assert.equal(user.role, 'user');
+  const textBlock = user.content[0];
+  const imgBlock = user.content[1];
+  assert.equal(textBlock.type, 'text');
+  assert.equal(imgBlock.type, 'image');
+  assert.equal(imgBlock.source.type, 'base64');
+  assert.equal(imgBlock.source.media_type, 'image/png');
+  assert.equal(imgBlock.source.data, 'ABC123');
+});
+
+test('parseDataUrl splits media type and base64 payload', () => {
+  assert.deepEqual(parseDataUrl('data:image/jpeg;base64,XYZ'), { mediaType: 'image/jpeg', data: 'XYZ' });
+  assert.deepEqual(parseDataUrl('garbage'), { mediaType: 'image/png', data: '' });
 });

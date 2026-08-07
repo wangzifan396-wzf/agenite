@@ -17,6 +17,31 @@ export function toAnthropicTools(tools) {
   }));
 }
 
+// Split a browser `data:` URL into { mediaType, data } so Anthropic's base64
+// image source can be built. OpenAI takes the whole data URL as-is.
+export function parseDataUrl(dataUrl) {
+  const m = /^data:([^;,]+)(?:;[^,]*)*?,([\s\S]*)$/.exec(dataUrl || '');
+  if (!m) return { mediaType: 'image/png', data: '' };
+  return { mediaType: m[1] || 'image/png', data: m[2] };
+}
+
+// Convert internal messages to OpenAI's chat shape. A user message that carries
+// `images` (array of data URLs) is expanded into a content array of {type:text}
+// + {type:image_url} parts so vision-capable models can actually see the picture.
+// Messages without images keep their plain-string `content` — existing behaviour
+// for every non-multimodal turn is untouched.
+export function toOpenAIMessages(messages) {
+  return messages.map((m) => {
+    if (m.role === 'user' && Array.isArray(m.images) && m.images.length) {
+      const content = [];
+      if (m.content) content.push({ type: 'text', text: m.content });
+      for (const url of m.images) content.push({ type: 'image_url', image_url: { url } });
+      return { role: 'user', content };
+    }
+    return m;
+  });
+}
+
 // Normalize raw OpenAI tool_calls (arguments may be a JSON string) into
 // { id, name, args } where args is always an object.
 export function normalizeToolCalls(rawToolCalls) {
@@ -76,8 +101,15 @@ export function toAnthropicMessages(messages) {
       out.push({ role: 'assistant', content });
       continue;
     }
-    // user
-    out.push({ role: 'user', content: [{ type: 'text', text: m.content || '' }] });
+    // user (optionally with attached images)
+    const content = [{ type: 'text', text: m.content || '' }];
+    if (Array.isArray(m.images) && m.images.length) {
+      for (const url of m.images) {
+        const { mediaType, data } = parseDataUrl(url);
+        content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data } });
+      }
+    }
+    out.push({ role: 'user', content });
   }
   return { system, messages: out };
 }

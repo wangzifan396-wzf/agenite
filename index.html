@@ -131,6 +131,9 @@
       <div id="composer-wrap">
         <!-- 被 @ 引用的文件，会随消息一起发给 agent -->
         <div id="ref-bar" class="ref-bar hidden"></div>
+        <!-- 附带的图片，会以多模态内容一起发给视觉模型 -->
+        <div id="img-bar" class="img-bar hidden"></div>
+        <input id="img-input" type="file" accept="image/*" multiple hidden />
         <div id="composer">
           <!-- @ 文件 / 斜杠命令 自动完成浮层 -->
           <div id="ac-pop" class="ac-pop hidden" role="listbox"></div>
@@ -142,6 +145,10 @@
             <button id="attach-file" class="mini-chip ghost" title="引用工作区文件 (@)">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.2 20.2a5.5 5.5 0 0 1-7.8-7.8l9.2-9.1a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.8 1.8 0 0 1-2.6-2.6l8.5-8.5"/></svg>
               引用
+            </button>
+            <button id="img-btn" class="mini-chip ghost" title="附上图片（多模态 · 视觉模型可看图）">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-4.5L13 17l3-2.5L20 17"/></svg>
+              图片
             </button>
             <button id="mic" class="mini-chip ghost" title="语音输入（普通话）">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>

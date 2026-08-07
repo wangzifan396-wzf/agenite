@@ -31,6 +31,7 @@ let sessionAutoApprove = false;
 let workspacePath = '';
 let workspaceFiles = [];   // [{ path, size }] from /api/files
 let refs = [];             // files the user attached with "@" for the next message
+let images = [];           // data URLs the user attached as pictures for the next message
 // Live numbers for the top-right chip: how full the context is and what the
 // conversation has cost so far. Reset whenever you switch conversations.
 let ctxState = { used: 0, budget: 0, window: 0 };
@@ -546,7 +547,8 @@ function buildEmptyState() {
     { ico: '🧩', t: 'MCP 工具市场', d: '一键接入浏览器 / 文件 / GitHub / 搜索等整个工具生态' },
     { ico: '🕸️', t: '多智能体协作', d: 'delegate / fanout 并行派发子任务，干净隔离' },
     { ico: '🗺️', t: '长期记忆', d: '跨会话记住你，技能复利，越用越懂' },
-    { ico: '📋', t: '计划模式', d: '先出方案、可改可拒，批准后再执行' }
+    { ico: '📋', t: '计划模式', d: '先出方案、可改可拒，批准后再执行' },
+    { ico: '🖼️', t: '多模态看图', d: '附上图片，视觉模型直接看图理解、识别、分析' }
   ];
   const feat = features.map((f) =>
     `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
@@ -604,6 +606,14 @@ function buildMessageEl(m, index) {
       tags.className = 'msg-refs';
       tags.innerHTML = m.refs.map((p) => `<span class="ref-chip sm">${escapeHtml(p)}</span>`).join('');
       el.querySelector('.bubble').appendChild(tags);
+    }
+    if (Array.isArray(m.images) && m.images.length) {
+      const imgs = document.createElement('div');
+      imgs.className = 'msg-imgs';
+      imgs.innerHTML = m.images
+        .map((src, i) => `<img class="msg-img" src="${escapeHtml(src)}" alt="附件图片 ${i + 1}" loading="lazy" />`)
+        .join('');
+      el.querySelector('.bubble').appendChild(imgs);
     }
     if (typeof index === 'number') {
       const acts = document.createElement('div');
@@ -1132,12 +1142,15 @@ async function sendMessage(preset) {
   let conv = currentConv() || newConv();
   // Attached files travel with the message so the agent knows what to read.
   const attached = refs.slice();
+  // Attached images travel as multimodal content for vision-capable models.
+  const shots = images.slice();
   const content = attached.length
     ? text + '\n\n' + attached.map((p) => `（请参考工作区文件：${p}）`).join('\n')
     : text;
-  conv.messages.push({ role: 'user', content, display: text, refs: attached });
+  conv.messages.push({ role: 'user', content, display: text, refs: attached, images: shots });
   input.value = '';
   clearRefs();
+  clearImages();
   closeAc();
   autoGrow();
   renderMessages();
@@ -1376,6 +1389,8 @@ function editUserMessage(index) {
   $('input').value = m.display || m.content || '';
   refs = Array.isArray(m.refs) ? m.refs.slice() : [];
   renderRefs();
+  images = Array.isArray(m.images) ? m.images.slice() : [];
+  renderImages();
   conv.messages = conv.messages.slice(0, index);
   saveConvs();
   renderMessages();
@@ -1456,6 +1471,9 @@ function conversationToMarkdown(conv) {
       lines.push('## 🧑 我', '', (m.display || m.content || '').trim(), '');
       if (Array.isArray(m.refs) && m.refs.length) {
         lines.push('引用文件：' + m.refs.map((p) => '`' + p + '`').join('、'), '');
+      }
+      if (Array.isArray(m.images) && m.images.length) {
+        lines.push(`附图：${m.images.length} 张（多模态输入，已随消息发送）`, '');
       }
     } else if (m.role === 'assistant') {
       lines.push('## 🤖 Agenite', '');
@@ -2336,6 +2354,52 @@ function renderRefs() {
       `<button class="ref-x" data-p="${escapeHtml(p)}" aria-label="移除">✕</button></span>`
     ).join('');
   bar.querySelectorAll('.ref-x').forEach((b) => { b.onclick = () => removeRef(b.dataset.p); });
+}
+
+// ---------- attached images (multimodal) ----------
+// Images are stored as data URLs so they can be both previewed in the bubble
+// and forwarded verbatim to vision-capable models as image_url / base64 parts.
+function addImage(dataUrl) {
+  if (!dataUrl || images.includes(dataUrl)) return;
+  if (images.length >= 10) return toast('单次最多附带 10 张图片');
+  images.push(dataUrl);
+  renderImages();
+}
+function removeImage(src) {
+  images = images.filter((u) => u !== src);
+  renderImages();
+}
+function clearImages() {
+  images = [];
+  renderImages();
+}
+function renderImages() {
+  const bar = $('img-bar');
+  const btn = $('img-btn');
+  if (!images.length) {
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+    if (btn) btn.classList.remove('has-img');
+    return;
+  }
+  if (btn) btn.classList.add('has-img');
+  bar.classList.remove('hidden');
+  bar.innerHTML =
+    '<span class="ref-label">图片</span>' +
+    images.map((src, i) =>
+      `<span class="img-thumb" title="附件图片 ${i + 1}">` +
+      `<img src="${escapeHtml(src)}" alt="" /><button class="img-x" data-src="${escapeHtml(src)}" aria-label="移除">✕</button></span>`
+    ).join('');
+  bar.querySelectorAll('.img-x').forEach((b) => { b.onclick = () => removeImage(b.dataset.src); });
+}
+function readImageFiles(fileList) {
+  for (const file of fileList) {
+    if (!file.type.startsWith('image/')) { toast('已跳过非图片文件：' + file.name); continue; }
+    const reader = new FileReader();
+    reader.onload = () => addImage(String(reader.result));
+    reader.onerror = () => toast('图片读取失败：' + file.name);
+    reader.readAsDataURL(file);
+  }
 }
 
 // ---------- misc ----------
@@ -3918,6 +3982,16 @@ function wire() {
     autoGrow();
     updateAc();
   };
+  // Image attach: open the native picker; pasting an image from clipboard also works.
+  $('img-btn').onclick = () => $('img-input').click();
+  $('img-input').onchange = (e) => { readImageFiles(e.target.files); e.target.value = ''; };
+  $('input').addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const it of items) if (it.kind === 'file' && it.type.startsWith('image/')) files.push(it.getAsFile());
+    if (files.length) { e.preventDefault(); readImageFiles(files); }
+  });
   $('chat-title').ondblclick = () => renameCurrent();
   $('close-keys').onclick = closeKeys;
   $('keys-modal').addEventListener('mousedown', (e) => { if (e.target === $('keys-modal')) closeKeys(); });
@@ -3937,6 +4011,11 @@ function wire() {
     if (e.key === 'Backspace' && !$('input').value && refs.length) {
       e.preventDefault();
       removeRef(refs[refs.length - 1]);
+    }
+    // …or the last attached image
+    if (e.key === 'Backspace' && !$('input').value && images.length) {
+      e.preventDefault();
+      removeImage(images[images.length - 1]);
     }
   });
 

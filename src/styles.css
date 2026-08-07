@@ -806,6 +806,24 @@ kbd {
 .ref-x:hover { background: var(--border); color: var(--text); }
 .msg-refs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 
+/* attached images in the composer preview bar */
+.img-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: var(--read-w); margin: 0 auto 7px; padding: 0 2px; }
+.img-thumb { position: relative; display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; line-height: 0; }
+.img-thumb img { height: 40px; width: 40px; object-fit: cover; display: block; }
+.img-thumb .img-x {
+  position: absolute; top: 1px; right: 1px;
+  width: 16px; height: 16px; border: 0; border-radius: 50%;
+  background: rgba(0,0,0,.6); color: #fff; cursor: pointer;
+  font-size: 9px; line-height: 16px; padding: 0;
+}
+.img-thumb .img-x:hover { background: var(--danger, #e5484d); }
+
+/* images rendered inside a user message bubble */
+.msg-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.msg-img { max-width: 220px; max-height: 220px; border-radius: 10px; border: 1px solid var(--border); object-fit: cover; cursor: zoom-in; }
+.msg-img:hover { border-color: var(--accent); }
+.mini-chip.ghost#img-btn.has-img { color: var(--accent); border-color: var(--accent); }
+
 /* autocomplete popup shared by "@" and "/" */
 .ac-pop {
   position: absolute;

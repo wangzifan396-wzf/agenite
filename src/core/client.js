@@ -1,7 +1,7 @@
 // Network layer: stream chat completions from OpenAI-compatible or Anthropic
 // providers. Uses global fetch (Node 18+). The fetch implementation is
 // injectable so the streaming logic can be unit-tested without real network.
-import { toOpenAITools, toAnthropicTools, toAnthropicMessages, normalizeToolCalls, anthropicBlocksToMessage } from './provider.js';
+import { toOpenAITools, toOpenAIMessages, toAnthropicTools, toAnthropicMessages, normalizeToolCalls, anthropicBlocksToMessage } from './provider.js';
 
 // Parse one SSE line ("data: {...}"). Returns the parsed object or null.
 export function parseSSELine(line) {
@@ -17,9 +17,10 @@ export function parseSSELine(line) {
 }
 
 export async function callOpenAIStream({ config, messages, tools = [], onDelta, signal, fetchImpl = globalThis.fetch }) {
+  const oaMessages = toOpenAIMessages(messages);
   const body = {
     model: config.model,
-    messages,
+    messages: oaMessages,
     temperature: config.temperature,
     max_tokens: config.maxTokens,
     top_p: config.topP,
