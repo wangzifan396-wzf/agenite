@@ -587,6 +587,7 @@ const ICO_COPY = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" st
 const ICO_REDO = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>';
 const ICO_EDIT = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 const ICO_BRANCH = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/><circle cx="17" cy="9" r="2.2"/><path d="M7 8.2v7.6M17 11.2c0 4-5 2.4-5 6.2"/></svg>';
+const ICO_SPEAK = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
 
 function actionBtn(cls, icon, label, idx) {
   return `<button class="msg-act ${cls}" data-idx="${idx}" title="${label}" aria-label="${label}">${icon}<span>${label}</span></button>`;
@@ -650,7 +651,7 @@ function buildMessageEl(m, index) {
       acts.querySelector('.plan-approve-btn').onclick = () => approvePlanWith(area.value);
       acts.querySelector('.plan-reject-btn').onclick = () => rejectPlan();
     } else {
-      acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) + actionBtn('act-branch', ICO_BRANCH, '分支', index) + actionBtn('act-redo', ICO_REDO, '重新生成', index);
+      acts.innerHTML = actionBtn('act-copy', ICO_COPY, '复制', index) + actionBtn('act-speak', ICO_SPEAK, '朗读', index) + actionBtn('act-branch', ICO_BRANCH, '分支', index) + actionBtn('act-redo', ICO_REDO, '重新生成', index);
     }
     el.appendChild(acts);
   }
@@ -3964,6 +3965,100 @@ function wire() {
   $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
   $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
 
+  // ---------- voice: 语音输入（听写）+ 朗读 ----------
+  // 纯浏览器能力（Web Speech API），零依赖；不支持的浏览器自动降级隐藏。
+  let recognition = null;
+  let dictating = false;
+  let speakingIdx = null;
+
+  function pickZhVoice() {
+    const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+    return vs.find((v) => /zh|cmn|Chinese/i.test(v.lang + ' ' + v.name)) || null;
+  }
+  function plainTextForSpeech(m) {
+    if (!m) return '';
+    let s = m.display || m.content || '';
+    if (typeof s !== 'string') return '';
+    return s
+      .replace(/```[\s\S]*?```/g, '（代码已省略）')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/[*_~>#-]/g, '')
+      .replace(/\n{2,}/g, '\n')
+      .trim();
+  }
+  function markSpeakBtn(btn, on) {
+    document.querySelectorAll('.msg-act.act-speak').forEach((b) => b.classList.remove('speaking'));
+    if (btn) btn.classList.toggle('speaking', !!on);
+  }
+  function stopSpeaking() {
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    speakingIdx = null;
+    markSpeakBtn(null, false);
+  }
+  function speakMessage(idx, btn) {
+    if (!('speechSynthesis' in window)) { toast('当前浏览器不支持语音朗读'); return; }
+    const conv = currentConv();
+    const m = conv && conv.messages[idx];
+    const text = plainTextForSpeech(m);
+    if (!text) return;
+    if (speakingIdx === idx && window.speechSynthesis.speaking) { stopSpeaking(); return; }
+    stopSpeaking();
+    const u = new SpeechSynthesisUtterance(text);
+    const v = pickZhVoice();
+    if (v) u.voice = v;
+    u.lang = (v && v.lang) || 'zh-CN';
+    u.rate = 1.04;
+    u.onend = () => { speakingIdx = null; markSpeakBtn(null, false); };
+    u.onerror = () => { speakingIdx = null; markSpeakBtn(null, false); };
+    speakingIdx = idx;
+    markSpeakBtn(btn, true);
+    window.speechSynthesis.speak(u);
+  }
+  function stopDictation() {
+    dictating = false;
+    if (recognition) { try { recognition.stop(); } catch (e) {} recognition = null; }
+    const mic = $('mic');
+    if (mic) { mic.classList.remove('recording'); mic.title = '语音输入（普通话）'; }
+  }
+  function toggleDictation() {
+    if (dictating) { stopDictation(); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { toast('当前浏览器不支持语音输入（建议用 Chrome / Edge）'); return; }
+    recognition = new SR();
+    recognition.lang = 'zh-CN';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    const ta = $('input');
+    recognition.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        const txt = res[0].transcript;
+        if (res.isFinal) ta.value += (ta.value && !/\s$/.test(ta.value) ? ' ' : '') + txt;
+      }
+      autoGrow();
+    };
+    recognition.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('麦克风权限被拒绝');
+      else if (e.error !== 'no-speech') toast('语音识别出错：' + e.error);
+      stopDictation();
+    };
+    recognition.onend = () => { if (dictating) stopDictation(); };
+    try { recognition.start(); } catch (e) { /* 已在听写则忽略 */ }
+    dictating = true;
+    const mic = $('mic');
+    if (mic) { mic.classList.add('recording'); mic.title = '正在听写…点击停止'; }
+    toast('🎤 正在听写，开始说话…', 1800);
+  }
+  // 不支持语音输入的浏览器隐藏麦克风按钮
+  if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) {
+    const micEl = $('mic');
+    if (micEl) micEl.classList.add('hidden');
+  }
+  $('mic').onclick = toggleDictation;
+
   $('messages').addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-btn');
     if (copyBtn) {
@@ -4010,6 +4105,7 @@ function wire() {
     const msg = conv.messages[idx];
     if (!msg) return;
     if (act.classList.contains('act-copy')) copyText(msg.display || msg.content || '');
+    else if (act.classList.contains('act-speak')) speakMessage(idx, act);
     else if (act.classList.contains('act-branch')) branchFrom(idx);
     else if (act.classList.contains('act-edit')) editUserMessage(idx);
     else if (act.classList.contains('act-redo')) regenerateFrom(idx);
