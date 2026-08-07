@@ -235,6 +235,19 @@ button { cursor: pointer; background: none; border: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.conv-fork-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 5px;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--accent, #5b7cfa);
+  background: color-mix(in srgb, var(--accent, #5b7cfa) 16%, transparent);
+  border-radius: 5px;
+  vertical-align: middle;
+}
 .conv-del {
   opacity: 0;
   color: var(--muted);
