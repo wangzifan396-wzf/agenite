@@ -550,7 +550,8 @@ function buildEmptyState() {
     { ico: '🗺️', t: '长期记忆', d: '跨会话记住你，技能复利，越用越懂' },
     { ico: '📋', t: '计划模式', d: '先出方案、可改可拒，批准后再执行' },
     { ico: '🖼️', t: '多模态看图', d: '附上图片，视觉模型直接看图理解、识别、分析' },
-    { ico: '🎯', t: '对话专属指令', d: '给某次对话单独设定语气与规则，优先级高于全局提示' }
+    { ico: '🎯', t: '对话专属指令', d: '给某次对话单独设定语气与规则，优先级高于全局提示' },
+    { ico: '💭', t: '推理过程可见', d: 'DeepSeek-R1 / Qwen 思考模型边想边展示，可折叠回看' }
   ];
   const feat = features.map((f) =>
     `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
@@ -630,6 +631,7 @@ function buildMessageEl(m, index) {
   el.innerHTML = '<div class="avatar">A</div><div class="bubble"><div class="notices"></div><div class="tools"></div><div class="md"></div></div>';
   el.querySelector('.md').innerHTML = renderMarkdown(m.content || '') || '';
   highlightRoot(el.querySelector('.md'));
+  renderReasoningBlock(el, m);
   if (Array.isArray(m.toolCalls)) for (const t of m.toolCalls) upsertToolCard(el, t);
   if (Array.isArray(m.notices)) for (const n of m.notices) addNotice(el, n);
   if (m.selfCheck) renderSelfCheck(el, m.selfCheck);
@@ -668,6 +670,33 @@ function buildMessageEl(m, index) {
     el.appendChild(acts);
   }
   return el;
+}
+
+// Render (or live-update) a collapsible "chain of thought" block for a reply.
+// Reasoning models (DeepSeek-R1 / Qwen3-thinking / Claude thinking) stream this
+// as `reasoning` SSE chunks; we keep it collapsed by default so it never crowds
+// the answer but stays one click away. Auto-expands while still streaming.
+function renderReasoningBlock(el, m) {
+  const bubble = el.querySelector('.bubble');
+  if (!bubble) return;
+  const md = el.querySelector('.md');
+  const text = (m && m.reasoning) || '';
+  let box = el.querySelector('.reasoning-block');
+  if (!text) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'reasoning-block';
+    box.innerHTML =
+      '<details class="reasoning-details">' +
+        '<summary><span class="reasoning-ico">💭</span> 思考过程</summary>' +
+        '<div class="reasoning-body"></div>' +
+      '</details>';
+    bubble.insertBefore(box, md);
+  }
+  box.querySelector('.reasoning-body').textContent = text;
+  // While the answer text hasn't started streaming yet, the model is still
+  // "thinking" — keep the block open so the user sees live reasoning.
+  if (m && m.role === 'assistant' && !m.content) box.querySelector('.reasoning-details').open = true;
 }
 
 // An inline, low-key strip inside a reply — used for "history was compacted"
@@ -1239,6 +1268,9 @@ async function runTurn(conv, opts = {}) {
       if (event === 'delta') {
         aMsg.content += data.content || '';
         paintOrThinking(md, aMsg.content);
+      } else if (event === 'reasoning') {
+        aMsg.reasoning = (aMsg.reasoning || '') + (data.content || '');
+        renderReasoningBlock(el, aMsg);
       } else if (event === 'approval') {
         handleApprovalRequest(data);
       } else if (event === 'tool_start') {

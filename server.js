@@ -977,8 +977,8 @@ async function resolvePersonaText(config, memoryBase) {
 // Build the per-request model caller. Shared by the chat loop and the eval
 // replay loop so they always speak to the provider identically.
 function buildCallModel(config, tools, signal) {
-  return (msgs, { onDelta } = {}) =>
-    callModelStream({ config, messages: msgs, tools, onDelta, signal });
+  return (msgs, { onDelta, onReasoning } = {}) =>
+    callModelStream({ config, messages: msgs, tools, onDelta, onReasoning, signal });
 }
 
 // ── Local knowledge base (RAG) API ─────────────────────────────────────────
@@ -1227,6 +1227,7 @@ async function handleChat(req, res) {
   const onEvent = (type, payload) => {
     // forward to the client unchanged
     if (type === 'delta') sse('delta', { content: payload });
+    else if (type === 'reasoning') sse('reasoning', { content: payload });
     else if (type === 'tool_start') sse('tool_start', payload);
     else if (type === 'tool') sse('tool', payload);
     else if (type === 'compact') sse('compact', payload);

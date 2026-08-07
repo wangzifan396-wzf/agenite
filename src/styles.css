@@ -806,6 +806,37 @@ kbd {
 .ref-x:hover { background: var(--border); color: var(--text); }
 .msg-refs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 
+/* collapsible chain-of-thought block for reasoning models */
+.reasoning-block { margin: 2px 0 12px; }
+.reasoning-details {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2, rgba(127,127,127,.06));
+  overflow: hidden;
+}
+.reasoning-details > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  user-select: none;
+}
+.reasoning-details > summary::-webkit-details-marker { display: none; }
+.reasoning-details > summary::before { content: '▸ '; opacity: .7; }
+.reasoning-details[open] > summary::before { content: '▾ '; }
+.reasoning-ico { margin-right: 4px; }
+.reasoning-body {
+  padding: 2px 14px 12px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-2, #8a93a6);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px dashed var(--border);
+}
+
 /* attached images in the composer preview bar */
 .img-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: var(--read-w); margin: 0 auto 7px; padding: 0 2px; }
 .img-thumb { position: relative; display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; line-height: 0; }

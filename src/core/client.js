@@ -16,7 +16,7 @@ export function parseSSELine(line) {
   }
 }
 
-export async function callOpenAIStream({ config, messages, tools = [], onDelta, signal, fetchImpl = globalThis.fetch }) {
+export async function callOpenAIStream({ config, messages, tools = [], onDelta, onReasoning, signal, fetchImpl = globalThis.fetch }) {
   const oaMessages = toOpenAIMessages(messages);
   const body = {
     model: config.model,
@@ -49,6 +49,7 @@ export async function callOpenAIStream({ config, messages, tools = [], onDelta, 
   const decoder = new TextDecoder();
   let buf = '';
   let content = '';
+  let reasoning = '';
   const toolAcc = {};
   let usage = null;
 
@@ -71,6 +72,16 @@ export async function callOpenAIStream({ config, messages, tools = [], onDelta, 
         content += delta.content;
         if (onDelta) onDelta(delta.content);
       }
+      // Reasoning models (DeepSeek-R1, Qwen3-thinking, o1-like) stream their
+      // chain-of-thought under `reasoning_content` (or `reasoning` on some
+      // OpenAI-compatible gateways). Surface it so the UI can show "thinking".
+      if (delta.reasoning_content) {
+        reasoning += delta.reasoning_content;
+        if (onReasoning) onReasoning(delta.reasoning_content);
+      } else if (delta.reasoning) {
+        reasoning += delta.reasoning;
+        if (onReasoning) onReasoning(delta.reasoning);
+      }
       if (Array.isArray(delta.tool_calls)) {
         for (const tc of delta.tool_calls) {
           const idx = tc.index != null ? tc.index : 0;
@@ -89,10 +100,10 @@ export async function callOpenAIStream({ config, messages, tools = [], onDelta, 
     .sort((a, b) => a - b)
     .map((k) => ({ id: toolAcc[k].id || toolAcc[k].name, type: 'function', function: { name: toolAcc[k].name, arguments: toolAcc[k].args } }));
   const toolCalls = normalizeToolCalls(rawToolCalls);
-  return { content, toolCalls, usage };
+  return { content, toolCalls, usage, reasoning };
 }
 
-export async function callAnthropicStream({ config, messages, tools = [], onDelta, signal, fetchImpl = globalThis.fetch }) {
+export async function callAnthropicStream({ config, messages, tools = [], onDelta, onReasoning, signal, fetchImpl = globalThis.fetch }) {
   const { system, messages: antMessages } = toAnthropicMessages(messages);
   const body = {
     model: config.model,
@@ -123,7 +134,9 @@ export async function callAnthropicStream({ config, messages, tools = [], onDelt
   let buf = '';
   const blocks = [];
   let text = '';
+  let reasoning = '';
   let currentTool = null;
+  let currentText = null;
   let usage = null;
   let stopReason = null;
 
@@ -146,16 +159,22 @@ export async function callAnthropicStream({ config, messages, tools = [], onDelt
           if (b.type === 'tool_use') {
             currentTool = { type: 'tool_use', id: b.id, name: b.name, input: '' };
             blocks.push(currentTool);
+          } else if (b.type === 'text') {
+            currentText = { type: 'text', text: '' };
+            blocks.push(currentText);
           }
           break;
         }
         case 'content_block_delta': {
           const d = evt.delta;
           if (d.type === 'text_delta') {
-            text += d.text;
+            if (currentText) currentText.text += d.text; else text += d.text;
             if (onDelta) onDelta(d.text);
           } else if (d.type === 'input_json_delta' && currentTool) {
             currentTool.input += d.partial_json;
+          } else if (d.type === 'thinking_delta') {
+            reasoning += d.thinking;
+            if (onReasoning) onReasoning(d.thinking);
           }
           break;
         }
@@ -175,14 +194,14 @@ export async function callAnthropicStream({ config, messages, tools = [], onDelt
   }
 
   const msg = anthropicBlocksToMessage(blocks, stopReason);
-  return { content: msg.content, toolCalls: msg.toolCalls, usage };
+  return { content: msg.content, toolCalls: msg.toolCalls, usage, reasoning };
 }
 
-export function callModelStream({ config, messages, tools, onDelta, signal, fetchImpl }) {
+export function callModelStream({ config, messages, tools, onDelta, onReasoning, signal, fetchImpl }) {
   if (config.protocol === 'anthropic') {
-    return callAnthropicStream({ config, messages, tools, onDelta, signal, fetchImpl });
+    return callAnthropicStream({ config, messages, tools, onDelta, onReasoning, signal, fetchImpl });
   }
-  return callOpenAIStream({ config, messages, tools, onDelta, signal, fetchImpl });
+  return callOpenAIStream({ config, messages, tools, onDelta, onReasoning, signal, fetchImpl });
 }
 
 // Map a raw provider HTTP error to a friendly, actionable message. Shared by

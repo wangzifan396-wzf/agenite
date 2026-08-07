@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyProviderError, verifyKey } from '../src/core/client.js';
+import { classifyProviderError, verifyKey, callOpenAIStream, callAnthropicStream } from '../src/core/client.js';
+
+// Build a fake fetch response whose body is a ReadableStream yielding the given
+// raw SSE string chunks (mirrors what a real provider streams over HTTP).
+function fakeSseResponse(chunks) {
+  const enc = new TextEncoder();
+  return {
+    ok: true,
+    status: 200,
+    body: new ReadableStream({
+      start(ctrl) {
+        for (const c of chunks) ctrl.enqueue(enc.encode(c));
+        ctrl.close();
+      }
+    })
+  };
+}
 
 test('classifyProviderError maps status to friendly classes', () => {
   assert.equal(classifyProviderError(401).errorClass, 'AUTH');
@@ -70,4 +86,39 @@ test('verifyKey maps a timeout (AbortError) to TIMEOUT', async () => {
   const r = await verifyKey({ provider: 'openai', baseURL: 'https://api.openai.com/v1', model: 'gpt-4o', apiKey: 'sk-x' }, { fetchImpl, timeoutMs: 100 });
   assert.equal(r.ok, false);
   assert.equal(r.errorClass, 'TIMEOUT');
+});
+
+test('callOpenAIStream captures reasoning_content separately from content', async () => {
+  const chunks = [
+    'data: {"choices":[{"delta":{"reasoning_content":"让我先拆解需求"}}]}\n\n',
+    'data: {"choices":[{"delta":{"reasoning_content":"，再决定实现方案"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"好的，开始。"}}]}\n\n',
+    'data: [DONE]\n\n'
+  ];
+  const fetchImpl = async () => fakeSseResponse(chunks);
+  const r = await callOpenAIStream({
+    config: { model: 'deepseek-reasoner', baseURL: 'https://api.openai.com/v1', apiKey: 'k' },
+    messages: [{ role: 'user', content: 'hi' }],
+    fetchImpl
+  });
+  assert.equal(r.content, '好的，开始。');
+  assert.equal(r.reasoning, '让我先拆解需求，再决定实现方案');
+});
+
+test('callAnthropicStream captures thinking_delta as reasoning', async () => {
+  const chunks = [
+    'data: {"type":"content_block_start","content_block":{"type":"thinking"}}\n',
+    'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm, let me think"}}\n',
+    'data: {"type":"content_block_start","content_block":{"type":"text"}}\n',
+    'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi there"}}\n',
+    'data: {"type":"message_stop"}\n'
+  ];
+  const fetchImpl = async () => fakeSseResponse(chunks);
+  const r = await callAnthropicStream({
+    config: { model: 'claude-3-7-sonnet', protocol: 'anthropic', baseURL: 'https://api.anthropic.com', apiKey: 'sk-ant-x' },
+    messages: [{ role: 'user', content: 'hi' }],
+    fetchImpl
+  });
+  assert.equal(r.content, 'hi there');
+  assert.equal(r.reasoning, 'hmm, let me think');
 });

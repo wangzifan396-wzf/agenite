@@ -7,6 +7,7 @@
 // toolContext: extra opts handed to executeTool (workspace, approval hook, ...)
 // onEvent(type, payload):
 //   'delta'      (text chunk, for streaming UI)
+//   'reasoning'  (chain-of-thought chunk, for reasoning models)
 //   'assistant'  (full assistant message object)
 //   'tool_start' ({ id, name, args })
 //   'tool'       ({ id, name, args, result, ok, ms, diff, undoToken })
@@ -85,9 +86,10 @@ export async function runAgent({
       // One final summary turn. We ignore any tool_calls it returns — the
       // instruction above already told the model to stop; if it still asks for
       // tools we end the run anyway rather than keep spending.
-      const r = await callModel(messages, { onDelta: (t) => onEvent('delta', t) });
+      const r = await callModel(messages, { onDelta: (t) => onEvent('delta', t), onReasoning: (t) => onEvent('reasoning', t) });
       if (r.usage) { addUsage(usage, r.usage); onEvent('usage', { turn: turn + 1, ...usage, cost: costOf(usage, price) }); }
       const finalMsg = { role: 'assistant', content: r.content || '' };
+      if (r.reasoning) finalMsg.reasoning = r.reasoning;
       messages.push(finalMsg);
       onEvent('assistant', finalMsg);
       const payload = finish('guardrail', turn + 1, usage, price, limit);
@@ -114,8 +116,10 @@ export async function runAgent({
       }
     }
 
+    let reasoningAcc = '';
     const { content, toolCalls, usage: turnUsage } = await callModel(messages, {
-      onDelta: (t) => onEvent('delta', t)
+      onDelta: (t) => onEvent('delta', t),
+      onReasoning: (t) => { reasoningAcc += t; onEvent('reasoning', t); }
     });
 
     if (turnUsage) {
@@ -124,6 +128,7 @@ export async function runAgent({
     }
 
     const assistantMsg = { role: 'assistant', content: content || '' };
+    if (reasoningAcc) assistantMsg.reasoning = reasoningAcc;
     if (toolCalls && toolCalls.length) {
       assistantMsg.tool_calls = toolCalls.map((tc) => ({
         id: tc.id,
