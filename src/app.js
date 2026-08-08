@@ -556,7 +556,11 @@ function buildEmptyState() {
     { ico: '💭', t: '推理过程可见', d: 'DeepSeek-R1 / Qwen 思考模型边想边展示，可折叠回看' },
     { ico: '🔎', t: '全局搜索', d: 'Ctrl+Shift+F 跨所有对话查找消息，命中即跳转高亮' },
     { ico: '⚡', t: '自定义指令', d: '常用提示词存进指令库，直接以 / 命令呼出，一键载入' },
-    { ico: '📤', t: '导出独立 HTML', d: '/export-html 把整段对话导出为可分享的单文件网页' }
+    { ico: '📤', t: '导出独立 HTML', d: '/export-html 把整段对话导出为可分享的单文件网页' },
+    { ico: '📚', t: '本地知识库', d: '本地 RAG 检索你的文档，对话时按相关片段引用，知识越用越准' },
+    { ico: '🔊', t: '语音朗读', d: '回复可一键朗读，眼睛休息也能听完全程' },
+    { ico: '🌿', t: '对话分支', d: '任意节点分叉出新对话，非破坏性回退，放心试错' },
+    { ico: '💰', t: 'Token / 成本', d: '实时统计 token 消耗与预估花费，按模型单价透明可见' }
   ];
   const feat = features.map((f) =>
     `<div class="welcome-feature"><div class="wf-ico">${f.ico}</div><div class="wf-t">${escapeHtml(f.t)}</div><div class="wf-d">${escapeHtml(f.d)}</div></div>`
