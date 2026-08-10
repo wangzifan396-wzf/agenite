@@ -607,6 +607,17 @@
           <label class="field">自定义验证命令（可选）
             <input id="set-verifyCmd" type="text" placeholder="如 npm test 或 pytest -q（留空=自动探测）" spellcheck="false" />
           </label>
+          <div class="field">
+            <span class="field-title">上下文压缩<em class="muted small">超大的工具结果在进入对话前就按内容类型压缩：JSON 折成结构骨架并保留异常元素、日志重复行折成 ×N、源码折成声明轮廓。原文完整留在本地缓存，模型可用 context_retrieve 随时取回——是压缩，不是截断</em></span>
+            <select id="set-contextCompress">
+              <option value="off">关闭（工具结果原样进入对话）</option>
+              <option value="smart">智能压缩（只压真正超大的结果 · 推荐）</option>
+              <option value="aggressive">激进压缩（小上下文窗口 / 贵模型）</option>
+            </select>
+          </div>
+          <label class="field">压缩触发阈值（字符）
+            <input id="set-compressThreshold" type="number" min="400" max="200000" step="100" placeholder="2000" />
+          </label>
           <label class="switch-row">
             <span><b>允许访问工作区之外</b><em>关闭时只能操作启动目录内的文件</em></span>
             <input id="set-allowOutside" type="checkbox" />

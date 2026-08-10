@@ -3,7 +3,7 @@
 // Talks to the local server, which is the part that can actually touch the machine.
 import { renderMarkdown } from './core/markdown.js';
 import { uid, escapeHtml, fuzzyFilter, formatBytes } from './core/util.js';
-import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, VERIFY_LEVELS, modelsForProvider, modelLabel } from './core/config.js';
+import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, VERIFY_LEVELS, COMPRESS_MODES, modelsForProvider, modelLabel } from './core/config.js';
 import { errorHint, errorSeverity } from './core/errors.js';
 import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
 
@@ -758,7 +758,11 @@ function addNotice(el, n) {
   if (!box) return;
   const div = document.createElement('div');
   div.className = 'notice ' + (n.kind || 'info');
-  const ico = n.kind === 'compact' ? '⛁' : (n.kind && n.kind.indexOf('verify') === 0 ? (n.kind.indexOf('fail') >= 0 ? '✗' : '✓') : 'ℹ');
+  const ico = n.kind === 'compact'
+    ? '⛁'
+    : n.kind === 'shrink'
+      ? '⧉'
+      : (n.kind && n.kind.indexOf('verify') === 0 ? (n.kind.indexOf('fail') >= 0 ? '✗' : '✓') : 'ℹ');
   div.innerHTML = `<span class="notice-ico">${ico}</span><span></span>`;
   div.lastElementChild.textContent = n.text;
   if (n.detail) div.title = n.detail;
@@ -1388,6 +1392,31 @@ async function runTurn(conv, opts = {}) {
         };
         aMsg.notices.push(n);
         addNotice(el, n);
+      } else if (event === 'shrink') {
+        // Context economy: a single oversized tool result got compressed on its
+        // way into the history. These can fire many times per run, so instead of
+        // stacking N notices we keep one and update it in place — the user wants
+        // the running total, not a play-by-play.
+        aMsg.shrink = aMsg.shrink || { n: 0, saved: 0, kinds: {} };
+        aMsg.shrink.n++;
+        aMsg.shrink.saved += Number(data.savedTokens) || 0;
+        const method = data.method || data.kind || 'compress';
+        aMsg.shrink.kinds[method] = (aMsg.shrink.kinds[method] || 0) + 1;
+        const text = `⧉ 上下文压缩 ${aMsg.shrink.n} 次，省约 ${fmtTokens(aMsg.shrink.saved)} tokens（原文可取回）`;
+        const detail = Object.entries(aMsg.shrink.kinds).map(([k, v]) => `${k} ×${v}`).join('\n') +
+          '\n\n原文完整保留在本地缓存中，模型可用 context_retrieve 按需取回，不是截断丢弃。';
+        if (!aMsg.shrinkNotice) {
+          aMsg.shrinkNotice = { kind: 'shrink', text, detail };
+          aMsg.notices.push(aMsg.shrinkNotice);
+          aMsg.shrinkEl = addNotice(el, aMsg.shrinkNotice);
+        } else {
+          aMsg.shrinkNotice.text = text;
+          aMsg.shrinkNotice.detail = detail;
+          if (aMsg.shrinkEl) {
+            aMsg.shrinkEl.lastElementChild.textContent = text;
+            aMsg.shrinkEl.title = detail;
+          }
+        }
       } else if (event === 'usage') {
         setUsageFrom(turnUsage, data);
         aMsg.usage = { ...turnUsage };
@@ -2112,6 +2141,8 @@ function fillSettings() {
   $('set-dangerTools').checked = !!config.dangerTools;
   $('set-autoVerify').value = VERIFY_LEVELS.includes(config.autoVerify) ? config.autoVerify : 'syntax';
   $('set-verifyCmd').value = config.verifyCmd || '';
+  $('set-contextCompress').value = COMPRESS_MODES.includes(config.contextCompress) ? config.contextCompress : 'smart';
+  $('set-compressThreshold').value = config.compressThreshold || 2000;
   $('set-allowOutside').checked = !!config.allowOutsideWorkspace;
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
@@ -2291,6 +2322,8 @@ function saveSettings() {
     dangerTools: $('set-dangerTools').checked,
     autoVerify: VERIFY_LEVELS.includes($('set-autoVerify').value) ? $('set-autoVerify').value : 'syntax',
     verifyCmd: ($('set-verifyCmd').value || '').trim().slice(0, 300),
+    contextCompress: COMPRESS_MODES.includes($('set-contextCompress').value) ? $('set-contextCompress').value : 'smart',
+    compressThreshold: Number($('set-compressThreshold').value) || 2000,
     allowOutsideWorkspace: $('set-allowOutside').checked,
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,

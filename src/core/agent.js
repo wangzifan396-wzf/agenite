@@ -12,10 +12,13 @@
 //   'tool_start' ({ id, name, args })
 //   'tool'       ({ id, name, args, result, ok, ms, diff, undoToken })
 //   'compact'    ({ before, after, dropped, trimmed })  history was shrunk
+//   'shrink'     ({ tool, handle, kind, method, before, after, savedTokens })
+//                a single oversized tool result was compressed on the way in
 //   'todo'       ({ items, progress, updates })  live task checklist changed
 //   'usage'      ({ turn, prompt, completion, total })  one API call's usage
 //   'done'       ({ usage, cost, stopped, turns, canContinue })
 
+import { compressBudget, compressContent, retrieveHint } from './compress.js';
 import { compactMessages, contextWindowFor, historyBudget, toolsTokens, totalTokens } from './context.js';
 import { addUsage, costOf, emptyUsage, priceFor } from './pricing.js';
 import { todoProgress, todoReminder } from './todo.js';
@@ -31,8 +34,14 @@ export const PARALLEL_SAFE_TOOLS = new Set([
   'calculator', 'current_datetime', 'system_info',
   'web_fetch', 'web_search',
   'read_file', 'list_dir', 'find_files', 'grep_files', 'codebase_search',
-  'memory_recall'
+  'memory_recall', 'context_retrieve'
 ]);
+
+// Results we never shrink. `context_retrieve` is the escape hatch out of
+// compression — compressing its output would be a loop with no exit. The rest
+// are short, structured, and load-bearing: a truncated todo echo or plan would
+// make the model think its own state was corrupted.
+const NEVER_COMPRESS = new Set(['context_retrieve', 'todo_write', 'plan', 'verify', 'git']);
 
 // Tools that can change the workspace on disk (or run commands that do). The
 // git safety net commits after any turn where one of these *succeeded*, and the
@@ -128,6 +137,62 @@ export async function runAgent({
   let verifyFixes = 0;
   let verifyGaveUp = false;
 
+  // ── Context economy ──
+  // Shrink oversized tool output on the way into the history instead of waiting
+  // for the window to overflow. autoCompact fixes the symptom once per run and
+  // charges you for every wasted token until then; this fixes the cause on the
+  // very first turn, and every later turn stops re-sending the bloat.
+  //
+  // The hard invariant: we only compress when a ContextStore is present, so a
+  // compressed result is *always* retrievable in full via context_retrieve.
+  // Without that guarantee this would just be truncation with better PR.
+  const store = opts.contextStore && typeof opts.contextStore.put === 'function' ? opts.contextStore : null;
+  const compressMode = config.contextCompress || 'smart';
+  const compressOn = store && compressMode !== 'off';
+  const cbudget = compressBudget(compressMode, config.compressThreshold);
+  const shrinkStats = { count: 0, savedTokens: 0, savedChars: 0 };
+
+  function shrinkToolResult(tc, content, res) {
+    if (!compressOn) return content;
+    if (typeof content !== 'string' || content.length <= cbudget.threshold) return content;
+    if (NEVER_COMPRESS.has(tc.name)) return content;
+    // A failed call's text is an error message; it is short, and every word of
+    // it is the thing the model needs to recover. Never touch it.
+    if (res && res.ok === false) return content;
+
+    const a = tc.args || {};
+    const info = compressContent(content, {
+      name: tc.name,
+      path: typeof a.path === 'string' ? a.path : '',
+      // Give the code outliner something to aim at: what the model was
+      // actually looking for is far more useful than the first 40 lines.
+      query: String(a.query || a.pattern || a.q || ''),
+      target: cbudget.target
+    });
+    if (!info.saved || info.savedTokens <= 0) return content;
+
+    const handle = store.put(content, { tool: tc.name, args: a, at: Date.now() });
+    const out = info.text + retrieveHint(handle, info);
+    // Guard against the pathological case where the hint costs more than the
+    // compression saved (a result barely over the threshold).
+    if (out.length >= content.length) { store.drop(handle); return content; }
+
+    shrinkStats.count++;
+    shrinkStats.savedTokens += info.savedTokens;
+    shrinkStats.savedChars += info.saved;
+    onEvent('shrink', {
+      tool: tc.name,
+      handle,
+      kind: info.kind,
+      method: info.method,
+      before: info.before,
+      after: info.after,
+      savedTokens: info.savedTokens,
+      totalSavedTokens: shrinkStats.savedTokens
+    });
+    return out;
+  }
+
   // Cost guardrail (interactive budget): when cumulative spend crosses the cap,
   // stop the agent gracefully — inject a "stop and summarize" instruction and
   // let the model produce one final answer instead of silently burning budget
@@ -166,7 +231,7 @@ export async function runAgent({
       if (r.reasoning) finalMsg.reasoning = r.reasoning;
       messages.push(finalMsg);
       onEvent('assistant', finalMsg);
-      const payload = finish('guardrail', turn + 1, usage, price, limit);
+      const payload = finish('guardrail', turn + 1, usage, price, limit, shrinkStats);
       onEvent('done', payload);
       return { messages, ...payload };
     }
@@ -235,7 +300,7 @@ export async function runAgent({
     onEvent('assistant', assistantMsg);
 
     if (!toolCalls || !toolCalls.length) {
-      const payload = finish('done', turn + 1, usage, price, limit);
+      const payload = finish('done', turn + 1, usage, price, limit, shrinkStats);
       onEvent('done', payload);
       return { messages, ...payload };
     }
@@ -298,14 +363,14 @@ export async function runAgent({
       // Prefix failures with a structured error class so the model can
       // self-correct: SCHEMA_ERROR → fix args, PERMISSION_DENIED → ask the
       // user, TRANSIENT → it already retried. Plain "Error: ..." hides this.
-      const toolContent = res.ok
+      const rawContent = res.ok
         ? res.content
         : `Error [${res.errorClass || 'UNKNOWN'}]: ${res.error}`;
       messages.push({
         role: 'tool',
         tool_call_id: tc.id,
         name: tc.name,
-        content: toolContent
+        content: shrinkToolResult(tc, rawContent, res)
       });
     }
 
@@ -413,18 +478,22 @@ export async function runAgent({
 
   // Hit the ceiling with tools still pending. Say so out loud — silently
   // truncating a half-finished task is the worst possible failure mode.
-  const payload = finish('max_turns', limit, usage, price, limit);
+  const payload = finish('max_turns', limit, usage, price, limit, shrinkStats);
   onEvent('done', payload);
   return { messages, ...payload };
 }
 
-function finish(stopped, turns, usage, price, limit) {
+function finish(stopped, turns, usage, price, limit, shrink) {
   return {
     stopped,
     turns,
     usage: { ...usage },
     cost: costOf(usage, price),
     limit,
+    // What the context economy layer saved this run. Surfacing it next to the
+    // cost figure is the point: "we shrank things" is a claim, a token count
+    // sitting beside the bill is evidence.
+    shrink: shrink ? { ...shrink } : { count: 0, savedTokens: 0, savedChars: 0 },
     canContinue: stopped === 'max_turns'
   };
 }

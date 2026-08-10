@@ -211,6 +211,17 @@ export function modelLabel(id) {
 // and verify.js is Node-only.
 export const VERIFY_LEVELS = ['off', 'syntax', 'full'];
 
+// How aggressively oversized tool output is shrunk *before* it enters the
+// history (see compress.js). Unlike autoCompact, which reacts once the whole
+// conversation busts the window, this pays off on the very first turn — you
+// stop re-paying for a 4000-line grep on every subsequent request.
+// - 'off'        : keep every tool result verbatim
+// - 'smart'      : (default) content-aware shrink of genuinely huge results only
+// - 'aggressive' : squeeze harder, for small context windows / expensive models
+// Declared here (not in compress.js) for the same reason as VERIFY_LEVELS:
+// the browser UI imports this module and compress.js pulls in Node-side deps.
+export const COMPRESS_MODES = ['off', 'smart', 'aggressive'];
+
 // - 'auto' : no prompts — the agent acts on its own inside the workspace
 // - 'deny' : refuse every dangerous tool outright (read-only agent)
 export const APPROVAL_MODES = [
@@ -321,7 +332,17 @@ export function defaultConfig() {
     autoVerify: 'syntax',
     verifyCmd: '',
     verifyTimeoutMs: 120000,
-    maxVerifyFixes: 2
+    maxVerifyFixes: 2,
+
+    // Context economy: shrink oversized tool results at the moment they are
+    // produced, rather than waiting for the window to overflow. Compression is
+    // content-aware (JSON → schema, logs → folded, code → outline) and always
+    // reversible — the original is parked in a TTL store and the model can pull
+    // it back with context_retrieve. If the store is unavailable we do not
+    // compress at all, so "compressed" always implies "retrievable".
+    contextCompress: 'smart',
+    compressThreshold: 2000,
+    retrieveTtlMs: 1800000
   };
 }
 
@@ -376,6 +397,9 @@ export function normalizeConfig(input = {}) {
   cfg.verifyCmd = typeof cfg.verifyCmd === 'string' ? cfg.verifyCmd.trim().slice(0, 300) : '';
   cfg.verifyTimeoutMs = Math.round(clampNum(cfg.verifyTimeoutMs, 5000, 900000, 120000));
   cfg.maxVerifyFixes = Math.round(clampNum(cfg.maxVerifyFixes, 0, 5, 2));
+  cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
+  cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
+  cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
   return cfg;
 }
 

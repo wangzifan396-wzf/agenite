@@ -1496,6 +1496,14 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .notice.compact { background: color-mix(in srgb, var(--warn) 8%, var(--panel-2)); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
 .notice.verify.ok { background: color-mix(in srgb, var(--ok) 9%, var(--panel-2)); border-color: color-mix(in srgb, var(--ok) 34%, transparent); color: color-mix(in srgb, var(--ok) 70%, var(--text-2)); }
 .notice.verify.fail { background: color-mix(in srgb, var(--danger) 9%, var(--panel-2)); border-color: color-mix(in srgb, var(--danger) 36%, transparent); color: color-mix(in srgb, var(--danger) 72%, var(--text-2)); }
+/* Context economy: savings are good news, so this one reads calm rather than
+   alarming — solid border (nothing was lost) instead of the dashed warning. */
+.notice.shrink {
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-2));
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: color-mix(in srgb, var(--accent) 62%, var(--text-2));
+}
 
 /* "Hit the turn ceiling" resume strip */
 .continue-bar {
@@ -2832,6 +2840,17 @@ select.text-input { appearance: auto; padding-right: 8px; }
           <label class="field">自定义验证命令（可选）
             <input id="set-verifyCmd" type="text" placeholder="如 npm test 或 pytest -q（留空=自动探测）" spellcheck="false" />
           </label>
+          <div class="field">
+            <span class="field-title">上下文压缩<em class="muted small">超大的工具结果在进入对话前就按内容类型压缩：JSON 折成结构骨架并保留异常元素、日志重复行折成 ×N、源码折成声明轮廓。原文完整留在本地缓存，模型可用 context_retrieve 随时取回——是压缩，不是截断</em></span>
+            <select id="set-contextCompress">
+              <option value="off">关闭（工具结果原样进入对话）</option>
+              <option value="smart">智能压缩（只压真正超大的结果 · 推荐）</option>
+              <option value="aggressive">激进压缩（小上下文窗口 / 贵模型）</option>
+            </select>
+          </div>
+          <label class="field">压缩触发阈值（字符）
+            <input id="set-compressThreshold" type="number" min="400" max="200000" step="100" placeholder="2000" />
+          </label>
           <label class="switch-row">
             <span><b>允许访问工作区之外</b><em>关闭时只能操作启动目录内的文件</em></span>
             <input id="set-allowOutside" type="checkbox" />
@@ -3594,6 +3613,17 @@ function modelLabel(id) {
 // and verify.js is Node-only.
 const VERIFY_LEVELS = ['off', 'syntax', 'full'];
 
+// How aggressively oversized tool output is shrunk *before* it enters the
+// history (see compress.js). Unlike autoCompact, which reacts once the whole
+// conversation busts the window, this pays off on the very first turn — you
+// stop re-paying for a 4000-line grep on every subsequent request.
+// - 'off'        : keep every tool result verbatim
+// - 'smart'      : (default) content-aware shrink of genuinely huge results only
+// - 'aggressive' : squeeze harder, for small context windows / expensive models
+// Declared here (not in compress.js) for the same reason as VERIFY_LEVELS:
+// the browser UI imports this module and compress.js pulls in Node-side deps.
+const COMPRESS_MODES = ['off', 'smart', 'aggressive'];
+
 // - 'auto' : no prompts — the agent acts on its own inside the workspace
 // - 'deny' : refuse every dangerous tool outright (read-only agent)
 const APPROVAL_MODES = [
@@ -3704,7 +3734,17 @@ function defaultConfig() {
     autoVerify: 'syntax',
     verifyCmd: '',
     verifyTimeoutMs: 120000,
-    maxVerifyFixes: 2
+    maxVerifyFixes: 2,
+
+    // Context economy: shrink oversized tool results at the moment they are
+    // produced, rather than waiting for the window to overflow. Compression is
+    // content-aware (JSON → schema, logs → folded, code → outline) and always
+    // reversible — the original is parked in a TTL store and the model can pull
+    // it back with context_retrieve. If the store is unavailable we do not
+    // compress at all, so "compressed" always implies "retrievable".
+    contextCompress: 'smart',
+    compressThreshold: 2000,
+    retrieveTtlMs: 1800000
   };
 }
 
@@ -3759,6 +3799,9 @@ function normalizeConfig(input = {}) {
   cfg.verifyCmd = typeof cfg.verifyCmd === 'string' ? cfg.verifyCmd.trim().slice(0, 300) : '';
   cfg.verifyTimeoutMs = Math.round(clampNum(cfg.verifyTimeoutMs, 5000, 900000, 120000));
   cfg.maxVerifyFixes = Math.round(clampNum(cfg.maxVerifyFixes, 0, 5, 2));
+  cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
+  cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
+  cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
   return cfg;
 }
 
@@ -4655,7 +4698,11 @@ function addNotice(el, n) {
   if (!box) return;
   const div = document.createElement('div');
   div.className = 'notice ' + (n.kind || 'info');
-  const ico = n.kind === 'compact' ? '⛁' : (n.kind && n.kind.indexOf('verify') === 0 ? (n.kind.indexOf('fail') >= 0 ? '✗' : '✓') : 'ℹ');
+  const ico = n.kind === 'compact'
+    ? '⛁'
+    : n.kind === 'shrink'
+      ? '⧉'
+      : (n.kind && n.kind.indexOf('verify') === 0 ? (n.kind.indexOf('fail') >= 0 ? '✗' : '✓') : 'ℹ');
   div.innerHTML = `<span class="notice-ico">${ico}</span><span></span>`;
   div.lastElementChild.textContent = n.text;
   if (n.detail) div.title = n.detail;
@@ -5285,6 +5332,31 @@ async function runTurn(conv, opts = {}) {
         };
         aMsg.notices.push(n);
         addNotice(el, n);
+      } else if (event === 'shrink') {
+        // Context economy: a single oversized tool result got compressed on its
+        // way into the history. These can fire many times per run, so instead of
+        // stacking N notices we keep one and update it in place — the user wants
+        // the running total, not a play-by-play.
+        aMsg.shrink = aMsg.shrink || { n: 0, saved: 0, kinds: {} };
+        aMsg.shrink.n++;
+        aMsg.shrink.saved += Number(data.savedTokens) || 0;
+        const method = data.method || data.kind || 'compress';
+        aMsg.shrink.kinds[method] = (aMsg.shrink.kinds[method] || 0) + 1;
+        const text = `⧉ 上下文压缩 ${aMsg.shrink.n} 次，省约 ${fmtTokens(aMsg.shrink.saved)} tokens（原文可取回）`;
+        const detail = Object.entries(aMsg.shrink.kinds).map(([k, v]) => `${k} ×${v}`).join('\n') +
+          '\n\n原文完整保留在本地缓存中，模型可用 context_retrieve 按需取回，不是截断丢弃。';
+        if (!aMsg.shrinkNotice) {
+          aMsg.shrinkNotice = { kind: 'shrink', text, detail };
+          aMsg.notices.push(aMsg.shrinkNotice);
+          aMsg.shrinkEl = addNotice(el, aMsg.shrinkNotice);
+        } else {
+          aMsg.shrinkNotice.text = text;
+          aMsg.shrinkNotice.detail = detail;
+          if (aMsg.shrinkEl) {
+            aMsg.shrinkEl.lastElementChild.textContent = text;
+            aMsg.shrinkEl.title = detail;
+          }
+        }
       } else if (event === 'usage') {
         setUsageFrom(turnUsage, data);
         aMsg.usage = { ...turnUsage };
@@ -6012,6 +6084,8 @@ function fillSettings() {
   $('set-dangerTools').checked = !!config.dangerTools;
   $('set-autoVerify').value = VERIFY_LEVELS.includes(config.autoVerify) ? config.autoVerify : 'syntax';
   $('set-verifyCmd').value = config.verifyCmd || '';
+  $('set-contextCompress').value = COMPRESS_MODES.includes(config.contextCompress) ? config.contextCompress : 'smart';
+  $('set-compressThreshold').value = config.compressThreshold || 2000;
   $('set-allowOutside').checked = !!config.allowOutsideWorkspace;
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
@@ -6191,6 +6265,8 @@ function saveSettings() {
     dangerTools: $('set-dangerTools').checked,
     autoVerify: VERIFY_LEVELS.includes($('set-autoVerify').value) ? $('set-autoVerify').value : 'syntax',
     verifyCmd: ($('set-verifyCmd').value || '').trim().slice(0, 300),
+    contextCompress: COMPRESS_MODES.includes($('set-contextCompress').value) ? $('set-contextCompress').value : 'smart',
+    compressThreshold: Number($('set-compressThreshold').value) || 2000,
     allowOutsideWorkspace: $('set-allowOutside').checked,
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,

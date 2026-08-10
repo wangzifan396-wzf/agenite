@@ -254,6 +254,21 @@ export const TOOL_DEFS = [
     danger: true
   },
   {
+    name: 'context_retrieve',
+    description: '取回被压缩的工具结果原文。当某个工具结果带有 "[⧉ 此结果已压缩 … handle=\\"ctx-…\\"]" 标记时，说明原文被完整保留在缓存里、只是没有全部放进上下文。需要被省略掉的细节时用它取回，**不要重新执行原来的工具**（那样更慢更贵）。优先用 pattern 只捞你关心的行，而不是整篇拉回来。',
+    parameters: {
+      type: 'object',
+      properties: {
+        handle: { type: 'string', description: '压缩提示里给出的句柄，形如 ctx-3-9f2c。' },
+        pattern: { type: 'string', description: '可选，正则（忽略大小写）。给了就只返回匹配行及其上下文——这是最省上下文的取回方式。' },
+        offset: { type: 'number', description: '可选，从原文第几个字符开始（默认 0），用于分页。' },
+        limit: { type: 'number', description: '可选，本次最多取回多少字符（默认 4000）。' }
+      },
+      required: ['handle']
+    },
+    danger: false
+  },
+  {
     name: 'memory_recall',
     description: "Search the agent's long-term memory (file-based, persists across sessions) for facts about the user, projects, preferences or past decisions. Query with keywords.",
     parameters: {
@@ -676,6 +691,33 @@ async function verifyTool(args = {}, opts = {}) {
   };
 }
 
+// The other half of the context economy layer (see compress.js). Compression
+// is only defensible because this exists: the agent can always get the elided
+// bytes back, so shrinking a result is a caching decision rather than data
+// loss. Cheap by design — `pattern` greps the stored original and returns only
+// the matching lines, which is what the model wants ~90% of the time.
+async function contextRetrieve(args = {}, opts = {}) {
+  const store = opts.contextStore;
+  if (!store || typeof store.slice !== 'function') {
+    return {
+      ok: false,
+      error: '上下文原文缓存未启用（contextCompress=off 或服务端未注入 store），因此也不会有被压缩的结果需要取回。',
+      errorClass: 'SCHEMA_ERROR'
+    };
+  }
+  const handle = String(args.handle || '').trim();
+  if (!handle) {
+    return { ok: false, error: '缺少 handle：请填写压缩提示里给出的句柄（形如 ctx-3-9f2c）。', errorClass: 'SCHEMA_ERROR' };
+  }
+  const r = store.slice(handle, {
+    offset: args.offset,
+    limit: args.limit,
+    pattern: args.pattern
+  });
+  if (!r.ok) return { ok: false, error: r.error, errorClass: 'SCHEMA_ERROR' };
+  return { ok: true, content: r.content };
+}
+
 // The git safety net. In normal use you rarely call this directly — the harness
 // auto-commits after every mutating turn (see server.js autoGit) so the user can
 // always `git undo`. This tool exists for explicit inspection / manual commits
@@ -828,6 +870,8 @@ async function dispatch(name, args, opts) {
         return gitTool(args, opts);
       case 'verify':
         return verifyTool(args, opts);
+      case 'context_retrieve':
+        return contextRetrieve(args, opts);
       case 'delegate':
         if (typeof opts.runSubAgent !== 'function') {
           return { ok: false, error: '子代理执行器未配置（需要服务端 runSubAgent）。' };

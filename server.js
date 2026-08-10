@@ -16,6 +16,7 @@ import { callModelStream, verifyKey } from './src/core/client.js';
 import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
 import { BROWSER } from './src/core/browser.js';
 import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
+import { ContextStore } from './src/core/compress.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR, searchSessionsForLabel } from './src/core/sessions.js';
@@ -85,6 +86,36 @@ function todoStateFor(convId) {
 export function clearTodoState(convId) {
   if (convId == null) { TODO_STATES.clear(); return; }
   TODO_STATES.delete(String(convId));
+}
+
+// ---- context economy: pre-compression originals, one store per conversation ----
+// Scoped per conversation so a handle minted in one chat can never resolve in
+// another (a cross-conversation leak would be both a privacy bug and a very
+// confusing one). Same LRU discipline as the checklists; each store is itself
+// bounded by age, entry count and bytes, so worst case is bounded twice.
+const CTX_STORES = new Map();
+const CTX_STORES_MAX = 50;
+
+function contextStoreFor(convId, config) {
+  const key = typeof convId === 'string' && convId.trim() ? convId.trim() : '__default__';
+  let st = CTX_STORES.get(key);
+  if (st) {
+    CTX_STORES.delete(key);
+    CTX_STORES.set(key, st);
+    st.sweep();
+    return st;
+  }
+  st = new ContextStore({ ttlMs: (config && config.retrieveTtlMs) || 1800000 });
+  CTX_STORES.set(key, st);
+  while (CTX_STORES.size > CTX_STORES_MAX) {
+    CTX_STORES.delete(CTX_STORES.keys().next().value);
+  }
+  return st;
+}
+
+export function clearContextStore(convId) {
+  if (convId == null) { CTX_STORES.clear(); return; }
+  CTX_STORES.delete(String(convId));
 }
 
 // ---- git auto-checkpoint (Aider-style safety net) ----
@@ -1028,6 +1059,14 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
     );
     base.push('不要口头声称"已完成/应该没问题"——在收尾前用 `verify` 自证一次，把证据摆出来。');
   }
+  if (config.contextCompress && config.contextCompress !== 'off') {
+    base.push(
+      '上下文压缩：过大的工具结果会被自动压缩后再进入对话（JSON 折成结构骨架并保留异常元素、日志重复行折成 ×N、源码折成声明轮廓）。' +
+      '压缩过的结果末尾会带 `[⧉ … handle="ctx-…"]` 标记，**原文一字不差地完整保留着**。' +
+      '需要被省略的细节时调用 `context_retrieve(handle=…)` 取回，优先加 `pattern` 只捞你关心的行；' +
+      '绝不要因为看不全就重新执行一遍原来的工具——那样更慢更贵，而且结果可能已经变了。'
+    );
+  }
   if (planning) {
     base.push(
       'PLAN MODE: First, think through the task and respond with a clear, step-by-step PLAN only. ' +
@@ -1173,6 +1212,11 @@ async function handleChat(req, res) {
   // scratch on every message and the "one in_progress" invariant would mean
   // nothing. Clients without a convId share a single scratch state.
   const todoState = todoStateFor(body.convId);
+
+  // Pre-compression originals for this conversation. Handed to the loop (which
+  // refuses to compress without it) and to the tools (so context_retrieve can
+  // read it back).
+  const contextStore = contextStoreFor(body.convId, config);
 
   // Connect / disconnect MCP servers the client asked for, then merge their
   // tools into what the model can call. Reconcile is idempotent, so already
@@ -1335,6 +1379,7 @@ async function handleChat(req, res) {
     else if (type === 'tool_start') sse('tool_start', payload);
     else if (type === 'tool') sse('tool', payload);
     else if (type === 'compact') sse('compact', payload);
+    else if (type === 'shrink') sse('shrink', payload);
     else if (type === 'usage') sse('usage', payload);
     else if (type === 'done') sse('done', payload);
     else if (type === 'subagent') sse('subagent', payload);
@@ -1372,6 +1417,12 @@ async function handleChat(req, res) {
         });
       } else if (type === 'compact') {
         addStep(trace, { kind: 'compact', name: '上下文压缩', data: payload || {} });
+      } else if (type === 'shrink') {
+        addStep(trace, {
+          kind: 'compact',
+          name: `结果压缩 ${payload?.tool || ''}（${payload?.method || ''}）`,
+          data: payload || {}
+        });
       } else if (type === 'subagent') {
         const ev = payload?.event;
         if (ev === 'start') {
@@ -1484,7 +1535,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState, autoGit: config.gitCheckpoint ? autoGitCheckpoint : undefined, autoVerify: makeAutoVerify(config), verifyTimeoutMs: config.verifyTimeoutMs }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState, contextStore, autoGit: config.gitCheckpoint ? autoGitCheckpoint : undefined, autoVerify: makeAutoVerify(config), verifyTimeoutMs: config.verifyTimeoutMs }
     });
     chatStopped = result.stopped;
 

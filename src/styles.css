@@ -1487,6 +1487,14 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .notice.compact { background: color-mix(in srgb, var(--warn) 8%, var(--panel-2)); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
 .notice.verify.ok { background: color-mix(in srgb, var(--ok) 9%, var(--panel-2)); border-color: color-mix(in srgb, var(--ok) 34%, transparent); color: color-mix(in srgb, var(--ok) 70%, var(--text-2)); }
 .notice.verify.fail { background: color-mix(in srgb, var(--danger) 9%, var(--panel-2)); border-color: color-mix(in srgb, var(--danger) 36%, transparent); color: color-mix(in srgb, var(--danger) 72%, var(--text-2)); }
+/* Context economy: savings are good news, so this one reads calm rather than
+   alarming — solid border (nothing was lost) instead of the dashed warning. */
+.notice.shrink {
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-2));
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: color-mix(in srgb, var(--accent) 62%, var(--text-2));
+}
 
 /* "Hit the turn ceiling" resume strip */
 .continue-bar {
