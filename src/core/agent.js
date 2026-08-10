@@ -20,6 +20,18 @@ import { addUsage, costOf, emptyUsage, priceFor } from './pricing.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
+// Tools safe to execute concurrently within one turn. These are stateless and
+// touch no shared mutable resource (no file writes, no singleton browser, no
+// atlas/memory stores), so running several at once is always sound. Everything
+// else — mutating tools, browser_* (share one page), atlas and memory writes —
+// runs sequentially to keep approvals sane and avoid races.
+export const PARALLEL_SAFE_TOOLS = new Set([
+  'calculator', 'current_datetime', 'system_info',
+  'web_fetch', 'web_search',
+  'read_file', 'list_dir', 'find_files', 'grep_files', 'codebase_search',
+  'memory_recall'
+]);
+
 export async function runAgent({
   messages,
   callModel,
@@ -145,10 +157,39 @@ export async function runAgent({
       return { messages, ...payload };
     }
 
-    for (const tc of toolCalls) {
+    // ── Tool execution: parallelize read-only tools, serialize the rest ──
+    // Competitive agents (Claude Code, Goose) run independent tool calls of the
+    // same turn concurrently. We parallelize only the stateless read-only set
+    // (read 5 files / search web + code at once) for a real speedup with zero
+    // correctness risk, and keep mutating + stateful tools one-at-a-time so the
+    // approval UI stays sane and file/state races can't happen. Result-message
+    // order is preserved exactly (indexed by the original tool_call position).
+    const parallelEnabled = config.parallelTools !== false;
+    const safeIdx = [];
+    const serialIdx = [];
+    toolCalls.forEach((tc, i) => {
+      (parallelEnabled && PARALLEL_SAFE_TOOLS.has(tc.name) ? safeIdx : serialIdx).push(i);
+    });
+
+    const toolResults = new Array(toolCalls.length);
+    async function runOneTool(i) {
+      const tc = toolCalls[i];
       onEvent('tool_start', { id: tc.id, name: tc.name, args: tc.args || {} });
       const started = Date.now();
       const res = await executeTool(tc.name, tc.args || {}, opts);
+      toolResults[i] = { tc, res, ms: Date.now() - started };
+    }
+
+    // Read-only tools fire off together; the harness resolves each as it lands.
+    await Promise.all(safeIdx.map((i) => runOneTool(i)));
+    // Stateful / mutating tools run in order, so approvals never pile up.
+    for (const i of serialIdx) await runOneTool(i);
+
+    for (let i = 0; i < toolCalls.length; i++) {
+      const r = toolResults[i];
+      if (!r) continue;
+      const { tc, res, ms } = r;
+      const isParallel = parallelEnabled && PARALLEL_SAFE_TOOLS.has(tc.name);
       onEvent('tool', {
         id: tc.id,
         name: tc.name,
@@ -159,7 +200,8 @@ export async function runAgent({
         ref: res.ref || null,
         diff: res.diff,
         undoToken: res.undoToken,
-        ms: Date.now() - started
+        ms,
+        parallel: isParallel
       });
       // Prefix failures with a structured error class so the model can
       // self-correct: SCHEMA_ERROR → fix args, PERMISSION_DENIED → ask the
