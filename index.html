@@ -482,7 +482,11 @@
         <p class="muted small">精选可复用的工程技能包——每个都是一套经过打磨的工作流（规范驱动、测试驱动、代码评审、安全审计、可访问性、性能、系统化调试、安全重构、技术写作、故障复盘）。<b>点击卡片即可启用/停用</b>；启用的包会把方法论注入系统提示词，让 agent 真正按它工作。agent 自己沉淀的技能显示在底部（只读）。</p>
         <div id="skills-grid" class="agents-grid"></div>
         <div id="skills-custom-wrap" class="hidden">
-          <div class="agent-section-label">agent 自沉淀技能（~/.agenite/memory/skills/，只读）</div>
+          <div class="agent-section-label skills-custom-head">
+            <span>agent 自沉淀技能（~/.agenite/memory/skills/）</span>
+            <button id="skills-prune" class="skills-prune-btn" title="把已经用过 3 次以上、成功率仍然偏低的技能归档（.md 文件保留在磁盘上，可随时找回）">🧹 裁剪低分技能</button>
+          </div>
+          <p class="muted small skills-custom-note">只有当本次任务通过<b>真实自动验证</b>时，沉淀出的技能才带 <b>✓已验证</b>；<b>v2</b> 表示这条技能被重新学习过（旧版已归档、可回退）；<b>反模式</b>是上次踩过的坑，会随技能一起被读回。</p>
           <div id="skills-custom" class="agents-grid"></div>
         </div>
       </div>

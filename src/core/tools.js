@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { resolve, sep, join, relative, extname } from 'node:path';
 import os from 'node:os';
 import { sanitizeUrl } from './util.js';
-import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill } from './memory.js';
+import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill, recordSkillUse } from './memory.js';
 import { BROWSER } from './browser.js';
 import { normalizeTodos, renderTodos, todoProgress, VERIFY_RE } from './todo.js';
 import { isGitRepo, gitStatus, gitDiff, gitLog, gitCommit, gitUndo, gitInit, gitChangedFiles } from './git.js';
@@ -401,7 +401,12 @@ export const TOOL_DEFS = [
         name: { type: 'string', description: 'Short skill name, e.g. "deploy-to-staging".' },
         description: { type: 'string', description: 'One-line summary of what the skill does.' },
         when_to_use: { type: 'string', description: 'When to apply this skill, e.g. "after tests pass and before merge".' },
-        body: { type: 'string', description: 'The full playbook: steps, commands, gotchas. Plain markdown.' }
+        body: { type: 'string', description: 'The full playbook: steps, commands, gotchas. Plain markdown.' },
+        anti_patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional. Concrete "do NOT do this" warnings learned from what actually went wrong this time, e.g. "不要直接改 dist/，它是构建产物". Saving a skill under the same name bumps its version and archives the previous revision.'
+        }
       },
       required: ['name', 'description', 'body']
     },
@@ -1556,13 +1561,21 @@ async function skillSave(args, opts = {}) {
     name: args.name,
     description: args.description,
     whenToUse: args.when_to_use,
-    body: args.body
+    body: args.body,
+    antiPatterns: args.anti_patterns,
+    source: 'manual'
   });
 }
 
 async function skillRecall(args, opts = {}) {
   if (!opts.memoryBase) return { ok: false, error: '记忆目录未配置' };
-  return readSkill(opts.memoryBase, args.name);
+  const r = await readSkill(opts.memoryBase, args.name);
+  // Usage telemetry is what makes pruning possible later: a skill nobody ever
+  // pulls, or one that keeps getting pulled into failing runs, should retire.
+  if (r && r.ok) {
+    try { await recordSkillUse(opts.memoryBase, r.slug); } catch { /* never fail a recall over bookkeeping */ }
+  }
+  return r;
 }
 
 // ---- Agenite Atlas: the agent's living memory graph (local-first) ----

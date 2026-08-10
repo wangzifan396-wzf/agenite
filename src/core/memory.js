@@ -207,24 +207,233 @@ export function slugify(s) {
     .slice(0, 48) || 'skill';
 }
 
-export async function saveSkill(base, { name, description, whenToUse, when_to_use, body }) {
+// ---- skill metadata (v0.46) ----
+// A skill is still a plain .md file you can read and edit by hand, but the
+// frontmatter now carries the evidence that makes the library *trustworthy*:
+//   version / status / verified / anti_patterns / usage & success counts.
+// Research lesson (MindMemOS, SpreadsheetBench): an un-curated skill library is
+// worse than no library at all — stale, redundant entries are pure noise. So we
+// score every skill, retire the losers, and keep superseded versions around for
+// rollback instead of silently overwriting them.
+
+export const SKILL_STATUS = { ACTIVE: 'active', SUPERSEDED: 'superseded', ARCHIVED: 'archived' };
+
+// Laplace-smoothed success rate: an unused skill starts neutral at 0.5, and a
+// skill needs real wins (not just one lucky run) to climb.
+export function computeSkillScore(usageCount = 0, successCount = 0) {
+  const u = Math.max(0, Number(usageCount) || 0);
+  const s = Math.min(u, Math.max(0, Number(successCount) || 0));
+  return Math.round(((s + 1) / (u + 2)) * 1000) / 1000;
+}
+
+function splitList(v) {
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+  return String(v == null ? '' : v)
+    .split(/\s*\|\s*/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function oneLine(v) {
+  return String(v == null ? '' : v).replace(/\s*\n+\s*/g, ' ').trim();
+}
+
+// Turn raw frontmatter strings into a typed record with sane defaults so a
+// hand-written skill from v0.45 keeps working untouched.
+export function normalizeSkillMeta(meta = {}, slug = '') {
+  const usageCount = Math.max(0, parseInt(meta.usage_count, 10) || 0);
+  const successCount = Math.min(usageCount, Math.max(0, parseInt(meta.success_count, 10) || 0));
+  const status = [SKILL_STATUS.ACTIVE, SKILL_STATUS.SUPERSEDED, SKILL_STATUS.ARCHIVED].includes(meta.status)
+    ? meta.status
+    : SKILL_STATUS.ACTIVE;
+  return {
+    slug,
+    name: meta.name || slug,
+    description: meta.description || '',
+    whenToUse: meta.when_to_use || '',
+    version: Math.max(1, parseInt(meta.version, 10) || 1),
+    status,
+    verified: String(meta.verified) === 'true',
+    source: meta.source || 'manual',
+    antiPatterns: splitList(meta.anti_patterns),
+    supersedes: meta.supersedes || '',
+    supersededBy: meta.superseded_by || '',
+    usageCount,
+    successCount,
+    score: meta.score != null && meta.score !== '' ? Number(meta.score) : computeSkillScore(usageCount, successCount),
+    createdAt: meta.created_at || '',
+    updatedAt: meta.updated_at || ''
+  };
+}
+
+export function serializeSkillMeta(m) {
+  const lines = [
+    '---',
+    `name: ${oneLine(m.name)}`,
+    `description: ${oneLine(m.description)}`,
+    `when_to_use: ${oneLine(m.whenToUse)}`,
+    `version: ${m.version}`,
+    `status: ${m.status}`,
+    `verified: ${m.verified ? 'true' : 'false'}`,
+    `source: ${m.source || 'manual'}`,
+    `anti_patterns: ${(m.antiPatterns || []).map(oneLine).filter(Boolean).join(' | ')}`,
+    `supersedes: ${m.supersedes || ''}`,
+    `superseded_by: ${m.supersededBy || ''}`,
+    `usage_count: ${m.usageCount || 0}`,
+    `success_count: ${m.successCount || 0}`,
+    `score: ${m.score}`,
+    `created_at: ${m.createdAt || ''}`,
+    `updated_at: ${m.updatedAt || ''}`,
+    '---'
+  ];
+  return lines.join('\n');
+}
+
+function renderSkillFile(meta, body) {
+  const anti = (meta.antiPatterns || []).filter(Boolean);
+  const parts = [serializeSkillMeta(meta), '', String(body || '').trim()];
+  if (anti.length) {
+    parts.push('', '## 反模式（上次踩过的坑，务必避开）', ...anti.map((a) => `- ${a}`));
+  }
+  return parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+// Strip the auto-generated anti-pattern section so re-saving never duplicates it.
+function stripAntiSection(body) {
+  return String(body || '').replace(/\n*## 反模式（上次踩过的坑，务必避开）[\s\S]*$/, '').trim();
+}
+
+async function readSkillFile(base, slug) {
+  try {
+    const text = await readFile(join(base, SKILLS_DIR, `${slug}.md`), 'utf8');
+    const { meta, body } = parseFrontmatter(text);
+    return { meta: normalizeSkillMeta(meta, slug), body: stripAntiSection(body), raw: text };
+  } catch {
+    return null;
+  }
+}
+
+async function writeSkillFile(base, slug, meta, body) {
+  await mkdir(join(base, SKILLS_DIR), { recursive: true });
+  await writeFile(join(base, SKILLS_DIR, `${slug}.md`), renderSkillFile(meta, body), 'utf8');
+}
+
+export async function saveSkill(base, {
+  name,
+  description,
+  whenToUse,
+  when_to_use,
+  body,
+  antiPatterns,
+  anti_patterns,
+  verified = false,
+  source = 'manual',
+  supersede = true
+} = {}) {
   if (!name || !description) return { ok: false, error: 'name 与 description 不能为空' };
   await ensureDir(base);
   await mkdir(join(base, SKILLS_DIR), { recursive: true });
   const slug = slugify(name);
-  const when = whenToUse || when_to_use || '';
-  const fm = [
-    '---',
-    `name: ${name}`,
-    `description: ${description}`,
-    `when_to_use: ${when}`,
-    '---',
-    '',
-    String(body || '').trim(),
-    ''
-  ].join('\n');
-  await writeFile(join(base, SKILLS_DIR, `${slug}.md`), fm, 'utf8');
-  return { ok: true, content: `已沉淀技能「${name}」(skills/${slug}.md)，下次会话会自动进入技能库。`, slug };
+  const now = new Date().toISOString();
+  const anti = splitList(antiPatterns != null ? antiPatterns : anti_patterns);
+
+  // Supersede instead of overwrite: the previous revision is parked at
+  // `<slug>.v<N>.md` with status=superseded so you can always roll back, and the
+  // canonical `<slug>.md` always holds the newest revision.
+  const prev = await readSkillFile(base, slug);
+  let version = 1;
+  let supersedes = '';
+  let createdAt = now;
+  if (prev) {
+    createdAt = prev.meta.createdAt || now;
+    if (supersede) {
+      version = prev.meta.version + 1;
+      supersedes = `${slug}.v${prev.meta.version}`;
+      await writeSkillFile(
+        base,
+        supersedes,
+        { ...prev.meta, slug: supersedes, status: SKILL_STATUS.SUPERSEDED, supersededBy: slug, updatedAt: now },
+        prev.body
+      );
+    } else {
+      version = prev.meta.version;
+      supersedes = prev.meta.supersedes;
+    }
+  }
+
+  const meta = normalizeSkillMeta({}, slug);
+  meta.name = name;
+  meta.description = description;
+  meta.whenToUse = whenToUse || when_to_use || '';
+  meta.version = version;
+  meta.status = SKILL_STATUS.ACTIVE;
+  meta.verified = !!verified;
+  meta.source = source;
+  meta.antiPatterns = anti;
+  meta.supersedes = supersedes;
+  meta.supersededBy = '';
+  meta.usageCount = 0;
+  meta.successCount = 0;
+  meta.score = computeSkillScore(0, 0);
+  meta.createdAt = createdAt;
+  meta.updatedAt = now;
+
+  await writeSkillFile(base, slug, meta, body);
+  const badge = version > 1 ? `v${version}（旧版已存为 ${supersedes}）` : 'v1';
+  return {
+    ok: true,
+    content: `已沉淀技能「${name}」${badge}${verified ? ' ✓已验证' : ''}(skills/${slug}.md)，下次会话会自动进入技能库。`,
+    slug,
+    version,
+    supersedes,
+    verified: !!verified,
+    antiPatterns: anti
+  };
+}
+
+// Merge a partial metadata patch into an existing skill file.
+export async function patchSkillFile(base, ref, patch = {}) {
+  const target = await resolveSkill(base, ref);
+  if (!target) return { ok: false, error: `未找到技能：${ref}` };
+  const cur = await readSkillFile(base, target.slug);
+  if (!cur) return { ok: false, error: `未找到技能：${ref}` };
+  const meta = { ...cur.meta, ...patch, slug: target.slug, updatedAt: new Date().toISOString() };
+  meta.usageCount = Math.max(0, Number(meta.usageCount) || 0);
+  meta.successCount = Math.min(meta.usageCount, Math.max(0, Number(meta.successCount) || 0));
+  meta.score = computeSkillScore(meta.usageCount, meta.successCount);
+  await writeSkillFile(base, target.slug, meta, patch.body != null ? patch.body : cur.body);
+  return { ok: true, slug: target.slug, meta };
+}
+
+// Called every time the agent actually pulls a skill (skill_recall). Usage data
+// is what lets the library prune itself later.
+export async function recordSkillUse(base, ref, { success = null } = {}) {
+  const target = await resolveSkill(base, ref);
+  if (!target) return { ok: false, error: `未找到技能：${ref}` };
+  const cur = await readSkillFile(base, target.slug);
+  if (!cur) return { ok: false, error: `未找到技能：${ref}` };
+  const usageCount = cur.meta.usageCount + 1;
+  const successCount = cur.meta.successCount + (success === true ? 1 : 0);
+  return patchSkillFile(base, target.slug, { usageCount, successCount });
+}
+
+export async function markSuperseded(base, ref, bySlug = '') {
+  return patchSkillFile(base, ref, { status: SKILL_STATUS.SUPERSEDED, supersededBy: bySlug });
+}
+
+// Retire skills that have been tried enough times and keep losing. They are
+// archived (status flip), never deleted — the file stays on disk for review.
+export async function pruneSkills(base, { minUses = 3, minScore = 0.4 } = {}) {
+  const list = await listSkills(base);
+  const pruned = [];
+  for (const s of list) {
+    if (s.status !== SKILL_STATUS.ACTIVE) continue;
+    if (s.usageCount < minUses) continue;
+    if (s.score >= minScore) continue;
+    await patchSkillFile(base, s.slug, { status: SKILL_STATUS.ARCHIVED });
+    pruned.push({ slug: s.slug, name: s.name, score: s.score, usageCount: s.usageCount });
+  }
+  return { ok: true, pruned, kept: list.length - pruned.length };
 }
 
 function parseFrontmatter(text) {
@@ -247,24 +456,28 @@ export async function listSkills(base) {
     if (!n.endsWith('.md')) continue;
     const text = await readFile(join(dir, n), 'utf8');
     const { meta } = parseFrontmatter(text);
-    out.push({ slug: n.replace(/\.md$/, ''), name: meta.name || n, description: meta.description || '', whenToUse: meta.when_to_use || '' });
+    out.push(normalizeSkillMeta(meta, n.replace(/\.md$/, '')));
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
 
+async function resolveSkill(base, ref) {
+  if (!ref) return null;
+  const list = await listSkills(base);
+  return list.find((s) => s.slug === ref || s.name === ref || s.slug === slugify(ref)) || null;
+}
+
 export async function readSkill(base, ref) {
   if (!ref) return { ok: false, error: '请指定技能名称或 slug' };
-  const list = await listSkills(base);
-  const target = list.find((s) => s.slug === ref || s.name === ref || s.slug === slugify(ref));
+  const target = await resolveSkill(base, ref);
   if (!target) return { ok: false, error: `未找到技能：${ref}` };
   const text = await readFile(join(base, SKILLS_DIR, `${target.slug}.md`), 'utf8');
   return { ok: true, slug: target.slug, name: target.name, content: text };
 }
 
 export async function deleteSkill(base, ref) {
-  const list = await listSkills(base);
-  const target = list.find((s) => s.slug === ref || s.name === ref || s.slug === slugify(ref));
+  const target = await resolveSkill(base, ref);
   if (!target) return { ok: false, error: `未找到技能：${ref}` };
   // Some environments intercept unlink and route it through a trash can that
   // can occasionally error; tolerate it so a delete never crashes the server.
@@ -330,17 +543,30 @@ export async function deletePersona(base, ref) {
 }
 
 // The catalog block injected into the system prompt at session start.
+// Progressive disclosure: only name + description + evidence badges go into the
+// prompt; the full playbook is fetched on demand via skill_recall. Superseded
+// and archived revisions are filtered out so the index never turns into noise,
+// and the highest-scoring skills are listed first.
 export async function injectSkills(base, { maxChars = 1500 } = {}) {
-  const list = await listSkills(base);
+  const all = await listSkills(base);
+  const list = all
+    .filter((s) => s.status === SKILL_STATUS.ACTIVE)
+    .sort((a, b) => b.score - a.score || (b.verified === a.verified ? 0 : b.verified ? 1 : -1) || a.name.localeCompare(b.name));
   if (!list.length) return '';
-  const lines = list.map(
-    (s) => `- **${s.name}**: ${s.description}${s.whenToUse ? `（适用：${s.whenToUse}）` : ''}`
-  );
+  const lines = list.map((s) => {
+    const badges = [];
+    if (s.version > 1) badges.push(`v${s.version}`);
+    if (s.verified) badges.push('✓已验证');
+    if (s.usageCount > 0) badges.push(`用过${s.usageCount}次·评分${s.score}`);
+    if (s.antiPatterns.length) badges.push(`${s.antiPatterns.length}条反模式`);
+    const tag = badges.length ? ` [${badges.join(' · ')}]` : '';
+    return `- **${s.name}**${tag}: ${s.description}${s.whenToUse ? `（适用：${s.whenToUse}）` : ''}`;
+  });
   let body = lines.join('\n');
   if (body.length > maxChars) body = body.slice(0, maxChars) + '\n…(技能库已截断)';
   return (
     '## 你的技能库（agent 自己沉淀的可复用工作流，本机 ~/.agenite/memory/skills/，跨会话保留）\n' +
-    '遇到匹配场景时，先调用 skill_recall 读取该技能的完整步骤再照做：\n' +
+    '遇到匹配场景时，先调用 skill_recall 读取该技能的完整步骤再照做；带 ✓已验证 的技能曾通过真实验证，优先采信；技能正文里的「反模式」是上次踩过的坑，务必避开：\n' +
     body
   );
 }

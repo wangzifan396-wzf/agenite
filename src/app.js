@@ -1354,10 +1354,18 @@ async function runTurn(conv, opts = {}) {
         handleSubAgentEvent(el, data);
       } else if (event === 'skill_auto') {
         if (data.saved) {
-          toast(`💡 自动沉淀技能：${data.name || ''}`);
+          // Say WHY it was trusted: a skill learned from a verified run is a
+          // different animal from one learned from an unchecked run.
+          const marks = [];
+          if (data.version > 1) marks.push(`v${data.version}`);
+          if (data.verified) marks.push('✓已验证');
+          if (Array.isArray(data.antiPatterns) && data.antiPatterns.length) marks.push(`${data.antiPatterns.length}条反模式`);
+          toast(`💡 自动沉淀技能：${data.name || ''}${marks.length ? ' · ' + marks.join(' · ') : ''}`, 3200);
           refreshSkillsInfo();
         } else if (data.error) {
           toast(`技能沉淀失败：${data.error}`, 3200);
+        } else if (data.gated) {
+          toast(`🚫 未沉淀技能：${data.reason || '本次运行未通过验证'}`, 3600);
         } else {
           toast(`技能沉淀跳过：${data.reason || '暂不需要'}`);
         }
@@ -4085,17 +4093,64 @@ async function renderSkills() {
   };
   grid.innerHTML = builtin.length ? builtin.map(card).join('') : '<div class="muted small">暂无技能包。</div>';
   grid.querySelectorAll('.skill-card').forEach((c) => { c.onclick = () => toggleSkill(c.dataset.name); });
+  // Self-precipitated skills carry their own evidence: whether a real
+  // verification passed when they were learned, how often they have been pulled
+  // since, and what went wrong last time. Surfacing that is the whole point —
+  // a skill library you cannot audit is a liability, not an asset.
   const custom = Array.isArray(_skillsCache.custom) ? _skillsCache.custom : [];
   const wrap = $('skills-custom-wrap');
   if (custom.length) {
     wrap.classList.remove('hidden');
-    $('skills-custom').innerHTML = custom.map((s) => `<div class="agent-card" title="${escapeHtml(s.description || '')}">
-      <div class="agent-ico">📁</div>
-      <div class="agent-name">${escapeHtml(s.name || 'unnamed')}</div>
+    const rank = { active: 0, superseded: 1, archived: 2 };
+    const sorted = custom.slice().sort((a, b) =>
+      (rank[a.status] ?? 0) - (rank[b.status] ?? 0) || (b.score || 0) - (a.score || 0) || String(a.name).localeCompare(String(b.name))
+    );
+    $('skills-custom').innerHTML = sorted.map((s) => {
+      const status = s.status || 'active';
+      const retired = status !== 'active';
+      const badges = [];
+      if ((s.version || 1) > 1) badges.push(`<span class="skill-meta-badge">v${s.version}</span>`);
+      if (s.verified) badges.push('<span class="skill-meta-badge is-verified">✓已验证</span>');
+      if (status === 'superseded') badges.push('<span class="skill-meta-badge is-retired">已被新版取代</span>');
+      if (status === 'archived') badges.push('<span class="skill-meta-badge is-retired">已归档</span>');
+      const stats = [];
+      if (s.usageCount > 0) stats.push(`用过 ${s.usageCount} 次 · 成功 ${s.successCount || 0} 次 · 评分 ${s.score}`);
+      else stats.push('尚未被调用');
+      if (Array.isArray(s.antiPatterns) && s.antiPatterns.length) stats.push(`${s.antiPatterns.length} 条反模式`);
+      const tip = [s.description || '', ...(s.antiPatterns || []).map((a) => '⚠ ' + a)].filter(Boolean).join('\n');
+      return `<div class="agent-card skill-custom-card${retired ? ' is-retired' : ''}" title="${escapeHtml(tip)}">
+      <div class="agent-ico">${s.verified ? '✅' : '📁'}</div>
+      <div class="agent-name">${escapeHtml(s.name || 'unnamed')} ${badges.join(' ')}</div>
       <div class="agent-desc">${escapeHtml(s.description || '')}</div>
-    </div>`).join('');
+      <div class="agent-tag skill-meta-line">${escapeHtml(stats.join(' · '))}</div>
+    </div>`;
+    }).join('');
   } else { wrap.classList.add('hidden'); }
   $('skills-current').textContent = active.length ? ('已启用 ' + active.length + ' 个技能包') : '未启用技能包';
+}
+
+// Curation, on demand: retire the skills that have had a fair number of tries
+// and still keep losing. Nothing is deleted — the .md stays on disk.
+async function pruneCustomSkills() {
+  const btn = $('skills-prune');
+  if (btn) { btn.disabled = true; btn.textContent = '裁剪中…'; }
+  try {
+    const r = await fetch('/api/skills/prune', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minUses: 3, minScore: 0.4 })
+    });
+    const j = await r.json();
+    const n = Array.isArray(j.pruned) ? j.pruned.length : 0;
+    toast(n ? `🧹 已归档 ${n} 条低分技能：${j.pruned.map((p) => p.name).join('、')}` : '没有需要裁剪的技能——现有技能要么表现良好，要么还没被用够 3 次。', 3600);
+    _skillsCache = null;
+    await renderSkills();
+    refreshSkillsInfo();
+  } catch (e) {
+    toast('裁剪失败：' + (e && e.message ? e.message : e), 3200);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🧹 裁剪低分技能'; }
+  }
 }
 function toggleSkill(name) {
   if (!Array.isArray(config.skills)) config.skills = [];
@@ -4274,6 +4329,7 @@ function wire() {
   $('close-agents').onclick = closeAgents;
   $('open-skills').onclick = openSkills;
   $('close-skills').onclick = closeSkills;
+  if ($('skills-prune')) $('skills-prune').onclick = pruneCustomSkills;
   $('new-agent').onclick = openAgentEditor;
   $('agent-cancel').onclick = closeAgentEditor;
   $('agent-editor').addEventListener('submit', saveCustomAgent);

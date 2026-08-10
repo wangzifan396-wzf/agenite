@@ -20,7 +20,7 @@ import { ContextStore } from './src/core/compress.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR, searchSessionsForLabel } from './src/core/sessions.js';
-import { defaultMemoryDir, injectMemory, injectSkills, listSkills, savePersona, listPersonas, readPersona, deletePersona } from './src/core/memory.js';
+import { defaultMemoryDir, injectMemory, injectSkills, listSkills, pruneSkills, savePersona, listPersonas, readPersona, deletePersona } from './src/core/memory.js';
 import { BUILTIN_SKILLS, resolveBuiltinSkills, listBuiltinSkills } from './src/core/skills.js';
 import { createSubAgentRunner, createFanoutRunner } from './src/core/subagent.js';
 import { autoSaveSkill } from './src/core/autoskill.js';
@@ -47,7 +47,11 @@ const HOST = process.env.HOST || '127.0.0.1';
 const WORKSPACE = resolve(process.env.AGENITE_WORKSPACE || process.cwd());
 // Long-term memory lives in its own directory so the agent can never touch the
 // user's files by "remembering" something — it only writes to its own kitchen.
-const MEMORY_DIR = defaultMemoryDir();
+// AGENITE_MEMORY_DIR relocates that kitchen (handy for isolated smoke tests, or
+// for keeping several agent "brains" side by side).
+const MEMORY_DIR = process.env.AGENITE_MEMORY_DIR
+  ? resolve(process.env.AGENITE_MEMORY_DIR)
+  : defaultMemoryDir();
 
 // Local knowledge base (RAG), stored next to the agent's long-term memory.
 // Opened lazily so importing server.js in tests doesn't create a file.
@@ -126,8 +130,11 @@ export function clearContextStore(convId) {
 // still call `git commit` to bootstrap a repo explicitly.
 let gitUserSnapshotted = false;
 
+// Returns the short commit hash when a checkpoint was actually made, otherwise
+// null. The hash doubles as an objective "this run really changed something"
+// signal for the v0.46 skill-distillation gate.
 async function autoGitCheckpoint(turnTools = []) {
-  if (!isGitRepo(WORKSPACE)) return;
+  if (!isGitRepo(WORKSPACE)) return null;
   // Dirty-commit-first: snapshot any pre-existing user changes ONCE, attributed
   // to "User", so agent commits stay cleanly attributable to "(agenite)".
   if (!gitUserSnapshotted) {
@@ -139,9 +146,10 @@ async function autoGitCheckpoint(turnTools = []) {
       });
     }
   }
-  if (await isClean(WORKSPACE)) return;
+  if (await isClean(WORKSPACE)) return null;
   const names = [...new Set(turnTools)].join(', ');
-  await gitCommit(WORKSPACE, `agent: auto-checkpoint — ${names || 'workspace changes'}`, { addAll: true });
+  const r = await gitCommit(WORKSPACE, `agent: auto-checkpoint — ${names || 'workspace changes'}`, { addAll: true });
+  return r && r.committed ? r.hash : null;
 }
 
 // Reset the per-process "did we snapshot user changes" latch (used by tests).
@@ -251,6 +259,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/presets') return sendJson(res, 200, PROVIDER_PRESETS);
   if (req.method === 'GET' && url === '/api/ollama/models') return handleOllamaModels(req, res);
   if (req.method === 'GET' && url === '/api/skills') return handleSkillsList(req, res);
+  if (req.method === 'POST' && url === '/api/skills/prune') return handleSkillsPrune(req, res);
   if (req.method === 'GET' && url === '/api/personas') return handlePersonasList(req, res);
   if (req.method === 'POST' && url === '/api/personas') return handlePersonaSave(req, res);
   if (req.method === 'DELETE' && url.startsWith('/api/personas/')) return handlePersonaDelete(req, res, url);
@@ -483,6 +492,23 @@ async function handleSkillsList(req, res) {
     return sendJson(res, 200, { builtin: listBuiltinSkills(), custom: await listSkills(MEMORY_DIR) });
   } catch {
     return sendJson(res, 200, { builtin: listBuiltinSkills(), custom: [] });
+  }
+}
+
+// Retire skills that have been used enough times to judge and keep losing.
+// Archived, never deleted — the .md file stays on disk so you can inspect or
+// resurrect it. This is the curation half of "skills compound": MindMemOS found
+// an un-pruned library scores *worse* than having no library at all.
+async function handleSkillsPrune(req, res) {
+  let body = {};
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch { body = {}; }
+  const minUses = Number.isFinite(Number(body.minUses)) ? Math.max(1, Number(body.minUses)) : 3;
+  const minScore = Number.isFinite(Number(body.minScore)) ? Math.min(1, Math.max(0, Number(body.minScore))) : 0.4;
+  try {
+    const r = await pruneSkills(MEMORY_DIR, { minUses, minScore });
+    return sendJson(res, 200, r);
+  } catch (e) {
+    return sendJson(res, 500, { ok: false, error: String(e && e.message ? e.message : e) });
   }
 }
 
@@ -1372,6 +1398,12 @@ async function handleChat(req, res) {
   let traceTurnId = null; // current model-turn step (parent for its tools)
   let traceSubId = null;  // current sub-agent step (parent for its tools)
 
+  // ── objective evidence collected during this run (v0.46 skill gate) ──
+  // These are the facts the skill distiller is allowed to trust: did the real
+  // verification command pass, did we actually commit anything, was there a
+  // plan. Model self-assessment is deliberately NOT part of it.
+  const gate = { verifyOk: null, verifyLabel: '', gitCommit: null, todoDone: 0, aborted: false };
+
   const onEvent = (type, payload) => {
     // forward to the client unchanged
     if (type === 'delta') sse('delta', { content: payload });
@@ -1385,6 +1417,16 @@ async function handleChat(req, res) {
     else if (type === 'subagent') sse('subagent', payload);
     else if (type === 'guardrail') sse('guardrail', payload);
     else if (type === 'todo') sse('todo', payload);
+    else if (type === 'verify') sse('verify', payload);
+
+    // Record the evidence. The LAST verify result wins on purpose: a run that
+    // failed a check and then genuinely fixed it did end green.
+    if (type === 'verify' && payload) {
+      gate.verifyOk = !!payload.ok;
+      gate.verifyLabel = payload.label || '';
+    } else if (type === 'todo' && payload && Array.isArray(payload.items)) {
+      gate.todoDone = payload.items.filter((t) => t && t.status === 'completed').length;
+    }
 
     // capture into the trace (best-effort: never break the chat)
     try {
@@ -1535,13 +1577,35 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState, contextStore, autoGit: config.gitCheckpoint ? autoGitCheckpoint : undefined, autoVerify: makeAutoVerify(config), verifyTimeoutMs: config.verifyTimeoutMs }
+      toolContext: {
+        requestApproval,
+        platform: process.platform,
+        memoryBase: MEMORY_DIR,
+        runSubAgent,
+        runFanout,
+        embed: embedFn,
+        browser: BROWSER,
+        todoState,
+        contextStore,
+        autoGit: config.gitCheckpoint
+          ? async (a) => {
+              const hash = await autoGitCheckpoint(a && a.tools);
+              if (hash) gate.gitCommit = hash;
+              return hash;
+            }
+          : undefined,
+        autoVerify: makeAutoVerify(config),
+        verifyTimeoutMs: config.verifyTimeoutMs
+      }
     });
     chatStopped = result.stopped;
+    if (result.stopped && result.stopped !== 'done') gate.aborted = true;
 
     // Self-evolving skills, part 2: after a successful complex run, ask the
     // model once (tool-free) whether to crystallize the workflow into a SKILL.
     // Runs before 'end' so the client sees the skill_auto event in-stream.
+    // v0.46: `gate` carries the run's objective evidence — a red verification
+    // blocks distillation outright, a green one stamps the skill ✓已验证.
     if (config.autoSkill && result.stopped === 'done') {
       const reflect = (msgs, o) =>
         callModelStream({
@@ -1552,7 +1616,7 @@ async function handleChat(req, res) {
           signal: ac.signal
         });
       try {
-        await autoSaveSkill({ messages, callModel: reflect, sse, memoryBase: MEMORY_DIR });
+        await autoSaveSkill({ messages, callModel: reflect, sse, memoryBase: MEMORY_DIR, gate });
       } catch {
         // Never let skill extraction break a finished chat.
       }
