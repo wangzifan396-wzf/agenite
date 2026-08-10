@@ -111,6 +111,38 @@ export async function gitLog(dir, n = 10) {
   return r.ok ? r.stdout : '(无提交历史)';
 }
 
+/**
+ * Which files changed recently — working-tree edits if there are any, otherwise
+ * the files in the last commit. Lets `verify` figure out what to check without
+ * the model having to remember and list every path it touched (and it stays
+ * correct right after an auto-checkpoint, when the tree is already clean).
+ */
+export async function gitChangedFiles(dir) {
+  const st = await git(['status', '--porcelain'], dir, { allowFail: true });
+  const working = parsePorcelain(st.stdout);
+  if (working.length) return working;
+  const show = await git(
+    ['--no-pager', 'show', '--name-only', '--pretty=format:', 'HEAD'],
+    dir,
+    { allowFail: true }
+  );
+  return [...new Set(show.stdout.split('\n').map((s) => s.trim()).filter(Boolean))];
+}
+
+function parsePorcelain(out) {
+  const files = [];
+  for (const line of String(out || '').split('\n')) {
+    if (line.length < 4) continue;
+    let p = line.slice(3).trim();
+    // Renames/copies are reported as "old -> new"; we care about the new path.
+    const arrow = p.indexOf(' -> ');
+    if (arrow !== -1) p = p.slice(arrow + 4).trim();
+    p = p.replace(/^"|"$/g, '');
+    if (p) files.push(p);
+  }
+  return [...new Set(files)];
+}
+
 export async function gitInit(dir) {
   const r = await git(['init'], dir, { allowFail: true });
   if (!r.ok) throw new Error(r.stderr.trim() || 'git init 失败');

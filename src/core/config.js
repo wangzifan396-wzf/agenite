@@ -203,6 +203,14 @@ export function modelLabel(id) {
 
 // How the agent asks for permission before touching the machine.
 // - 'ask'  : every write / command needs a human click (default, safest useful mode)
+// How hard the harness checks the agent's own work after it edits files.
+// - 'off'    : trust the model (fastest, least safe)
+// - 'syntax' : parse-check only the changed files — near-free, no project code runs
+// - 'full'   : run the project's real test/lint command
+// Declared here (not in verify.js) because the browser UI imports this module
+// and verify.js is Node-only.
+export const VERIFY_LEVELS = ['off', 'syntax', 'full'];
+
 // - 'auto' : no prompts — the agent acts on its own inside the workspace
 // - 'deny' : refuse every dangerous tool outright (read-only agent)
 export const APPROVAL_MODES = [
@@ -299,7 +307,21 @@ export function defaultConfig() {
     // bounded reflection message so it re-reads files and stops retrying the
     // same broken edit forever. maxReflections caps how many nudges per turn.
     selfHeal: true,
-    maxReflections: 3
+    maxReflections: 3,
+    // --- verification loop (Plan → Execute → Verify → Rollback) ---
+    // After a turn that changed files, check the work instead of trusting it.
+    //   'off'    never verify
+    //   'syntax' (default) parse-check just the files that changed — tens of
+    //            milliseconds, catches the broken-brace edit that silently
+    //            bricks a file, and never runs project code
+    //   'full'   run the project's own command (auto-detected: npm test /
+    //            cargo test / go test / pytest / make test) or verifyCmd
+    // A failure is fed back as a structured summary so the model fixes it in
+    // the same run; maxVerifyFixes caps how many times we do that.
+    autoVerify: 'syntax',
+    verifyCmd: '',
+    verifyTimeoutMs: 120000,
+    maxVerifyFixes: 2
   };
 }
 
@@ -350,6 +372,10 @@ export function normalizeConfig(input = {}) {
   cfg.gitCheckpoint = cfg.gitCheckpoint !== false;
   cfg.selfHeal = cfg.selfHeal !== false;
   cfg.maxReflections = Math.round(clampNum(cfg.maxReflections, 0, 10, 3));
+  cfg.autoVerify = VERIFY_LEVELS.includes(cfg.autoVerify) ? cfg.autoVerify : 'syntax';
+  cfg.verifyCmd = typeof cfg.verifyCmd === 'string' ? cfg.verifyCmd.trim().slice(0, 300) : '';
+  cfg.verifyTimeoutMs = Math.round(clampNum(cfg.verifyTimeoutMs, 5000, 900000, 120000));
+  cfg.maxVerifyFixes = Math.round(clampNum(cfg.maxVerifyFixes, 0, 5, 2));
   return cfg;
 }
 

@@ -10,6 +10,12 @@
 
 ## ✨ 功能
 
+- **改完即验证闭环（v0.44.0）**：补齐可靠 harness 的第四块拼图——**规划**（`todo_write`）→ **执行**（工具）→ **验证** → **回退**（git 自愈）形成完整闭环。凡是改动过文件的回合结束后，harness 会**自动验证改动**，让 Agent 再也无法"自信地交出一坨坏代码"：
+  - ⚡ **零配置语法快检（默认 `syntax`）**：只对本回合**改动过的文件**跑 `node --check` / `JSON.parse` / `py_compile`——亚秒级、永不执行项目代码，全员默认开启也安全。
+  - 🧪 **完整测试（`full`）**：自动探测项目的真实测试命令（`npm/pnpm/yarn/bun test` → `cargo test` → `go test` → `pytest` → `make test`），跳过 npm 占位脚本并执行；探测不到命令时优雅降级为语法快检，而非硬失败。
+  - 📉 **有界自愈**：验证失败时，循环把**压缩后的失败清单**（内置 TAP/jest/vitest/pytest/go/cargo/tsc/eslint 结构化解析）喂回模型让其修复，受 `maxVerifyFixes`（默认 2）上限约束；触顶后停止并提示用户用 `git undo` 回退。
+  - 🔧 **`verify` 工具 + 自动验证钩子**：Agent 也可主动调用 `verify` 自证改动真的能跑（杜绝"嘴上说好了"）；系统提示词新增提醒：没验证完不许说"完成"。
+  - ⚙️ 可在「⚙ 工作区 / 权限」中配置：自动验证级别 `off / syntax / full`，以及可选的自定义 `verifyCmd`。
 - **多模型 / 多运营商（v0.25.0 升级为「模型中枢」）**：内置 **12 家**供应商预设与可一键选取的模型目录——OpenAI、Anthropic (Claude)、Google Gemini、DeepSeek、硅基流动 (SiliconFlow)、通义千问 (Qwen)、Kimi (Moonshot)、智谱 (GLM)、Groq、Ollama（本地）、OpenRouter，以及任意 OpenAI 兼容接口。切换供应商会自动带出对应的 baseURL 与默认模型、上下文窗口徽标，对标 Cherry Studio 的「多模型聚合」。
 - **MCP 工具生态（v0.5.0 新增）**：内置 **MCP（Model Context Protocol）客户端**，通过 stdio 连接任意 MCP 服务器，把整个开源工具生态变成模型可调用的工具——**浏览器自动化、桌面/电脑控制、数据库、GitHub** 等等。设置里点一下即可接入：
   - 🌐 **浏览器控制** — Playwright MCP（`npx -y @playwright/mcp@latest`）

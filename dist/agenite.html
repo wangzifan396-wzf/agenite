@@ -1494,6 +1494,8 @@ select.text-input { appearance: auto; padding-right: 8px; }
 }
 .notice-ico { flex: none; opacity: .7; }
 .notice.compact { background: color-mix(in srgb, var(--warn) 8%, var(--panel-2)); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+.notice.verify.ok { background: color-mix(in srgb, var(--ok) 9%, var(--panel-2)); border-color: color-mix(in srgb, var(--ok) 34%, transparent); color: color-mix(in srgb, var(--ok) 70%, var(--text-2)); }
+.notice.verify.fail { background: color-mix(in srgb, var(--danger) 9%, var(--panel-2)); border-color: color-mix(in srgb, var(--danger) 36%, transparent); color: color-mix(in srgb, var(--danger) 72%, var(--text-2)); }
 
 /* "Hit the turn ceiling" resume strip */
 .continue-bar {
@@ -2819,6 +2821,17 @@ select.text-input { appearance: auto; padding-right: 8px; }
             <span class="field-title">批准方式</span>
             <div id="approval-modes" class="radio-list"></div>
           </div>
+          <div class="field">
+            <span class="field-title">自动验证级别<em class="muted small">Agent 改完代码后自动校验，构成 计划 → 执行 → 验证 → 回退 完整闭环。语法快检只查本回合改动文件、秒级零成本；完整测试会探测并执行项目的 npm test / cargo test / go test / pytest / make test</em></span>
+            <select id="set-autoVerify">
+              <option value="off">关闭（不自动验证）</option>
+              <option value="syntax">语法快检（仅改动文件 · 秒级 · 推荐）</option>
+              <option value="full">完整测试（自动探测并运行项目测试命令）</option>
+            </select>
+          </div>
+          <label class="field">自定义验证命令（可选）
+            <input id="set-verifyCmd" type="text" placeholder="如 npm test 或 pytest -q（留空=自动探测）" spellcheck="false" />
+          </label>
           <label class="switch-row">
             <span><b>允许访问工作区之外</b><em>关闭时只能操作启动目录内的文件</em></span>
             <input id="set-allowOutside" type="checkbox" />
@@ -3573,6 +3586,14 @@ function modelLabel(id) {
 
 // How the agent asks for permission before touching the machine.
 // - 'ask'  : every write / command needs a human click (default, safest useful mode)
+// How hard the harness checks the agent's own work after it edits files.
+// - 'off'    : trust the model (fastest, least safe)
+// - 'syntax' : parse-check only the changed files — near-free, no project code runs
+// - 'full'   : run the project's real test/lint command
+// Declared here (not in verify.js) because the browser UI imports this module
+// and verify.js is Node-only.
+const VERIFY_LEVELS = ['off', 'syntax', 'full'];
+
 // - 'auto' : no prompts — the agent acts on its own inside the workspace
 // - 'deny' : refuse every dangerous tool outright (read-only agent)
 const APPROVAL_MODES = [
@@ -3669,7 +3690,21 @@ function defaultConfig() {
     // bounded reflection message so it re-reads files and stops retrying the
     // same broken edit forever. maxReflections caps how many nudges per turn.
     selfHeal: true,
-    maxReflections: 3
+    maxReflections: 3,
+    // --- verification loop (Plan → Execute → Verify → Rollback) ---
+    // After a turn that changed files, check the work instead of trusting it.
+    //   'off'    never verify
+    //   'syntax' (default) parse-check just the files that changed — tens of
+    //            milliseconds, catches the broken-brace edit that silently
+    //            bricks a file, and never runs project code
+    //   'full'   run the project's own command (auto-detected: npm test /
+    //            cargo test / go test / pytest / make test) or verifyCmd
+    // A failure is fed back as a structured summary so the model fixes it in
+    // the same run; maxVerifyFixes caps how many times we do that.
+    autoVerify: 'syntax',
+    verifyCmd: '',
+    verifyTimeoutMs: 120000,
+    maxVerifyFixes: 2
   };
 }
 
@@ -3720,6 +3755,10 @@ function normalizeConfig(input = {}) {
   cfg.gitCheckpoint = cfg.gitCheckpoint !== false;
   cfg.selfHeal = cfg.selfHeal !== false;
   cfg.maxReflections = Math.round(clampNum(cfg.maxReflections, 0, 10, 3));
+  cfg.autoVerify = VERIFY_LEVELS.includes(cfg.autoVerify) ? cfg.autoVerify : 'syntax';
+  cfg.verifyCmd = typeof cfg.verifyCmd === 'string' ? cfg.verifyCmd.trim().slice(0, 300) : '';
+  cfg.verifyTimeoutMs = Math.round(clampNum(cfg.verifyTimeoutMs, 5000, 900000, 120000));
+  cfg.maxVerifyFixes = Math.round(clampNum(cfg.maxVerifyFixes, 0, 5, 2));
   return cfg;
 }
 
@@ -4616,7 +4655,8 @@ function addNotice(el, n) {
   if (!box) return;
   const div = document.createElement('div');
   div.className = 'notice ' + (n.kind || 'info');
-  div.innerHTML = `<span class="notice-ico">${n.kind === 'compact' ? '⛁' : 'ℹ'}</span><span></span>`;
+  const ico = n.kind === 'compact' ? '⛁' : (n.kind && n.kind.indexOf('verify') === 0 ? (n.kind.indexOf('fail') >= 0 ? '✗' : '✓') : 'ℹ');
+  div.innerHTML = `<span class="notice-ico">${ico}</span><span></span>`;
   div.lastElementChild.textContent = n.text;
   if (n.detail) div.title = n.detail;
   box.appendChild(div);
@@ -5227,6 +5267,21 @@ async function runTurn(conv, opts = {}) {
           text: `上下文已自动压缩：${fmtTokens(data.before)} → ${fmtTokens(data.after)} tokens` +
             (data.dropped ? `（归纳了较早的 ${data.dropped} 轮）` : '（裁剪了旧的工具输出）'),
           detail: `节省 ${fmtTokens(saved)} tokens，避免超出模型上下文窗口。`
+        };
+        aMsg.notices.push(n);
+        addNotice(el, n);
+      } else if (event === 'verify') {
+        // Auto-verify result (Plan → Execute → Verify → Rollback loop). Surface
+        // it as a low-key inline notice with the compressed failure list (if any)
+        // in the title so the user can scan pass/fail without leaving the chat.
+        const ok = !!data.ok;
+        const label = data.label ? `（${data.label}）` : '';
+        const summary = data.summary ? '：' + data.summary : '';
+        const n = {
+          kind: 'verify ' + (ok ? 'ok' : 'fail'),
+          text: (ok ? '✓ 自动验证通过' : '✗ 自动验证未通过') + label + summary,
+          detail: (Array.isArray(data.failures) && data.failures.length ? data.failures.join('\n') : (data.summary || '')) +
+            (data.ms ? `\n\n耗时 ${data.ms}ms` : '')
         };
         aMsg.notices.push(n);
         addNotice(el, n);
@@ -5955,6 +6010,8 @@ function fillSettings() {
   $('set-maxTokens').value = config.maxTokens;
   $('set-agentEnabled').checked = config.agentEnabled !== false;
   $('set-dangerTools').checked = !!config.dangerTools;
+  $('set-autoVerify').value = VERIFY_LEVELS.includes(config.autoVerify) ? config.autoVerify : 'syntax';
+  $('set-verifyCmd').value = config.verifyCmd || '';
   $('set-allowOutside').checked = !!config.allowOutsideWorkspace;
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
@@ -6132,6 +6189,8 @@ function saveSettings() {
     maxTokens: Number($('set-maxTokens').value),
     agentEnabled: $('set-agentEnabled').checked,
     dangerTools: $('set-dangerTools').checked,
+    autoVerify: VERIFY_LEVELS.includes($('set-autoVerify').value) ? $('set-autoVerify').value : 'syntax',
+    verifyCmd: ($('set-verifyCmd').value || '').trim().slice(0, 300),
     allowOutsideWorkspace: $('set-allowOutside').checked,
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,

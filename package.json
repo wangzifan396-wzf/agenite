@@ -1,6 +1,6 @@
 {
   "name": "agenite",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "Local-first multi-provider AI agent client with tool-use. Plug in your model API key and chat, with file/web/command tools.",
   "type": "module",
   "bin": {

@@ -42,6 +42,41 @@ export const MUTATION_TOOLS = new Set([
   'write_file', 'edit_file', 'make_dir', 'apply_patch', 'run_command', 'run_code'
 ]);
 
+/**
+ * Which files a turn actually rewrote. The syntax-level verifier only needs to
+ * look at these, which is what keeps "verify after every edit" cheap enough to
+ * leave on by default — we never re-scan the whole tree.
+ * `make_dir` creates no parseable file, and run_command/run_code touch unknown
+ * paths, so they contribute nothing here (at 'full' level they still trigger
+ * the project's own test command).
+ */
+export function changedPathsFrom(toolCalls = [], toolResults = []) {
+  const out = [];
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i];
+    const r = toolResults[i];
+    if (!tc || !r || !r.res || !r.res.ok) continue;
+    const a = tc.args || {};
+    if (tc.name === 'write_file' || tc.name === 'edit_file') {
+      if (typeof a.path === 'string' && a.path.trim()) out.push(a.path.trim());
+    } else if (tc.name === 'apply_patch') {
+      const re = /^\+\+\+ (?:b\/)?(.+)$/gm;
+      let m;
+      while ((m = re.exec(String(a.patch || better(r)))) !== null) {
+        const p = m[1].trim();
+        if (p && p !== '/dev/null') out.push(p);
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
+// apply_patch results echo the patch when the model streamed it oddly; fall
+// back to the result text so we still learn which files moved.
+function better(r) {
+  return (r && r.res && typeof r.res.content === 'string') ? r.res.content : '';
+}
+
 export async function runAgent({
   messages,
   callModel,
@@ -87,6 +122,11 @@ export async function runAgent({
   // Self-healing reflection budget: how many bounded nudges we've injected for
   // stuck mutating tools this run (capped by config.maxReflections).
   let reflections = 0;
+  // Verification loop budget: how many times we've handed a failing check back
+  // to the model to fix (capped by config.maxVerifyFixes). `verifyGaveUp` makes
+  // the "stop and tell the user" message fire exactly once.
+  let verifyFixes = 0;
+  let verifyGaveUp = false;
 
   // Cost guardrail (interactive budget): when cumulative spend crosses the cap,
   // stop the agent gracefully — inject a "stop and summarize" instruction and
@@ -311,6 +351,60 @@ export async function runAgent({
         });
       } catch (e) {
         if (typeof console !== 'undefined') console.warn('[agenite] autoGit 失败:', e && e.message);
+      }
+    }
+
+    // ── Verification loop (Plan → Execute → Verify → Rollback) ──
+    // Checking the work is what separates an agent that *looks* done from one
+    // that *is* done. Runs after the git checkpoint on purpose: a restore point
+    // must exist before we start reacting to failures. A failing check comes
+    // back as a compact structured summary (never raw test spew) and is handed
+    // to the model as a concrete fix request, capped by maxVerifyFixes so a
+    // genuinely broken build can't burn the whole turn budget.
+    if (succeededMutation > 0 && typeof opts.autoVerify === 'function') {
+      const fixCap = Number.isFinite(Number(config.maxVerifyFixes)) ? Number(config.maxVerifyFixes) : 2;
+      let vr = null;
+      try {
+        vr = await opts.autoVerify({
+          tools: toolCalls
+            .filter((tc, i) => toolResults[i] && toolResults[i].res.ok && MUTATION_TOOLS.has(tc.name))
+            .map((tc) => tc.name),
+          files: changedPathsFrom(toolCalls, toolResults)
+        });
+      } catch (e) {
+        if (typeof console !== 'undefined') console.warn('[agenite] autoVerify 失败:', e && e.message);
+      }
+      if (vr && vr.ran) {
+        onEvent('verify', {
+          ok: !!vr.ok,
+          level: vr.level || null,
+          kind: vr.kind || null,
+          label: vr.label || '',
+          summary: vr.summary || '',
+          failures: Array.isArray(vr.failures) ? vr.failures.slice(0, 12) : [],
+          ms: vr.ms || 0
+        });
+        if (!vr.ok) {
+          if (verifyFixes < fixCap) {
+            verifyFixes++;
+            messages.push({
+              role: 'user',
+              content:
+                `❌ 自动验证未通过（第 ${verifyFixes}/${fixCap} 次）——${vr.label || '校验'}：\n` +
+                `${vr.summary || '(无输出)'}\n\n` +
+                '这是你刚才改动后的【真实】结果，不是假设。请据此定位并修复：' +
+                '先读取相关文件确认当前内容，再做最小必要修改；不要为了让检查通过而删改测试本身。'
+            });
+          } else if (!verifyGaveUp) {
+            verifyGaveUp = true;
+            messages.push({
+              role: 'user',
+              content:
+                `❌ 自动验证仍未通过，且已达 ${fixCap} 次自动修复上限。请立即停止继续改动，` +
+                '向用户说明：失败的是什么、你尝试过什么、你判断的根因，以及建议的下一步（必要时提示可用 `git undo` 回退）。'
+            });
+          }
+        }
       }
     }
 

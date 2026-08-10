@@ -3,7 +3,7 @@
 // Talks to the local server, which is the part that can actually touch the machine.
 import { renderMarkdown } from './core/markdown.js';
 import { uid, escapeHtml, fuzzyFilter, formatBytes } from './core/util.js';
-import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, modelsForProvider, modelLabel } from './core/config.js';
+import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, VERIFY_LEVELS, modelsForProvider, modelLabel } from './core/config.js';
 import { errorHint, errorSeverity } from './core/errors.js';
 import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
 
@@ -758,7 +758,8 @@ function addNotice(el, n) {
   if (!box) return;
   const div = document.createElement('div');
   div.className = 'notice ' + (n.kind || 'info');
-  div.innerHTML = `<span class="notice-ico">${n.kind === 'compact' ? '⛁' : 'ℹ'}</span><span></span>`;
+  const ico = n.kind === 'compact' ? '⛁' : (n.kind && n.kind.indexOf('verify') === 0 ? (n.kind.indexOf('fail') >= 0 ? '✗' : '✓') : 'ℹ');
+  div.innerHTML = `<span class="notice-ico">${ico}</span><span></span>`;
   div.lastElementChild.textContent = n.text;
   if (n.detail) div.title = n.detail;
   box.appendChild(div);
@@ -1369,6 +1370,21 @@ async function runTurn(conv, opts = {}) {
           text: `上下文已自动压缩：${fmtTokens(data.before)} → ${fmtTokens(data.after)} tokens` +
             (data.dropped ? `（归纳了较早的 ${data.dropped} 轮）` : '（裁剪了旧的工具输出）'),
           detail: `节省 ${fmtTokens(saved)} tokens，避免超出模型上下文窗口。`
+        };
+        aMsg.notices.push(n);
+        addNotice(el, n);
+      } else if (event === 'verify') {
+        // Auto-verify result (Plan → Execute → Verify → Rollback loop). Surface
+        // it as a low-key inline notice with the compressed failure list (if any)
+        // in the title so the user can scan pass/fail without leaving the chat.
+        const ok = !!data.ok;
+        const label = data.label ? `（${data.label}）` : '';
+        const summary = data.summary ? '：' + data.summary : '';
+        const n = {
+          kind: 'verify ' + (ok ? 'ok' : 'fail'),
+          text: (ok ? '✓ 自动验证通过' : '✗ 自动验证未通过') + label + summary,
+          detail: (Array.isArray(data.failures) && data.failures.length ? data.failures.join('\n') : (data.summary || '')) +
+            (data.ms ? `\n\n耗时 ${data.ms}ms` : '')
         };
         aMsg.notices.push(n);
         addNotice(el, n);
@@ -2094,6 +2110,8 @@ function fillSettings() {
   $('set-maxTokens').value = config.maxTokens;
   $('set-agentEnabled').checked = config.agentEnabled !== false;
   $('set-dangerTools').checked = !!config.dangerTools;
+  $('set-autoVerify').value = VERIFY_LEVELS.includes(config.autoVerify) ? config.autoVerify : 'syntax';
+  $('set-verifyCmd').value = config.verifyCmd || '';
   $('set-allowOutside').checked = !!config.allowOutsideWorkspace;
   $('set-systemPrompt').value = config.systemPrompt || '';
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
@@ -2271,6 +2289,8 @@ function saveSettings() {
     maxTokens: Number($('set-maxTokens').value),
     agentEnabled: $('set-agentEnabled').checked,
     dangerTools: $('set-dangerTools').checked,
+    autoVerify: VERIFY_LEVELS.includes($('set-autoVerify').value) ? $('set-autoVerify').value : 'syntax',
+    verifyCmd: ($('set-verifyCmd').value || '').trim().slice(0, 300),
     allowOutsideWorkspace: $('set-allowOutside').checked,
     systemPrompt: $('set-systemPrompt').value,
     mcpAutoApproveReadonly: $('set-mcpReadonly').checked,

@@ -596,6 +596,17 @@
             <span class="field-title">批准方式</span>
             <div id="approval-modes" class="radio-list"></div>
           </div>
+          <div class="field">
+            <span class="field-title">自动验证级别<em class="muted small">Agent 改完代码后自动校验，构成 计划 → 执行 → 验证 → 回退 完整闭环。语法快检只查本回合改动文件、秒级零成本；完整测试会探测并执行项目的 npm test / cargo test / go test / pytest / make test</em></span>
+            <select id="set-autoVerify">
+              <option value="off">关闭（不自动验证）</option>
+              <option value="syntax">语法快检（仅改动文件 · 秒级 · 推荐）</option>
+              <option value="full">完整测试（自动探测并运行项目测试命令）</option>
+            </select>
+          </div>
+          <label class="field">自定义验证命令（可选）
+            <input id="set-verifyCmd" type="text" placeholder="如 npm test 或 pytest -q（留空=自动探测）" spellcheck="false" />
+          </label>
           <label class="switch-row">
             <span><b>允许访问工作区之外</b><em>关闭时只能操作启动目录内的文件</em></span>
             <input id="set-allowOutside" type="checkbox" />

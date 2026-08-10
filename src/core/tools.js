@@ -13,7 +13,8 @@ import { sanitizeUrl } from './util.js';
 import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill } from './memory.js';
 import { BROWSER } from './browser.js';
 import { normalizeTodos, renderTodos, todoProgress, VERIFY_RE } from './todo.js';
-import { isGitRepo, gitStatus, gitDiff, gitLog, gitCommit, gitUndo, gitInit } from './git.js';
+import { isGitRepo, gitStatus, gitDiff, gitLog, gitCommit, gitUndo, gitInit, gitChangedFiles } from './git.js';
+import { verifyWorkspace, detectVerify, syntaxCheckable } from './verify.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -235,6 +236,20 @@ export const TOOL_DEFS = [
         message: { type: 'string', description: '仅 commit 使用：提交说明；省略则根据本轮改动自动生成。' }
       },
       required: ['action']
+    },
+    danger: true
+  },
+  {
+    name: 'verify',
+    description: '验证你自己的改动是否真的成立。level=syntax 只对改动过的文件做秒级语法解析（几乎零成本）；level=full 自动探测并运行项目自身的校验命令（npm test / cargo test / go test / pytest / make test），失败时返回压缩后的结构化失败摘要而非海量日志。改完代码后主动调用它自证，而不是口头声称"已完成"。',
+    parameters: {
+      type: 'object',
+      properties: {
+        level: { type: 'string', description: '验证级别：syntax（默认，仅语法快检）| full（运行项目测试命令）' },
+        files: { type: 'array', items: { type: 'string' }, description: '仅 syntax 使用：要检查的文件路径；省略时检查本次会话改动过的文件。' },
+        cmd: { type: 'string', description: '仅 full 使用：自定义校验命令（如 "npm test"）；省略则自动探测。' }
+      },
+      required: []
     },
     danger: true
   },
@@ -581,6 +596,10 @@ const TRANSIENT_RE = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|fetch fai
 
 function classifyError(name, error) {
   const msg = String(error || '');
+  // A failing check is not a tool malfunction — it means the checked code is
+  // wrong. Give it its own class so the model reads it as "go fix the code",
+  // and so it can never be mistaken for a transient blip worth retrying.
+  if (name === 'verify') return 'VERIFY_FAILED';
   if (/未知工具|未实现的工具/.test(msg)) return 'NOT_FOUND';
   if (/只读模式|拒绝执行|用户拒绝了|越界|不在工作区|需要.*权限|电脑操作权限/.test(msg)) return 'PERMISSION_DENIED';
   if (/HTTP 429|too many requests|rate limit/i.test(msg)) return 'RATE_LIMIT';
@@ -602,6 +621,59 @@ function backoffMs(attempt) {
 function autoCommitMessage() {
   const t = new Date().toISOString().slice(0, 19).replace('T', ' ');
   return `agent: 手动检查点 @ ${t}`;
+}
+
+// Self-verification. The harness already runs this automatically after each
+// mutating turn (server.js autoVerify), but exposing it as a tool matters:
+// it lets the model *prove* a claim ("the tests pass") instead of asserting it,
+// which is the behaviour every 2026 review says separates a usable agent from a
+// confident liar.
+async function verifyTool(args = {}, opts = {}) {
+  const dir = opts.workspace || process.cwd();
+  const level = ['syntax', 'full'].includes(String(args.level || '').toLowerCase())
+    ? String(args.level).toLowerCase()
+    : 'syntax';
+
+  let files = Array.isArray(args.files)
+    ? args.files.filter((f) => typeof f === 'string' && f.trim()).map((f) => f.trim())
+    : [];
+
+  if (level === 'syntax' && !files.length) {
+    // No explicit list? Ask git what moved — far more reliable than trusting
+    // the model to remember every path it wrote this run.
+    if (isGitRepo(dir)) {
+      try { files = (await gitChangedFiles(dir)).filter(syntaxCheckable); } catch { files = []; }
+    }
+    if (!files.length) {
+      return {
+        ok: true,
+        content: '没有可快检的改动文件（工作区干净，或改动的文件类型不支持语法快检）。' +
+          '如需运行项目测试，请改用 level="full"；或用 files 参数显式指定要检查的文件。'
+      };
+    }
+  }
+
+  const r = await verifyWorkspace(dir, {
+    level,
+    cmd: String(args.cmd || '').trim(),
+    changedFiles: files,
+    timeoutMs: Number(opts.verifyTimeoutMs) || 120000
+  });
+
+  if (!r.ran) {
+    const spec = level === 'full' ? detectVerify(dir) : null;
+    return {
+      ok: true,
+      content: `未执行验证：${r.reason || '无可验证内容'}` +
+        (spec ? `（探测到的命令：${spec.label}，来源 ${spec.source}）` : '')
+    };
+  }
+  if (r.ok) return { ok: true, content: r.summary || '验证通过。' };
+  return {
+    ok: false,
+    error: `验证未通过 —— ${r.label || level}\n${r.summary || '(无输出)'}`,
+    errorClass: 'VERIFY_FAILED'
+  };
 }
 
 // The git safety net. In normal use you rarely call this directly — the harness
@@ -754,6 +826,8 @@ async function dispatch(name, args, opts) {
         return todoWrite(args, opts);
       case 'git':
         return gitTool(args, opts);
+      case 'verify':
+        return verifyTool(args, opts);
       case 'delegate':
         if (typeof opts.runSubAgent !== 'function') {
           return { ok: false, error: '子代理执行器未配置（需要服务端 runSubAgent）。' };

@@ -37,6 +37,7 @@ import {
 import { createKnowledge } from './src/core/knowledge.js';
 import { emptyTodoState } from './src/core/todo.js';
 import { isGitRepo, isClean, gitCommit } from './src/core/git.js';
+import { verifyWorkspace } from './src/core/verify.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -114,6 +115,22 @@ async function autoGitCheckpoint(turnTools = []) {
 
 // Reset the per-process "did we snapshot user changes" latch (used by tests).
 export function _resetGitSnapshot() { gitUserSnapshotted = false; }
+
+// ---- auto verification (the "Verify" in Plan → Execute → Verify → Rollback) ----
+// Runs right after the git checkpoint on every turn that changed files. The
+// default level ('syntax') only parse-checks the files that actually moved, so
+// it costs tens of milliseconds and can stay on for everyone; 'full' runs the
+// project's real test command. Whatever comes back, agent.js decides whether to
+// hand a failure to the model as a fix request.
+export function makeAutoVerify(config) {
+  if (!config || !config.autoVerify || config.autoVerify === 'off') return undefined;
+  return async ({ files = [] } = {}) => verifyWorkspace(WORKSPACE, {
+    level: config.autoVerify,
+    cmd: config.verifyCmd || '',
+    changedFiles: files,
+    timeoutMs: Number(config.verifyTimeoutMs) || 120000
+  });
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -1003,6 +1020,14 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
   if (config.gitCheckpoint === false) {
     base.push('（本次已关闭自动 git 提交安全网：你的改动不会自动提交，需要手动用 `git commit` 或 `git` 工具保存。）');
   }
+  if (config.autoVerify && config.autoVerify !== 'off') {
+    base.push(
+      config.autoVerify === 'full'
+        ? '自动验证：每次你改完文件后，系统会自动运行本项目的校验命令（自动探测 npm test / cargo test / go test / pytest / make test，或用户配置的命令）。失败时你会收到压缩后的结构化失败摘要——那是真实结果，请据此修复，不要靠猜，也不要为了让检查变绿而删改测试本身。'
+        : '自动验证：每次你改完文件后，系统会对改动过的文件做语法快检；出错会立刻反馈给你。若要更强的保证（跑真实测试），可主动调用 `verify` 工具并传 level="full"。'
+    );
+    base.push('不要口头声称"已完成/应该没问题"——在收尾前用 `verify` 自证一次，把证据摆出来。');
+  }
   if (planning) {
     base.push(
       'PLAN MODE: First, think through the task and respond with a clear, step-by-step PLAN only. ' +
@@ -1459,7 +1484,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState, autoGit: config.gitCheckpoint ? autoGitCheckpoint : undefined }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState, autoGit: config.gitCheckpoint ? autoGitCheckpoint : undefined, autoVerify: makeAutoVerify(config), verifyTimeoutMs: config.verifyTimeoutMs }
     });
     chatStopped = result.stopped;
 
