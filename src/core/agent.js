@@ -34,6 +34,14 @@ export const PARALLEL_SAFE_TOOLS = new Set([
   'memory_recall'
 ]);
 
+// Tools that can change the workspace on disk (or run commands that do). The
+// git safety net commits after any turn where one of these *succeeded*, and the
+// self-healing loop watches these for repeated failures. `git` itself is
+// excluded — we never try to commit the commits it makes.
+export const MUTATION_TOOLS = new Set([
+  'write_file', 'edit_file', 'make_dir', 'apply_patch', 'run_command', 'run_code'
+]);
+
 export async function runAgent({
   messages,
   callModel,
@@ -76,6 +84,9 @@ export async function runAgent({
   const todo = (opts.todoState && typeof opts.todoState === 'object') ? opts.todoState : null;
   const todoNagEnabled = config.todoReminders !== false;
   let turnsSinceTodo = 0;
+  // Self-healing reflection budget: how many bounded nudges we've injected for
+  // stuck mutating tools this run (capped by config.maxReflections).
+  let reflections = 0;
 
   // Cost guardrail (interactive budget): when cumulative spend crosses the cap,
   // stop the agent gracefully — inject a "stop and summarize" instruction and
@@ -257,6 +268,52 @@ export async function runAgent({
         content: toolContent
       });
     }
+
+    // ── Self-healing reflection (Loop Engineering, 2026) ──
+    // When a mutating tool failed this turn, nudge the model with a bounded
+    // user-side reflection so it re-reads live state and stops repeating a
+    // broken edit. Mirrors Aider's edit→validate→reflect→retry, capped by
+    // maxReflections so a hopeless edit can't loop forever (the Codex "same
+    // fix again" failure mode the 2026 reviews call out).
+    let failedMutation = 0;
+    let succeededMutation = 0;
+    const failedNames = [];
+    for (let i = 0; i < toolCalls.length; i++) {
+      const r = toolResults[i];
+      if (!r || !MUTATION_TOOLS.has(toolCalls[i].name)) continue;
+      if (r.res.ok) succeededMutation++;
+      else { failedMutation++; failedNames.push(toolCalls[i].name); }
+    }
+    if (failedMutation > 0 && config.selfHeal !== false) {
+      const cap = Number.isFinite(Number(config.maxReflections)) ? Number(config.maxReflections) : 3;
+      if (reflections < cap) {
+        reflections++;
+        messages.push({
+          role: 'user',
+          content:
+            `⚠️ 自检提醒（第 ${reflections}/${cap} 次）：本回合有工具调用未成功（${failedNames.join('、')}）。` +
+            '请先重新读取相关文件确认其【当前】内容，再核对参数后重试——不要原样重复刚才失败的调用。' +
+            '若连续多次失败，停下来向用户说明卡点，而不是继续盲试。'
+        });
+      }
+    }
+
+    // ── Auto git checkpoint (Aider-style safety net) ──
+    // After any turn that actually changed files, hand off to the harness so it
+    // snapshots the workspace. The user can then `git undo` a bad edit. Best
+    // effort: a git failure must never break the agent run.
+    if (succeededMutation > 0 && typeof opts.autoGit === 'function') {
+      try {
+        await opts.autoGit({
+          tools: toolCalls
+            .filter((tc, i) => toolResults[i] && toolResults[i].res.ok && MUTATION_TOOLS.has(tc.name))
+            .map((tc) => tc.name)
+        });
+      } catch (e) {
+        if (typeof console !== 'undefined') console.warn('[agenite] autoGit 失败:', e && e.message);
+      }
+    }
+
     turnsSinceTodo = todoTouched ? 0 : turnsSinceTodo + 1;
   }
 

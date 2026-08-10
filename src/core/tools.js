@@ -13,6 +13,7 @@ import { sanitizeUrl } from './util.js';
 import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill } from './memory.js';
 import { BROWSER } from './browser.js';
 import { normalizeTodos, renderTodos, todoProgress, VERIFY_RE } from './todo.js';
+import { isGitRepo, gitStatus, gitDiff, gitLog, gitCommit, gitUndo, gitInit } from './git.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -221,6 +222,19 @@ export const TOOL_DEFS = [
         code: { type: 'string', description: '要执行的源代码（node 按 ESM .mjs 运行，支持 import/export）。' }
       },
       required: ['language', 'code']
+    },
+    danger: true
+  },
+  {
+    name: 'git',
+    description: 'Git 安全网操作：status（状态）/ diff（差异）/ commit（提交）/ undo（回退最近一次 AI 改动）/ log（历史）。注意：agenite 每轮改完文件会【自动提交】并署名 (agenite)，所以你随时可 git undo 一键回退。本工具用于手动查看差异或额外提交。commit 不带 message 时自动生成说明。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: '操作类型：status | diff | commit | undo | log' },
+        message: { type: 'string', description: '仅 commit 使用：提交说明；省略则根据本轮改动自动生成。' }
+      },
+      required: ['action']
     },
     danger: true
   },
@@ -585,6 +599,69 @@ function backoffMs(attempt) {
   return Math.min(8000, base * Math.pow(2, attempt)) + jitter;
 }
 
+function autoCommitMessage() {
+  const t = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  return `agent: 手动检查点 @ ${t}`;
+}
+
+// The git safety net. In normal use you rarely call this directly — the harness
+// auto-commits after every mutating turn (see server.js autoGit) so the user can
+// always `git undo`. This tool exists for explicit inspection / manual commits
+// and to bootstrap a repo when none exists.
+async function gitTool(args = {}, opts = {}) {
+  const dir = opts.workspace || process.cwd();
+  const action = String(args.action || 'status').trim().toLowerCase();
+  if (!['status', 'diff', 'commit', 'undo', 'log'].includes(action)) {
+    return {
+      ok: false,
+      error: `git action 非法：必须是 status | diff | commit | undo | log，收到「${action}」。`,
+      errorClass: 'SCHEMA_ERROR'
+    };
+  }
+  let repo = isGitRepo(dir);
+  if (!repo && action === 'commit') {
+    await gitInit(dir);
+    repo = true;
+  }
+  if (!repo) {
+    return {
+      ok: false,
+      error: '当前工作区不是 Git 仓库，无法执行该操作（如需启用安全网，请先 git init，或调用 git commit 让我为你初始化）。',
+      errorClass: 'PERMANENT'
+    };
+  }
+  switch (action) {
+    case 'status': {
+      const s = await gitStatus(dir);
+      return { ok: true, content: s.trim() || '(干净，无改动)' };
+    }
+    case 'diff': {
+      const d = await gitDiff(dir);
+      return { ok: true, content: d };
+    }
+    case 'log': {
+      const l = await gitLog(dir, Number(args.limit) || 10);
+      return { ok: true, content: l };
+    }
+    case 'commit': {
+      const msg = (typeof args.message === 'string' && args.message.trim()) || autoCommitMessage();
+      const r = await gitCommit(dir, msg);
+      if (!r.committed) return { ok: true, content: r.message };
+      return { ok: true, content: `✅ 已提交 ${r.hash}\n${r.message}` };
+    }
+    case 'undo': {
+      const r = await gitUndo(dir);
+      if (!r.ok) return { ok: false, error: r.error, errorClass: 'PERMANENT' };
+      return {
+        ok: true,
+        content: `↩️ 已通过新提交回退 ${r.reverted} → ${r.hash}（历史未被改写，可随时再 revert 回来）。`
+      };
+    }
+    default:
+      return { ok: false, error: `git action 未实现：${action}`, errorClass: 'SCHEMA_ERROR' };
+  }
+}
+
 export async function executeTool(name, args = {}, opts = {}) {
   const def = TOOL_DEFS.find((t) => t.name === name);
   if (!def) return { ok: false, error: `未知工具: ${name}`, errorClass: 'NOT_FOUND' };
@@ -675,6 +752,8 @@ async function dispatch(name, args, opts) {
         return planTool(args, opts);
       case 'todo_write':
         return todoWrite(args, opts);
+      case 'git':
+        return gitTool(args, opts);
       case 'delegate':
         if (typeof opts.runSubAgent !== 'function') {
           return { ok: false, error: '子代理执行器未配置（需要服务端 runSubAgent）。' };
@@ -1589,15 +1668,68 @@ export async function codebaseSearch(args, opts = {}) {
   };
 }
 
+// Self-healing helper: when an edit's old_text doesn't match, surface the
+// *actual* lines from the file that look most like it (Aider's most-praised
+// behaviour). The model reads this and corrects its SEARCH block instead of
+// blindly retrying. Pure string work, bounded to a small window per candidate.
+function nearestContext(src, oldText, ctx = 3) {
+  const lines = src.split('\n');
+  const ot = oldText.toLowerCase();
+  const otTokens = new Set(tokenizeForMatch(ot));
+  let best = -1;
+  let bestScore = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const lt = lines[i].toLowerCase();
+    if (!lt) continue;
+    let hit = 0;
+    otTokens.forEach((t) => { if (t && lt.includes(t)) hit++; });
+    const score = otTokens.size ? hit / otTokens.size : 0;
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  if (best < 0) return null;
+  const start = Math.max(0, best - ctx);
+  const end = Math.min(lines.length - 1, best + ctx);
+  const out = [];
+  for (let i = start; i <= end; i++) out.push(`${i + 1}: ${lines[i]}`);
+  return { score: bestScore, lines: out.join('\n') };
+}
+
+function tokenizeForMatch(s) {
+  return (s.match(/[A-Za-z0-9_\u4e00-\u9fa5]+/g) || []).map((w) => w.toLowerCase());
+}
+
 async function editLocalFile(args, opts = {}) {
   const abs = resolveSafePath(args.path, opts);
   const oldText = String(args.old_text == null ? '' : args.old_text);
   if (!oldText) return { ok: false, error: 'old_text 不能为空' };
   const src = await readFile(abs, 'utf8');
   const first = src.indexOf(oldText);
-  if (first === -1) return { ok: false, error: `在 ${displayPath(abs, opts)} 中找不到要替换的文本` };
+  if (first === -1) {
+    const near = nearestContext(src, oldText);
+    let msg = `在 ${displayPath(abs, opts)} 中找不到要替换的文本。`;
+    if (near) {
+      msg += `\n\n你是不是想匹配这些实际行？\n${near.lines}` +
+        `\n（与 old_text 的相似度约 ${Math.round(near.score * 100)}%——请按文件真实内容重写 old_text，或先 read_file 确认当前文本）`;
+    }
+    return { ok: false, error: msg, errorClass: 'EDIT_NO_MATCH' };
+  }
   if (src.indexOf(oldText, first + oldText.length) !== -1) {
-    return { ok: false, error: '要替换的文本出现多次，请提供更长的唯一片段' };
+    // Show where the duplicates are so the model can pick a longer unique span.
+    const lines = src.split('\n');
+    const lineNo = src.slice(0, first).split('\n').length;
+    const hints = [];
+    let from = 0;
+    let idx = src.indexOf(oldText, from);
+    while (idx !== -1) {
+      hints.push(src.slice(0, idx).split('\n').length);
+      from = idx + oldText.length;
+      idx = src.indexOf(oldText, from);
+    }
+    return {
+      ok: false,
+      error: `要替换的文本出现 ${hints.length} 次（即多次出现，分别在第 ${hints.join('、')} 行附近），不唯一。请提供更长的片段，使其在该文件中只出现一次。`,
+      errorClass: 'EDIT_NO_MATCH'
+    };
   }
   const newText = String(args.new_text == null ? '' : args.new_text);
   const after = src.slice(0, first) + newText + src.slice(first + oldText.length);

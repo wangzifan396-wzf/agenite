@@ -288,7 +288,18 @@ export function defaultConfig() {
     // and render them as clickable chips ("suggested next steps"). A tiny extra
     // call per turn (cheap, skippable); turned off here for users who dislike
     // the suggestion or want zero added latency/cost.
-    suggestFollowups: true
+    suggestFollowups: true,
+    // --- git safety net (Aider-style auto-checkpoint) ---
+    // After every turn that actually changed files, auto-commit the workspace
+    // so the user can always `git undo` (a new revert commit) any bad agent
+    // edit. Off when the workspace is not a git repo, or set false here.
+    gitCheckpoint: true,
+    // --- self-healing edit loop (Loop Engineering, 2026) ---
+    // When a mutating tool keeps failing, the harness nudges the model with a
+    // bounded reflection message so it re-reads files and stops retrying the
+    // same broken edit forever. maxReflections caps how many nudges per turn.
+    selfHeal: true,
+    maxReflections: 3
   };
 }
 
@@ -336,6 +347,9 @@ export function normalizeConfig(input = {}) {
   cfg.kbEnabled = !!cfg.kbEnabled;
   cfg.kbTopK = Math.round(clampNum(cfg.kbTopK, 1, 20, 5));
   cfg.suggestFollowups = cfg.suggestFollowups !== false;
+  cfg.gitCheckpoint = cfg.gitCheckpoint !== false;
+  cfg.selfHeal = cfg.selfHeal !== false;
+  cfg.maxReflections = Math.round(clampNum(cfg.maxReflections, 0, 10, 3));
   return cfg;
 }
 

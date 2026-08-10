@@ -36,6 +36,7 @@ import {
 } from './src/core/eval.js';
 import { createKnowledge } from './src/core/knowledge.js';
 import { emptyTodoState } from './src/core/todo.js';
+import { isGitRepo, isClean, gitCommit } from './src/core/git.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -84,6 +85,35 @@ export function clearTodoState(convId) {
   if (convId == null) { TODO_STATES.clear(); return; }
   TODO_STATES.delete(String(convId));
 }
+
+// ---- git auto-checkpoint (Aider-style safety net) ----
+// After every turn that actually changed files, snapshot the workspace so the
+// user can `git undo` a bad edit. Only fires when WORKSPACE is already a git
+// repo — we never silently `git init` the user's directory (that surprise is
+// exactly what Aider's auto-commits are *not* supposed to do). The model can
+// still call `git commit` to bootstrap a repo explicitly.
+let gitUserSnapshotted = false;
+
+async function autoGitCheckpoint(turnTools = []) {
+  if (!isGitRepo(WORKSPACE)) return;
+  // Dirty-commit-first: snapshot any pre-existing user changes ONCE, attributed
+  // to "User", so agent commits stay cleanly attributable to "(agenite)".
+  if (!gitUserSnapshotted) {
+    gitUserSnapshotted = true;
+    if (!(await isClean(WORKSPACE))) {
+      await gitCommit(WORKSPACE, 'user: snapshot pre-existing working changes before agent edits', {
+        addAll: true,
+        author: 'User <user@local>'
+      });
+    }
+  }
+  if (await isClean(WORKSPACE)) return;
+  const names = [...new Set(turnTools)].join(', ');
+  await gitCommit(WORKSPACE, `agent: auto-checkpoint — ${names || 'workspace changes'}`, { addAll: true });
+}
+
+// Reset the per-process "did we snapshot user changes" latch (used by tests).
+export function _resetGitSnapshot() { gitUserSnapshotted = false; }
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -967,8 +997,12 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
     'When you write code or files, keep changes minimal and explain them briefly afterwards.',
     'When a request decomposes into several INDEPENDENT sub-tasks (no shared intermediate state), prefer the `fanout` tool to run them in parallel at once — it is much faster than calling `delegate` repeatedly. Use `delegate` for a single focused side task, or when sub-tasks depend on each other.',
     'TASK TRACKING: for anything that takes 3+ steps, or when the user hands you several things at once, call `todo_write` FIRST to lay out the whole checklist (always include a final verification step), then keep it truthful as you go — exactly one item in_progress, mark each one completed the moment it is really done, and resend the complete list every time. This is how you avoid finishing step 12 having forgotten what step 1 was for. Skip it only for genuinely single-step requests.',
-    '你可以在设置里切换「角色人格」(persona) 来改变说话与思维方式（如 strict-reviewer / warm-writer / researcher，或自定义）。若当前任务明显更适合某个角色，主动建议用户切换。'
+    '你可以在设置里切换「角色人格」(persona) 来改变说话与思维方式（如 strict-reviewer / warm-writer / researcher，或自定义）。若当前任务明显更适合某个角色，主动建议用户切换。',
+    'GIT 安全网：每次你改动文件后，系统会自动把工作区 git 提交（署名 Agenite Agent (agenite)），因此任何一步改坏都能随时 `git undo` 一键回退——你可以放心大胆地改。想查看改动用 `git diff`，想回退用 `git undo`，想看历史用 `git log`。不要在 git 操作上犹豫或反复确认，安全网已经兜底。'
   ];
+  if (config.gitCheckpoint === false) {
+    base.push('（本次已关闭自动 git 提交安全网：你的改动不会自动提交，需要手动用 `git commit` 或 `git` 工具保存。）');
+  }
   if (planning) {
     base.push(
       'PLAN MODE: First, think through the task and respond with a clear, step-by-step PLAN only. ' +
@@ -1425,7 +1459,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState, autoGit: config.gitCheckpoint ? autoGitCheckpoint : undefined }
     });
     chatStopped = result.stopped;
 
