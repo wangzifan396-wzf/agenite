@@ -38,7 +38,8 @@ import {
 import { createKnowledge } from './src/core/knowledge.js';
 import { emptyTodoState } from './src/core/todo.js';
 import { isGitRepo, isClean, gitCommit } from './src/core/git.js';
-import { verifyWorkspace } from './src/core/verify.js';
+import { verifyWorkspace, detectVerify } from './src/core/verify.js';
+import { findBadCommit, chooseGoodRef, formatHuntReport } from './src/core/bisect.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -287,6 +288,11 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/evals') return handleEvalsList(req, res);
   if (req.method === 'GET' && url.startsWith('/api/evals/')) return handleEvalGet(req, res, req.url);
   if (req.method === 'DELETE' && url.startsWith('/api/evals/')) return handleEvalDelete(req, res, req.url);
+
+  // ---- Regression Hunter: git bisect driven by the project's own tests ----
+  if (req.method === 'GET' && url === '/api/regression-hunt') return handleHuntDefaults(req, res);
+  if (req.method === 'POST' && url === '/api/regression-hunt') return handleHuntStart(req, res);
+  if (req.method === 'GET' && url.startsWith('/api/regression-hunt/')) return handleHuntPoll(req, res, req.url);
 
   // ---- Agenite Browser: built-in live web browsing (local Chrome) ----
   if (req.method === 'GET' && url === '/api/browser') return handleBrowserGet(req, res);
@@ -740,6 +746,99 @@ async function handleTraceDelete(req, res, reqUrl) {
   return sendJson(res, ok ? 200 : 404, { ok, deleted: id });
 }
 
+// ---------- Regression Hunter handlers ----------
+// A hunt runs the project's real test command once per bisect round, so it is
+// minutes-long, not seconds-long. Same shape as eval: accept, run in the
+// background, let the client poll. Rounds stream into the job as they finish
+// so the UI can show "3/~5 轮" instead of an opaque spinner.
+const huntJobs = new Map(); // huntId -> { status, rounds[], result, error, startedAt }
+const MAX_HUNT_JOBS = 20;
+
+/** What the UI needs to prefill the form: is a hunt even possible right now? */
+async function handleHuntDefaults(req, res) {
+  const repo = isGitRepo(WORKSPACE);
+  if (!repo) {
+    return sendJson(res, 200, {
+      ok: true, repo: false, clean: false,
+      error: '当前工作区不是 git 仓库 —— 回归猎手需要提交历史才能二分。'
+    });
+  }
+  const clean = await isClean(WORKSPACE);
+  let good = null;
+  try { good = await chooseGoodRef(WORKSPACE); } catch { good = null; }
+  const spec = detectVerify(WORKSPACE);
+  return sendJson(res, 200, {
+    ok: true,
+    repo: true,
+    clean,
+    workspace: WORKSPACE,
+    suggestedGoodRef: good ? { ref: good.ref, source: good.source } : null,
+    detected: spec ? { label: spec.label, source: spec.source } : null
+  });
+}
+
+async function handleHuntStart(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)) || '{}');
+  } catch {
+    return sendJson(res, 400, { ok: false, error: '无效的 JSON' });
+  }
+  // One hunt at a time: two concurrent bisects would fight over the working tree.
+  for (const [, j] of huntJobs) {
+    if (j.status === 'running') {
+      return sendJson(res, 409, { ok: false, error: '已有一次回归定位正在运行，请等它结束。' });
+    }
+  }
+
+  const huntId = 'hunt_' + Date.now().toString(36);
+  const job = { status: 'running', rounds: [], startedAt: Date.now(), result: null, error: null };
+  huntJobs.set(huntId, job);
+  // Bound the map so a long-lived server can't accumulate finished jobs.
+  if (huntJobs.size > MAX_HUNT_JOBS) {
+    const oldest = [...huntJobs.entries()]
+      .filter(([, j]) => j.status !== 'running')
+      .sort((a, b) => a[1].startedAt - b[1].startedAt)[0];
+    if (oldest) huntJobs.delete(oldest[0]);
+  }
+
+  void findBadCommit(WORKSPACE, {
+    goodRef: String(body.goodRef || '').trim(),
+    testCmd: String(body.testCmd || '').trim(),
+    maxRounds: Math.max(1, Math.min(30, Number(body.maxRounds) || 12)),
+    timeoutMs: Math.max(5000, Math.min(900000, Number(body.timeoutMs) || 120000)),
+    onProgress: (e) => { job.rounds.push(e); if (job.rounds.length > 60) job.rounds.shift(); }
+  })
+    .then((r) => {
+      job.result = r;
+      job.report = formatHuntReport(r);
+      job.status = r.ok === false ? 'error' : 'done';
+      if (r.ok === false) job.error = r.error;
+    })
+    .catch((e) => {
+      job.status = 'error';
+      job.error = e && e.message ? e.message : String(e);
+    });
+
+  return sendJson(res, 202, { ok: true, huntId, status: 'running' });
+}
+
+async function handleHuntPoll(req, res, reqUrl) {
+  const u = new URL(reqUrl || '/', 'http://localhost');
+  const id = decodeURIComponent(u.pathname.replace(/^\/api\/regression-hunt\/?/, '').trim());
+  const job = huntJobs.get(id);
+  if (!job) return sendJson(res, 404, { ok: false, error: '未找到该任务。' });
+  return sendJson(res, 200, {
+    ok: true,
+    status: job.status,
+    rounds: job.rounds,
+    elapsedMs: Date.now() - job.startedAt,
+    result: job.result,
+    report: job.report || null,
+    error: job.error
+  });
+}
+
 // ---------- Agenite Eval handlers ----------
 // Eval replays real past runs (frozen tools) against the model, so it is a
 // long-running, multi-call operation. We accept the request, kick off the run
@@ -1072,7 +1171,8 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
     'When a request decomposes into several INDEPENDENT sub-tasks (no shared intermediate state), prefer the `fanout` tool to run them in parallel at once — it is much faster than calling `delegate` repeatedly. Use `delegate` for a single focused side task, or when sub-tasks depend on each other.',
     'TASK TRACKING: for anything that takes 3+ steps, or when the user hands you several things at once, call `todo_write` FIRST to lay out the whole checklist (always include a final verification step), then keep it truthful as you go — exactly one item in_progress, mark each one completed the moment it is really done, and resend the complete list every time. This is how you avoid finishing step 12 having forgotten what step 1 was for. Skip it only for genuinely single-step requests.',
     '你可以在设置里切换「角色人格」(persona) 来改变说话与思维方式（如 strict-reviewer / warm-writer / researcher，或自定义）。若当前任务明显更适合某个角色，主动建议用户切换。',
-    'GIT 安全网：每次你改动文件后，系统会自动把工作区 git 提交（署名 Agenite Agent (agenite)），因此任何一步改坏都能随时 `git undo` 一键回退——你可以放心大胆地改。想查看改动用 `git diff`，想回退用 `git undo`，想看历史用 `git log`。不要在 git 操作上犹豫或反复确认，安全网已经兜底。'
+    'GIT 安全网：每次你改动文件后，系统会自动把工作区 git 提交（署名 Agenite Agent (agenite)），因此任何一步改坏都能随时 `git undo` 一键回退——你可以放心大胆地改。想查看改动用 `git diff`，想回退用 `git undo`，想看历史用 `git log`。不要在 git 操作上犹豫或反复确认，安全网已经兜底。',
+    'REGRESSION HUNTER：当用户说"以前是好的、现在坏了""什么时候开始出问题""某次更新后这个功能挂了"时，调用 `regression_hunt` 工具让系统自动二分（git bisect）git 历史、用本项目的校验命令逐提交定位第一个坏提交——而不是手动逐个 checkout 试。前提：工作区必须干净（通常已由 git 安全网自动提交）、且 HEAD 当前确实在失败；不满足时先让用户确认，不要硬跑。'
   ];
   if (config.gitCheckpoint === false) {
     base.push('（本次已关闭自动 git 提交安全网：你的改动不会自动提交，需要手动用 `git commit` 或 `git` 工具保存。）');

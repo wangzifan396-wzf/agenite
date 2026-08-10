@@ -3853,6 +3853,183 @@ function closeEval() {
   if (evalPolling) { clearInterval(evalPolling); evalPolling = null; }
 }
 
+// ---------- Regression Hunter ----------
+// Bisecting by hand is the definition of work a computer should do for you:
+// checkout, run tests, judge, repeat. The panel's whole job is to make the
+// wait legible — each round streams back as it finishes, so you can watch the
+// candidate range collapse instead of staring at a spinner.
+let regPolling = null;
+
+async function loadRegDefaults() {
+  const pre = $('reg-precheck');
+  const hint = $('reg-hint');
+  try {
+    const r = await fetch('/api/regression-hunt');
+    const j = await r.json();
+    if (!j.repo) {
+      pre.textContent = '✗ ' + (j.error || '当前工作区不是 git 仓库。');
+      pre.className = 'reg-precheck reg-blocked';
+      $('reg-run').disabled = true;
+      return;
+    }
+    if (!j.clean) {
+      pre.innerHTML = '⚠ 工作区有<b>未提交的改动</b>。二分会来回切换提交，可能覆盖它们 —— 请先 <code>git commit</code> 或 <code>git stash</code>。';
+      pre.className = 'reg-precheck reg-blocked';
+      $('reg-run').disabled = true;
+      return;
+    }
+    pre.textContent = '✓ 工作区干净，可以开始定位。';
+    pre.className = 'reg-precheck reg-ready';
+    $('reg-run').disabled = false;
+    if (j.suggestedGoodRef) {
+      $('reg-good').placeholder = `留空则用 ${j.suggestedGoodRef.ref}（${j.suggestedGoodRef.source}）`;
+    }
+    if (j.detected) {
+      $('reg-cmd').placeholder = `留空则用 ${j.detected.label}（来自 ${j.detected.source}）`;
+      hint.textContent = '提示：指向一个能复现该 bug 的最小测试，会快很多。';
+    } else {
+      hint.textContent = '未探测到项目校验命令 —— 请手动填写判定命令。';
+    }
+  } catch (e) {
+    pre.textContent = '✗ 无法连接本地服务：' + e.message;
+    pre.className = 'reg-precheck reg-blocked';
+    $('reg-run').disabled = true;
+  }
+}
+
+const REG_VERDICT = { good: ['✓', '通过'], bad: ['✗', '失败'], skip: ['⊘', '跳过'] };
+
+function renderRegRounds(rounds) {
+  const box = $('reg-rounds-list');
+  if (!rounds || !rounds.length) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  box.innerHTML = rounds.map((e) => {
+    const [ico, word] = REG_VERDICT[e.verdict] || ['·', e.verdict];
+    const phase = e.phase === 'preflight-head' ? '预检 HEAD'
+      : e.phase === 'preflight-good' ? '预检基准'
+        : `第 ${e.round} 轮`;
+    return `<div class="reg-round rr-${e.verdict}">
+      <span class="rr-ico">${ico}</span>
+      <span class="rr-phase">${escapeHtml(phase)}</span>
+      <code class="rr-hash">${escapeHtml(e.hash || '')}</code>
+      <span class="rr-verdict">${word}</span>
+      <span class="rr-ms muted small">${e.ms != null ? Math.round(e.ms / 1000) + 's' : ''}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderRegResult(j) {
+  const box = $('reg-result');
+  box.classList.remove('hidden');
+  const r = j.result || {};
+  if (j.status === 'error' || r.ok === false) {
+    box.className = 'reg-result reg-miss';
+    box.innerHTML = `<div class="reg-miss-head">✗ 无法完成定位</div><p class="muted small">${escapeHtml(j.error || r.error || '未知错误')}</p>`;
+    return;
+  }
+  if (!r.found) {
+    box.className = 'reg-result reg-miss';
+    box.innerHTML = `<div class="reg-miss-head">○ 没有定位到坏提交</div>
+      <p>${escapeHtml(r.reason || '')}</p>
+      ${r.hint ? `<p class="muted small">→ ${escapeHtml(r.hint)}</p>` : ''}`;
+    return;
+  }
+  const c = r.commit || {};
+  const files = (r.files || []).slice(0, 10);
+  box.className = 'reg-result reg-hit';
+  box.innerHTML = `
+    <div class="reg-hit-head">🔍 找到引入问题的提交</div>
+    <div class="reg-commit">
+      <code class="reg-hash">${escapeHtml(c.short || '')}</code>
+      <span class="reg-subject">${escapeHtml(c.subject || '')}</span>
+    </div>
+    <div class="reg-meta muted small">
+      ${escapeHtml(c.author || '')} · ${escapeHtml(c.date || '')} ·
+      在 ${r.searchSpace} 个提交里测试 ${r.rounds} 轮${r.ms ? ` · 耗时 ${Math.round(r.ms / 1000)}s` : ''}
+    </div>
+    ${files.length ? `<div class="reg-files">${files.map((f) => `<code>${escapeHtml(f)}</code>`).join('')}${(r.files || []).length > files.length ? `<span class="muted small">等 ${r.files.length} 个</span>` : ''}</div>` : ''}
+    <div class="reg-actions">
+      <button id="reg-ask" class="mini-btn">让智能体分析这个提交</button>
+      <code class="reg-cmdhint">git show ${escapeHtml(c.short || '')}</code>
+    </div>`;
+  const ask = $('reg-ask');
+  if (ask) {
+    ask.onclick = () => {
+      closeRegression();
+      $('input').value = `回归猎手定位到提交 ${c.short}（${c.subject}）引入了失败。请用 git show ${c.short} 看清它改了什么，找出导致失败的具体原因并修复。`;
+      $('input').focus();
+    };
+  }
+}
+
+async function runRegressionHunt() {
+  const body = {
+    goodRef: $('reg-good').value.trim(),
+    testCmd: $('reg-cmd').value.trim(),
+    maxRounds: Math.min(30, Math.max(1, Number($('reg-rounds').value) || 12))
+  };
+  $('reg-run').disabled = true;
+  $('reg-result').classList.add('hidden');
+  $('reg-rounds-list').classList.add('hidden');
+  $('reg-status').classList.remove('hidden');
+  $('reg-status').textContent = '⏳ 正在二分历史 —— 每一轮都会真实运行一次测试命令，请耐心等待…';
+  try {
+    const r = await fetch('/api/regression-hunt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      $('reg-status').textContent = '✗ ' + (j.error || '启动失败');
+      $('reg-run').disabled = false;
+      return;
+    }
+    pollRegression(j.huntId);
+  } catch (e) {
+    $('reg-status').textContent = '✗ ' + e.message;
+    $('reg-run').disabled = false;
+  }
+}
+
+function pollRegression(huntId) {
+  if (regPolling) clearInterval(regPolling);
+  const tick = async () => {
+    try {
+      const r = await fetch('/api/regression-hunt/' + encodeURIComponent(huntId));
+      const j = await r.json();
+      if (!j.ok) return;
+      renderRegRounds(j.rounds);
+      if (j.status === 'running') {
+        const n = (j.rounds || []).filter((e) => e.phase && e.phase.startsWith('round')).length;
+        $('reg-status').textContent = `⏳ 已完成 ${n} 轮二分 · 用时 ${Math.round((j.elapsedMs || 0) / 1000)}s`;
+        return;
+      }
+      clearInterval(regPolling);
+      regPolling = null;
+      $('reg-status').classList.add('hidden');
+      renderRegResult(j);
+      $('reg-run').disabled = false;
+    } catch { /* keep polling — the server may be busy running tests */ }
+  };
+  regPolling = setInterval(tick, 1500);
+  tick();
+}
+
+function openRegression() {
+  $('regression-modal').classList.remove('hidden');
+  $('reg-result').classList.add('hidden');
+  $('reg-rounds-list').classList.add('hidden');
+  $('reg-status').classList.add('hidden');
+  loadRegDefaults();
+}
+
+function closeRegression() {
+  $('regression-modal').classList.add('hidden');
+  // The hunt itself keeps running server-side; only stop watching it.
+  if (regPolling) { clearInterval(regPolling); regPolling = null; }
+}
+
 // ---------- Browser live preview ----------
 // Mirrors the eval/trace panels: open the modal, pull the shared browser's
 // live state (URL + screenshot) from /api/browser, and keep it fresh on a
@@ -4308,6 +4485,9 @@ function wire() {
   $('trace-refresh').onclick = refreshTrace;
   $('open-eval').onclick = openEval;
   $('close-eval').onclick = closeEval;
+  $('open-regression').onclick = openRegression;
+  $('close-regression').onclick = closeRegression;
+  $('reg-run').onclick = runRegressionHunt;
   $('eval-run').onclick = runEval;
   $('open-browser').onclick = openBrowserPanel;
   $('close-browser').onclick = closeBrowserPanel;
@@ -4583,6 +4763,7 @@ function wire() {
   $('atlas-modal').addEventListener('mousedown', (e) => { if (e.target === $('atlas-modal')) closeAtlas(); });
   $('trace-modal').addEventListener('mousedown', (e) => { if (e.target === $('trace-modal')) closeTrace(); });
   $('eval-modal').addEventListener('mousedown', (e) => { if (e.target === $('eval-modal')) closeEval(); });
+  $('regression-modal').addEventListener('mousedown', (e) => { if (e.target === $('regression-modal')) closeRegression(); });
   $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
   $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
 
@@ -4765,6 +4946,7 @@ function wire() {
       else if (!$('atlas-modal').classList.contains('hidden')) closeAtlas();
       else if (!$('trace-modal').classList.contains('hidden')) closeTrace();
       else if (!$('eval-modal').classList.contains('hidden')) closeEval();
+      else if (!$('regression-modal').classList.contains('hidden')) closeRegression();
       else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
       else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
       else closeSettings();

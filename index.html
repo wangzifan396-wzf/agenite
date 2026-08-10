@@ -78,6 +78,7 @@
         <button id="open-atlas" class="side-link">记忆图谱</button>
         <button id="open-trace" class="side-link">执行轨迹</button>
         <button id="open-eval" class="side-link">评估 Eval</button>
+        <button id="open-regression" class="side-link">🔍 回归猎手</button>
         <button id="open-browser" class="side-link">🌐 浏览器</button>
         <button id="open-snippets" class="side-link">💡 指令库</button>
         <button id="open-kb" class="side-link">📚 知识库</button>
@@ -349,6 +350,39 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 回归猎手 · Regression Hunter：用项目自己的测试命令二分 git 历史，自动揪出坏提交 -->
+  <div id="regression-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card reg-card">
+      <div class="drawer-head">
+        <h2>回归猎手 · Regression Hunter</h2>
+        <button id="close-regression" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body reg-body">
+        <p class="muted small reg-intro">“以前明明是好的。” —— 对 git 历史做二分查找，每一步都跑<b>项目自己的测试命令</b>判定好坏，直接定位是<b>哪一个提交</b>把它弄坏的。1000 个提交只需约 10 次测试。前提：工作区干净，且当前 HEAD 确实是失败的。</p>
+        <div id="reg-precheck" class="reg-precheck muted small">检查工作区…</div>
+        <div class="reg-form">
+          <label class="field">已知正常的提交 / tag
+            <input id="reg-good" type="text" placeholder="留空则自动选最近的 tag" autocomplete="off" />
+          </label>
+          <label class="field">判定命令
+            <input id="reg-cmd" type="text" placeholder="留空则自动探测项目校验命令" autocomplete="off" />
+          </label>
+          <label class="field inline">最多轮数
+            <input id="reg-rounds" type="number" min="1" max="30" value="12" />
+          </label>
+        </div>
+        <div class="reg-runrow">
+          <span id="reg-hint" class="muted small"></span>
+          <div class="grow"></div>
+          <button id="reg-run" class="primary-btn">开始定位</button>
+        </div>
+        <div id="reg-status" class="reg-status hidden"></div>
+        <div id="reg-rounds-list" class="reg-rounds hidden"></div>
+        <div id="reg-result" class="reg-result hidden"></div>
       </div>
     </div>
   </div>

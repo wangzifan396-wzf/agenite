@@ -19,12 +19,16 @@
 // fake `callModel` / `executeTool` — no real model or network required.
 import { runAgent, clampTurns } from './agent.js';
 
-// Remove `delegate` (no nesting) and `git` (a sub-agent must never rewrite the
-// parent's repo history / undo its commits), then optionally intersect with a
-// tool scope.
+// Remove `delegate` (no nesting), `git` (a sub-agent must never rewrite the
+// parent's repo history / undo its commits) and `regression_hunt` (it checks
+// commits in and out of the shared working tree — a sub-agent running that
+// while the parent works would yank the files out from under it), then
+// optionally intersect with a tool scope.
+const SUBAGENT_FORBIDDEN = new Set(['delegate', 'git', 'regression_hunt']);
+
 export function scopeTools(tools, toolScope) {
   const base = (tools || []).filter(
-    (t) => t && t.name && t.name !== 'delegate' && t.name !== 'git'
+    (t) => t && t.name && !SUBAGENT_FORBIDDEN.has(t.name)
   );
   if (Array.isArray(toolScope) && toolScope.length) {
     const allowed = new Set(toolScope.map(String));

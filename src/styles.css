@@ -1793,6 +1793,45 @@ select.text-input { appearance: auto; padding-right: 8px; }
   .eval-history-wrap { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 10px; }
 }
 
+/* ---- Regression Hunter ---- */
+.reg-card { max-width: 720px; }
+.reg-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.reg-intro { line-height: 1.65; }
+.reg-precheck { padding: 8px 11px; border-radius: 10px; border: 1px solid var(--border); }
+.reg-ready { color: #7ee2a0; border-color: rgba(126,226,160,.35); background: rgba(126,226,160,.08); }
+.reg-blocked { color: #ffcf7a; border-color: rgba(255,180,60,.4); background: rgba(255,180,60,.1); }
+.reg-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+.reg-runrow { display: flex; align-items: center; gap: 10px; }
+.reg-status { font-size: 12px; color: var(--muted); padding: 7px 11px; border-radius: 10px; background: var(--panel-2, rgba(255,255,255,.03)); border: 1px solid var(--border); }
+.reg-rounds { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow-y: auto; }
+.reg-round { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 4px 9px; border-radius: 8px; border: 1px solid transparent; }
+.rr-good { background: rgba(126,226,160,.08); border-color: rgba(126,226,160,.22); }
+.rr-bad { background: rgba(255,139,139,.08); border-color: rgba(255,139,139,.22); }
+.rr-skip { background: rgba(255,207,122,.08); border-color: rgba(255,207,122,.22); }
+.rr-ico { width: 14px; text-align: center; font-weight: 700; }
+.rr-good .rr-ico, .rr-good .rr-verdict { color: #7ee2a0; }
+.rr-bad .rr-ico, .rr-bad .rr-verdict { color: #ff8b8b; }
+.rr-skip .rr-ico, .rr-skip .rr-verdict { color: #ffcf7a; }
+.rr-phase { min-width: 62px; color: var(--muted); }
+.rr-hash { font-size: 11px; opacity: .8; }
+.rr-ms { margin-left: auto; }
+.reg-result { padding: 13px 15px; border-radius: 12px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.reg-hit { border-color: rgba(255,139,139,.4); background: rgba(255,139,139,.07); }
+.reg-miss { border-color: var(--border); }
+.reg-hit-head { font-weight: 650; color: #ff8b8b; }
+.reg-miss-head { font-weight: 650; color: var(--muted); }
+.reg-commit { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.reg-hash { font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 7px; background: rgba(0,0,0,.18); }
+.reg-subject { font-weight: 600; }
+.reg-files { display: flex; flex-wrap: wrap; gap: 5px; }
+.reg-files code { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: rgba(0,0,0,.15); }
+.reg-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+.reg-cmdhint { font-size: 11px; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .reg-form { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 760px) {
   .atlas-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
   .atlas-side { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 10px; flex-direction: row; flex-wrap: wrap; }

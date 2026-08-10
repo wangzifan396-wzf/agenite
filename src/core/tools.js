@@ -15,6 +15,7 @@ import { BROWSER } from './browser.js';
 import { normalizeTodos, renderTodos, todoProgress, VERIFY_RE } from './todo.js';
 import { isGitRepo, gitStatus, gitDiff, gitLog, gitCommit, gitUndo, gitInit, gitChangedFiles } from './git.js';
 import { verifyWorkspace, detectVerify, syntaxCheckable } from './verify.js';
+import { findBadCommit, formatHuntReport } from './bisect.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -248,6 +249,20 @@ export const TOOL_DEFS = [
         level: { type: 'string', description: '验证级别：syntax（默认，仅语法快检）| full（运行项目测试命令）' },
         files: { type: 'array', items: { type: 'string' }, description: '仅 syntax 使用：要检查的文件路径；省略时检查本次会话改动过的文件。' },
         cmd: { type: 'string', description: '仅 full 使用：自定义校验命令（如 "npm test"）；省略则自动探测。' }
+      },
+      required: []
+    },
+    danger: true
+  },
+  {
+    name: 'regression_hunt',
+    description: '回归猎手：自动定位是【哪一个提交】引入了当前的失败。它对 git 历史做二分查找（1000 个提交只需约 10 次测试），每一步都用项目自己的校验命令判定好坏，最后给出坏提交的 hash、标题、作者与改动文件。当用户说"以前是好的，现在坏了""什么时候开始出问题的""帮我找出是哪次改动搞坏的"时用它，不要手动一个个 git checkout 试。前提：工作区必须干净（无未提交改动），且 HEAD 当前确实是失败的。',
+    parameters: {
+      type: 'object',
+      properties: {
+        good_ref: { type: 'string', description: '已知正常的提交或 tag（如 v0.45.0 或某个 hash）；省略则自动选最近的 tag，没有 tag 就回退 20 个提交。' },
+        test_cmd: { type: 'string', description: '判定好坏的命令（如 "npm test" 或 "node --test test/foo.test.js"）；省略则自动探测项目校验命令。指向能复现该 bug 的最小测试会快很多。' },
+        max_rounds: { type: 'number', description: '最多二分几轮，默认 12（足够覆盖 4096 个提交）。' }
       },
       required: []
     },
@@ -696,6 +711,32 @@ async function verifyTool(args = {}, opts = {}) {
   };
 }
 
+// Regression Hunter. The single most valuable thing you can do with a clean
+// git history and a working test command, and the classic case where an agent
+// beats a human on raw patience: ~10 automated test runs to search 1000
+// commits, versus twenty minutes of manual checkout-and-retry.
+async function regressionHunt(args = {}, opts = {}) {
+  const dir = opts.workspace || process.cwd();
+  const maxRounds = Number.isFinite(Number(args.max_rounds))
+    ? Math.max(1, Math.min(30, Math.round(Number(args.max_rounds))))
+    : 12;
+
+  const r = await findBadCommit(dir, {
+    goodRef: String(args.good_ref || '').trim(),
+    testCmd: String(args.test_cmd || '').trim(),
+    maxRounds,
+    timeoutMs: Number(opts.verifyTimeoutMs) || 120000,
+    onProgress: typeof opts.onHuntProgress === 'function' ? opts.onHuntProgress : null
+  });
+
+  if (r.ok === false) {
+    return { ok: false, error: r.error || '回归猎手执行失败。', errorClass: r.errorClass || 'BISECT_FAILED' };
+  }
+  // "Didn't find one" is a legitimate, informative answer — not a tool error.
+  // Reporting it as a failure would just make the model retry pointlessly.
+  return { ok: true, content: formatHuntReport(r), meta: r };
+}
+
 // The other half of the context economy layer (see compress.js). Compression
 // is only defensible because this exists: the agent can always get the elided
 // bytes back, so shrinking a result is a caching decision rather than data
@@ -875,6 +916,8 @@ async function dispatch(name, args, opts) {
         return gitTool(args, opts);
       case 'verify':
         return verifyTool(args, opts);
+      case 'regression_hunt':
+        return regressionHunt(args, opts);
       case 'context_retrieve':
         return contextRetrieve(args, opts);
       case 'delegate':

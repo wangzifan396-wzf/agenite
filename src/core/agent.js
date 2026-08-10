@@ -41,7 +41,7 @@ export const PARALLEL_SAFE_TOOLS = new Set([
 // compression — compressing its output would be a loop with no exit. The rest
 // are short, structured, and load-bearing: a truncated todo echo or plan would
 // make the model think its own state was corrupted.
-const NEVER_COMPRESS = new Set(['context_retrieve', 'todo_write', 'plan', 'verify', 'git']);
+const NEVER_COMPRESS = new Set(['context_retrieve', 'todo_write', 'plan', 'verify', 'git', 'regression_hunt']);
 
 // Tools that can change the workspace on disk (or run commands that do). The
 // git safety net commits after any turn where one of these *succeeded*, and the
