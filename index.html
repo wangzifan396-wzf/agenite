@@ -139,6 +139,17 @@
         </div>
       </header>
 
+      <!-- 实时任务清单（todo_write）：长任务不跑偏的关键，模型每更新一次就重画 -->
+      <div id="todo-panel" class="todo-panel hidden">
+        <button id="todo-head" class="todo-head" title="点击折叠 / 展开任务清单">
+          <svg class="todo-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          <span class="todo-name">任务清单</span>
+          <span id="todo-progress" class="todo-progress"></span>
+          <span class="todo-bar"><i id="todo-bar-fill"></i></span>
+        </button>
+        <ol id="todo-list" class="todo-list"></ol>
+      </div>
+
       <div id="scroller">
         <div id="messages"></div>
       </div>

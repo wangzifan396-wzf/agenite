@@ -74,7 +74,11 @@ export function createSubAgentRunner({
     if (!goal) return { ok: false, error: 'delegate 需要 goal 参数' };
 
     const persona = String(args.persona || args.role || '').trim();
-    const childTools = scopeTools(tools, Array.isArray(args.tool_scope) ? args.tool_scope.map(String) : null);
+    // The task checklist belongs to the main conversation — it's what the human
+    // is watching. A sub-agent handles one focused side task in the dark, so it
+    // must not be able to rewrite (or wipe) the parent's list.
+    const childTools = scopeTools(tools, Array.isArray(args.tool_scope) ? args.tool_scope.map(String) : null)
+      .filter((t) => t && t.name !== 'todo_write');
     if (!childTools.length) return { ok: false, error: '子代理没有可用工具' };
 
     const maxTurns = clampTurns(

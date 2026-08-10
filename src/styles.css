@@ -379,6 +379,79 @@ button { cursor: pointer; background: none; border: none; }
 }
 .icon-btn:hover { background: var(--panel-2); color: var(--text); }
 
+/* --- live task checklist (todo_write) ---
+   Sits between the header and the transcript so it never scrolls away: the
+   whole point is that you can always see what the agent thinks it is doing. */
+.todo-panel {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  animation: todo-in .22s var(--ease) both;
+}
+@keyframes todo-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.todo-head {
+  width: 100%;
+  max-width: var(--read-w);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 20px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+.todo-head:hover { color: var(--text); }
+.todo-caret { flex: 0 0 auto; transition: transform .16s var(--ease); }
+.todo-panel.collapsed .todo-caret { transform: rotate(-90deg); }
+.todo-name { font-weight: 600; letter-spacing: .01em; }
+.todo-progress { color: var(--muted); font-variant-numeric: tabular-nums; }
+.todo-bar {
+  flex: 1 1 auto;
+  height: 4px;
+  min-width: 40px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  overflow: hidden;
+}
+.todo-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width .35s var(--ease);
+}
+.todo-list {
+  max-width: var(--read-w);
+  margin: 0 auto;
+  padding: 0 20px 11px;
+  list-style: none;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.todo-panel.collapsed .todo-list { display: none; }
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.todo-mark { flex: 0 0 auto; width: 15px; text-align: center; margin-top: 1px; opacity: .85; }
+.todo-item.done { color: var(--muted); }
+.todo-item.done .todo-text { text-decoration: line-through; text-decoration-color: var(--border-strong); }
+.todo-item.running { color: var(--text); font-weight: 560; }
+.todo-item.running .todo-mark { color: var(--accent); animation: todo-spin 1.4s linear infinite; opacity: 1; }
+@keyframes todo-spin { to { transform: rotate(360deg); } }
+.todo-text { flex: 1 1 auto; word-break: break-word; }
+
 /* --- message scroller --- */
 #scroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
 #messages { max-width: var(--read-w); margin: 0 auto; padding: 26px 20px 8px; }

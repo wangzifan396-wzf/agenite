@@ -12,6 +12,7 @@ import os from 'node:os';
 import { sanitizeUrl } from './util.js';
 import { recall as memRecall, saveMemory, logDaily, saveSkill, readSkill } from './memory.js';
 import { BROWSER } from './browser.js';
+import { normalizeTodos, renderTodos, todoProgress, VERIFY_RE } from './todo.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -273,6 +274,37 @@ export const TOOL_DEFS = [
         text: { type: 'string', description: 'Optional free-form plan text if you prefer not to use steps.' }
       },
       required: []
+    },
+    danger: false
+  },
+  {
+    name: 'todo_write',
+    description:
+      'Track a multi-step task as a live checklist so you never lose the thread. ' +
+      'Use it for any request that needs 3+ steps, or whenever the user hands you several things at once. ' +
+      'RULES: (1) always send the COMPLETE list — this replaces the previous list, it is not a patch; ' +
+      '(2) exactly one item may be in_progress at a time; ' +
+      '(3) mark an item completed the moment it is actually done (not "probably done"), then immediately start the next one; ' +
+      '(4) if the plan changes mid-flight, resend the list with the new items. ' +
+      'Skip it only for trivial single-step requests. The checklist is shown live to the human.',
+    parameters: {
+      type: 'object',
+      properties: {
+        todos: {
+          type: 'array',
+          description: 'The complete task list, in execution order. Always resend every item, including the finished ones.',
+          items: {
+            type: 'object',
+            properties: {
+              content: { type: 'string', description: 'The task, imperative and concrete, e.g. "Add /api/todos endpoint".' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'pending | in_progress | completed. At most one in_progress.' },
+              activeForm: { type: 'string', description: 'Optional present-continuous label shown while running, e.g. "Adding /api/todos endpoint".' }
+            },
+            required: ['content', 'status']
+          }
+        }
+      },
+      required: ['todos']
     },
     danger: false
   },
@@ -641,6 +673,8 @@ async function dispatch(name, args, opts) {
         return memoryLog(args, opts);
       case 'plan':
         return planTool(args, opts);
+      case 'todo_write':
+        return todoWrite(args, opts);
       case 'delegate':
         if (typeof opts.runSubAgent !== 'function') {
           return { ok: false, error: '子代理执行器未配置（需要服务端 runSubAgent）。' };
@@ -1267,6 +1301,54 @@ async function planTool(args, opts = {}) {
   if (!steps.length && !text) return { ok: false, error: '请提供 steps 或 text' };
   const lines = steps.length ? steps.map((s, i) => `${i + 1}. ${s}`).join('\n') : text;
   return { ok: true, content: `已记录计划：\n${lines}` };
+}
+
+// ---- todo_write: the anti-drift mechanism ----
+// Validation/rendering lives in ./todo.js (pure, shared with the agent loop).
+
+async function todoWrite(args, opts = {}) {
+  const state = opts.todoState;
+  if (!state || typeof state !== 'object') {
+    return { ok: false, error: '任务清单状态未配置（需要服务端注入 todoState）。' };
+  }
+  const norm = normalizeTodos(args && args.todos);
+  if (!norm.ok) return { ok: false, error: norm.error };
+
+  const prev = Array.isArray(state.items) ? state.items : [];
+  state.items = norm.items;
+  state.updates = (Number(state.updates) || 0) + 1;
+  state.updatedAt = Date.now();
+
+  const done = norm.items.filter((t) => t.status === 'completed').length;
+  const running = norm.items.find((t) => t.status === 'in_progress');
+  const lines = [`任务清单已更新（${todoProgress(norm.items)}）：`, renderTodos(norm.items)];
+
+  // Nudge 1: everything is done but nothing in the list ever verified anything.
+  // "It compiles" is not "it works" — this is where agents silently ship bugs.
+  const allDone = done === norm.items.length;
+  if (allDone && done >= 3 && !norm.items.some((t) => VERIFY_RE.test(t.content))) {
+    lines.push(
+      '',
+      '⚠️ 全部任务已完成，但整份清单里没有任何验证步骤（跑测试 / 构建 / 复核结果）。' +
+      '确定不先验证一遍再收尾吗？如需验证，请追加一项并把它设为 in_progress。'
+    );
+  }
+  // Nudge 2: a list with pending work but nobody driving it.
+  if (!running && !allDone) {
+    lines.push('', '提示：当前没有 in_progress 的任务。请把你马上要做的那一项设为 in_progress，再继续。');
+  }
+  // Nudge 3: silently dropping tasks is how requirements get lost.
+  const dropped = prev.filter(
+    (p) => p.status !== 'completed' && !norm.items.some((t) => t.content === p.content)
+  );
+  if (dropped.length) {
+    lines.push(
+      '',
+      `注意：本次更新移除了 ${dropped.length} 项未完成的任务（${dropped.map((d) => `「${d.content}」`).join('、')}）。` +
+      '如果不是有意放弃，请把它们加回清单。'
+    );
+  }
+  return { ok: true, content: lines.join('\n') };
 }
 
 // ---- self-evolving skills (file-based, under the agent's memory dir) ----

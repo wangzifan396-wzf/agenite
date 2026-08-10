@@ -12,11 +12,13 @@
 //   'tool_start' ({ id, name, args })
 //   'tool'       ({ id, name, args, result, ok, ms, diff, undoToken })
 //   'compact'    ({ before, after, dropped, trimmed })  history was shrunk
+//   'todo'       ({ items, progress, updates })  live task checklist changed
 //   'usage'      ({ turn, prompt, completion, total })  one API call's usage
 //   'done'       ({ usage, cost, stopped, turns, canContinue })
 
 import { compactMessages, contextWindowFor, historyBudget, toolsTokens, totalTokens } from './context.js';
 import { addUsage, costOf, emptyUsage, priceFor } from './pricing.js';
+import { todoProgress, todoReminder } from './todo.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -65,6 +67,15 @@ export async function runAgent({
     toolTokens: toolsTokens(tools)
   });
   const autoCompact = config.autoCompact !== false;
+
+  // Live task checklist (todo_write). The state object is owned by the caller
+  // (one per conversation) so the list survives across turns and across
+  // requests. Keeping it in front of the model every turn is what stops a long
+  // run from quietly forgetting what it set out to do; `turnsSinceTodo` lets us
+  // poke it when the list goes stale relative to what it's actually doing.
+  const todo = (opts.todoState && typeof opts.todoState === 'object') ? opts.todoState : null;
+  const todoNagEnabled = config.todoReminders !== false;
+  let turnsSinceTodo = 0;
 
   // Cost guardrail (interactive budget): when cumulative spend crosses the cap,
   // stop the agent gracefully — inject a "stop and summarize" instruction and
@@ -128,11 +139,32 @@ export async function runAgent({
       }
     }
 
+    // ── Ephemeral checklist reminder ──
+    // Injected right before the call and pulled back out right after, so the
+    // model always sees the *current* list without history filling up with
+    // stale copies of it (and without polluting what we persist/compact).
+    let reminder = '';
+    if (todo && todoNagEnabled) {
+      reminder = todoReminder(todo, { turn, turnsSinceTodo });
+      if (reminder) messages.push({ role: 'system', content: reminder });
+    }
+
     let reasoningAcc = '';
-    const { content, toolCalls, usage: turnUsage } = await callModel(messages, {
-      onDelta: (t) => onEvent('delta', t),
-      onReasoning: (t) => { reasoningAcc += t; onEvent('reasoning', t); }
-    });
+    let modelResult;
+    try {
+      modelResult = await callModel(messages, {
+        onDelta: (t) => onEvent('delta', t),
+        onReasoning: (t) => { reasoningAcc += t; onEvent('reasoning', t); }
+      });
+    } finally {
+      if (reminder) {
+        const last = messages.length - 1;
+        if (last >= 0 && messages[last].role === 'system' && messages[last].content === reminder) {
+          messages.splice(last, 1);
+        }
+      }
+    }
+    const { content, toolCalls, usage: turnUsage } = modelResult;
 
     if (turnUsage) {
       addUsage(usage, turnUsage);
@@ -185,10 +217,19 @@ export async function runAgent({
     // Stateful / mutating tools run in order, so approvals never pile up.
     for (const i of serialIdx) await runOneTool(i);
 
+    let todoTouched = false;
     for (let i = 0; i < toolCalls.length; i++) {
       const r = toolResults[i];
       if (!r) continue;
       const { tc, res, ms } = r;
+      if (tc.name === 'todo_write' && res.ok && todo) {
+        todoTouched = true;
+        onEvent('todo', {
+          items: (todo.items || []).map((t) => ({ ...t })),
+          progress: todoProgress(todo.items || []),
+          updates: Number(todo.updates) || 0
+        });
+      }
       const isParallel = parallelEnabled && PARALLEL_SAFE_TOOLS.has(tc.name);
       onEvent('tool', {
         id: tc.id,
@@ -216,6 +257,7 @@ export async function runAgent({
         content: toolContent
       });
     }
+    turnsSinceTodo = todoTouched ? 0 : turnsSinceTodo + 1;
   }
 
   // Hit the ceiling with tools still pending. Say so out loud — silently

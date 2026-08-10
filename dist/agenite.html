@@ -388,6 +388,79 @@ button { cursor: pointer; background: none; border: none; }
 }
 .icon-btn:hover { background: var(--panel-2); color: var(--text); }
 
+/* --- live task checklist (todo_write) ---
+   Sits between the header and the transcript so it never scrolls away: the
+   whole point is that you can always see what the agent thinks it is doing. */
+.todo-panel {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  animation: todo-in .22s var(--ease) both;
+}
+@keyframes todo-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.todo-head {
+  width: 100%;
+  max-width: var(--read-w);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 20px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+.todo-head:hover { color: var(--text); }
+.todo-caret { flex: 0 0 auto; transition: transform .16s var(--ease); }
+.todo-panel.collapsed .todo-caret { transform: rotate(-90deg); }
+.todo-name { font-weight: 600; letter-spacing: .01em; }
+.todo-progress { color: var(--muted); font-variant-numeric: tabular-nums; }
+.todo-bar {
+  flex: 1 1 auto;
+  height: 4px;
+  min-width: 40px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  overflow: hidden;
+}
+.todo-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width .35s var(--ease);
+}
+.todo-list {
+  max-width: var(--read-w);
+  margin: 0 auto;
+  padding: 0 20px 11px;
+  list-style: none;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.todo-panel.collapsed .todo-list { display: none; }
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.todo-mark { flex: 0 0 auto; width: 15px; text-align: center; margin-top: 1px; opacity: .85; }
+.todo-item.done { color: var(--muted); }
+.todo-item.done .todo-text { text-decoration: line-through; text-decoration-color: var(--border-strong); }
+.todo-item.running { color: var(--text); font-weight: 560; }
+.todo-item.running .todo-mark { color: var(--accent); animation: todo-spin 1.4s linear infinite; opacity: 1; }
+@keyframes todo-spin { to { transform: rotate(360deg); } }
+.todo-text { flex: 1 1 auto; word-break: break-word; }
+
 /* --- message scroller --- */
 #scroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
 #messages { max-width: var(--read-w); margin: 0 auto; padding: 26px 20px 8px; }
@@ -2289,6 +2362,17 @@ select.text-input { appearance: auto; padding-right: 8px; }
         </div>
       </header>
 
+      <!-- 实时任务清单（todo_write）：长任务不跑偏的关键，模型每更新一次就重画 -->
+      <div id="todo-panel" class="todo-panel hidden">
+        <button id="todo-head" class="todo-head" title="点击折叠 / 展开任务清单">
+          <svg class="todo-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          <span class="todo-name">任务清单</span>
+          <span id="todo-progress" class="todo-progress"></span>
+          <span class="todo-bar"><i id="todo-bar-fill"></i></span>
+        </button>
+        <ol id="todo-list" class="todo-list"></ol>
+      </div>
+
       <div id="scroller">
         <div id="messages"></div>
       </div>
@@ -3980,6 +4064,7 @@ function newConv() {
   renderMessages();
   updateTitle();
   renderUsageChip();
+  renderTodoPanel();
   $('input').focus();
   return c;
 }
@@ -3991,6 +4076,7 @@ function selectConv(id) {
   renderMessages();
   updateTitle();
   renderUsageChip();
+  renderTodoPanel();
   renderInstrChip();
   document.body.classList.remove('side-open');
 }
@@ -4283,6 +4369,46 @@ function paintFallback(mdEl, src, fallback) {
   const h = renderMarkdown(src);
   if (h) { mdEl.innerHTML = h; highlightRoot(mdEl); }
   else mdEl.innerHTML = fallback;
+}
+
+// ---------- live task checklist (todo_write) ----------
+// The panel is the human-facing half of the anti-drift mechanism: the model
+// keeps a structured list, and we keep it pinned above the transcript so a
+// 20-step run is auditable at a glance instead of being buried in tool cards.
+function renderTodoPanel() {
+  const panel = $('todo-panel');
+  if (!panel) return;
+  const c = currentConv();
+  const items = (c && Array.isArray(c.todos)) ? c.todos : [];
+  if (!items.length) {
+    panel.classList.add('hidden');
+    $('todo-list').innerHTML = '';
+    return;
+  }
+  panel.classList.remove('hidden');
+  const done = items.filter((t) => t.status === 'completed').length;
+  const cur = items.find((t) => t.status === 'in_progress');
+  $('todo-progress').textContent =
+    `${done}/${items.length}` + (cur ? ` · ${cur.activeForm || cur.content}` : done === items.length ? ' · 已完成' : '');
+  $('todo-bar-fill').style.width = Math.round((done / items.length) * 100) + '%';
+
+  const list = $('todo-list');
+  list.innerHTML = '';
+  const mark = { completed: '✓', in_progress: '◐', pending: '○' };
+  const cls = { completed: 'done', in_progress: 'running', pending: '' };
+  for (const t of items) {
+    const li = document.createElement('li');
+    li.className = 'todo-item ' + (cls[t.status] || '');
+    const m = document.createElement('span');
+    m.className = 'todo-mark';
+    m.textContent = mark[t.status] || '○';
+    const s = document.createElement('span');
+    s.className = 'todo-text';
+    s.textContent = (t.status === 'in_progress' && t.activeForm) ? t.activeForm : t.content;
+    li.appendChild(m);
+    li.appendChild(s);
+    list.appendChild(li);
+  }
 }
 
 function renderMessages() {
@@ -5031,6 +5157,9 @@ async function runTurn(conv, opts = {}) {
       agentEnabled: config.agentEnabled,
       planning,
       instructions: conv.instructions || '',
+      // Lets the server keep this conversation's task checklist alive across
+      // turns (the HTTP layer itself is stateless).
+      convId: conv.id,
       mcpServers: getMcpServers()
     }, (event, data) => {
       traceOnEvent(event, data);
@@ -5056,6 +5185,10 @@ async function runTurn(conv, opts = {}) {
           flashOverlayMark(data.ref);
         }
         if (aMsg.content === '') md.innerHTML = THINKING;
+      } else if (event === 'todo') {
+        conv.todos = Array.isArray(data.items) ? data.items : [];
+        renderTodoPanel();
+        saveConvs();
       } else if (event === 'subagent') {
         handleSubAgentEvent(el, data);
       } else if (event === 'skill_auto') {
@@ -7907,6 +8040,7 @@ function saveInputAsSnippet() {
 
 function wire() {
   $('new-chat').onclick = () => newConv();
+  $('todo-head').onclick = () => $('todo-panel').classList.toggle('collapsed');
   $('open-settings').onclick = () => openSettings();
   $('open-goals').onclick = openGoals;
   $('open-atlas').onclick = openAtlas;
@@ -8394,6 +8528,7 @@ function init() {
   renderPlanChip();
   renderModelChip();
   renderUsageChip();
+  renderTodoPanel();
   renderRefs();
   autoGrow();
   pingHealth();

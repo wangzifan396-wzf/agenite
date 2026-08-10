@@ -10,6 +10,7 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 
 ## ✨ Features
 
+- **Live task checklist — `todo_write` (v0.42.0)**: the single biggest competitive gap against Claude Code, now closed. The agent **writes and maintains a persistent, user-visible task list** for anything that takes 3+ steps; the list is pinned above the transcript with progress bar and one-click collapse. Every model call sees the current checklist as a reminder, and the loop nags if the agent goes quiet on updates or finishes everything without a verification step. Violations (two in-progress items, bad status, empty list) return `SCHEMA_ERROR` tool results so the model self-corrects.
 - **Multi-model / multi-provider (model hub in v0.25.0)**: **12** built-in provider presets with a one-click model catalog — OpenAI, Anthropic (Claude), Google Gemini, DeepSeek, SiliconFlow, Qwen, Moonshot (Kimi), Zhipu (GLM), Groq, Ollama (local), OpenRouter, plus any OpenAI-compatible endpoint. Switching provider auto-fills its baseURL, default model, and context-window badge — matching Cherry Studio's multi-model aggregation.
 - **MCP tool ecosystem (new in v0.5.0)**: a built-in **MCP (Model Context Protocol) client** connects to any MCP server over stdio, turning the whole open-source tool ecosystem into callable tools — **browser automation, desktop/computer control, databases, GitHub** and more. One click in Settings → MCP:
   - 🌐 **Browser control** — Playwright MCP (`npx -y @playwright/mcp@latest`)

@@ -35,6 +35,7 @@ import {
   traceToCase, runEval, listEvals, loadEval, deleteEval, pruneEvals, EVALS_DIR
 } from './src/core/eval.js';
 import { createKnowledge } from './src/core/knowledge.js';
+import { emptyTodoState } from './src/core/todo.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -52,6 +53,36 @@ let _kb;
 function kb() {
   if (!_kb) _kb = createKnowledge(KB_PATH);
   return _kb;
+}
+
+// ---- live task checklists (todo_write), one per conversation ----
+// In-memory on purpose: a checklist describes work in flight, not history. If
+// the server restarts the run is gone anyway, so there is nothing to restore.
+// Capped with a plain LRU so a long-lived server can't accumulate state for
+// thousands of conversations.
+const TODO_STATES = new Map();
+const TODO_STATES_MAX = 200;
+
+function todoStateFor(convId) {
+  const key = typeof convId === 'string' && convId.trim() ? convId.trim() : '__default__';
+  let st = TODO_STATES.get(key);
+  if (st) {
+    // Refresh recency (Map preserves insertion order → re-insert = most recent).
+    TODO_STATES.delete(key);
+    TODO_STATES.set(key, st);
+    return st;
+  }
+  st = emptyTodoState();
+  TODO_STATES.set(key, st);
+  while (TODO_STATES.size > TODO_STATES_MAX) {
+    TODO_STATES.delete(TODO_STATES.keys().next().value);
+  }
+  return st;
+}
+
+export function clearTodoState(convId) {
+  if (convId == null) { TODO_STATES.clear(); return; }
+  TODO_STATES.delete(String(convId));
 }
 
 const MIME = {
@@ -935,6 +966,7 @@ function buildSystemPrompt(config, workspace, planning = false, mcpCount = 0, me
     'Prefer relative paths inside the workspace. Take small, verifiable steps and report what you did concisely.',
     'When you write code or files, keep changes minimal and explain them briefly afterwards.',
     'When a request decomposes into several INDEPENDENT sub-tasks (no shared intermediate state), prefer the `fanout` tool to run them in parallel at once — it is much faster than calling `delegate` repeatedly. Use `delegate` for a single focused side task, or when sub-tasks depend on each other.',
+    'TASK TRACKING: for anything that takes 3+ steps, or when the user hands you several things at once, call `todo_write` FIRST to lay out the whole checklist (always include a final verification step), then keep it truthful as you go — exactly one item in_progress, mark each one completed the moment it is really done, and resend the complete list every time. This is how you avoid finishing step 12 having forgotten what step 1 was for. Skip it only for genuinely single-step requests.',
     '你可以在设置里切换「角色人格」(persona) 来改变说话与思维方式（如 strict-reviewer / warm-writer / researcher，或自定义）。若当前任务明显更适合某个角色，主动建议用户切换。'
   ];
   if (planning) {
@@ -1075,6 +1107,13 @@ async function handleChat(req, res) {
   }
 
   const agentEnabled = body.agentEnabled !== false && config.agentEnabled;
+
+  // Live task checklist, keyed by conversation. The HTTP layer is stateless
+  // (the client resends the whole transcript every turn), but the checklist
+  // must survive across turns — otherwise the model would rebuild it from
+  // scratch on every message and the "one in_progress" invariant would mean
+  // nothing. Clients without a convId share a single scratch state.
+  const todoState = todoStateFor(body.convId);
 
   // Connect / disconnect MCP servers the client asked for, then merge their
   // tools into what the model can call. Reconcile is idempotent, so already
@@ -1241,6 +1280,7 @@ async function handleChat(req, res) {
     else if (type === 'done') sse('done', payload);
     else if (type === 'subagent') sse('subagent', payload);
     else if (type === 'guardrail') sse('guardrail', payload);
+    else if (type === 'todo') sse('todo', payload);
 
     // capture into the trace (best-effort: never break the chat)
     try {
@@ -1385,7 +1425,7 @@ async function handleChat(req, res) {
       config,
       tools,
       summarize,
-      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER }
+      toolContext: { requestApproval, platform: process.platform, memoryBase: MEMORY_DIR, runSubAgent, runFanout, embed: embedFn, browser: BROWSER, todoState }
     });
     chatStopped = result.stopped;
 

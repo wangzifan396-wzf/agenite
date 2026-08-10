@@ -223,6 +223,7 @@ function newConv() {
   renderMessages();
   updateTitle();
   renderUsageChip();
+  renderTodoPanel();
   $('input').focus();
   return c;
 }
@@ -234,6 +235,7 @@ function selectConv(id) {
   renderMessages();
   updateTitle();
   renderUsageChip();
+  renderTodoPanel();
   renderInstrChip();
   document.body.classList.remove('side-open');
 }
@@ -523,6 +525,46 @@ function paintFallback(mdEl, src, fallback) {
   const h = renderMarkdown(src);
   if (h) { mdEl.innerHTML = h; highlightRoot(mdEl); }
   else mdEl.innerHTML = fallback;
+}
+
+// ---------- live task checklist (todo_write) ----------
+// The panel is the human-facing half of the anti-drift mechanism: the model
+// keeps a structured list, and we keep it pinned above the transcript so a
+// 20-step run is auditable at a glance instead of being buried in tool cards.
+function renderTodoPanel() {
+  const panel = $('todo-panel');
+  if (!panel) return;
+  const c = currentConv();
+  const items = (c && Array.isArray(c.todos)) ? c.todos : [];
+  if (!items.length) {
+    panel.classList.add('hidden');
+    $('todo-list').innerHTML = '';
+    return;
+  }
+  panel.classList.remove('hidden');
+  const done = items.filter((t) => t.status === 'completed').length;
+  const cur = items.find((t) => t.status === 'in_progress');
+  $('todo-progress').textContent =
+    `${done}/${items.length}` + (cur ? ` · ${cur.activeForm || cur.content}` : done === items.length ? ' · 已完成' : '');
+  $('todo-bar-fill').style.width = Math.round((done / items.length) * 100) + '%';
+
+  const list = $('todo-list');
+  list.innerHTML = '';
+  const mark = { completed: '✓', in_progress: '◐', pending: '○' };
+  const cls = { completed: 'done', in_progress: 'running', pending: '' };
+  for (const t of items) {
+    const li = document.createElement('li');
+    li.className = 'todo-item ' + (cls[t.status] || '');
+    const m = document.createElement('span');
+    m.className = 'todo-mark';
+    m.textContent = mark[t.status] || '○';
+    const s = document.createElement('span');
+    s.className = 'todo-text';
+    s.textContent = (t.status === 'in_progress' && t.activeForm) ? t.activeForm : t.content;
+    li.appendChild(m);
+    li.appendChild(s);
+    list.appendChild(li);
+  }
 }
 
 function renderMessages() {
@@ -1271,6 +1313,9 @@ async function runTurn(conv, opts = {}) {
       agentEnabled: config.agentEnabled,
       planning,
       instructions: conv.instructions || '',
+      // Lets the server keep this conversation's task checklist alive across
+      // turns (the HTTP layer itself is stateless).
+      convId: conv.id,
       mcpServers: getMcpServers()
     }, (event, data) => {
       traceOnEvent(event, data);
@@ -1296,6 +1341,10 @@ async function runTurn(conv, opts = {}) {
           flashOverlayMark(data.ref);
         }
         if (aMsg.content === '') md.innerHTML = THINKING;
+      } else if (event === 'todo') {
+        conv.todos = Array.isArray(data.items) ? data.items : [];
+        renderTodoPanel();
+        saveConvs();
       } else if (event === 'subagent') {
         handleSubAgentEvent(el, data);
       } else if (event === 'skill_auto') {
@@ -4141,6 +4190,7 @@ function saveInputAsSnippet() {
 
 function wire() {
   $('new-chat').onclick = () => newConv();
+  $('todo-head').onclick = () => $('todo-panel').classList.toggle('collapsed');
   $('open-settings').onclick = () => openSettings();
   $('open-goals').onclick = openGoals;
   $('open-atlas').onclick = openAtlas;
@@ -4628,6 +4678,7 @@ function init() {
   renderPlanChip();
   renderModelChip();
   renderUsageChip();
+  renderTodoPanel();
   renderRefs();
   autoGrow();
   pingHealth();
