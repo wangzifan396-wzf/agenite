@@ -30,14 +30,14 @@ import {
   exportAtlasMarkdown, importAtlasMarkdown, mergeGraph
 } from './src/core/atlas.js';
 import {
-  newTrace, addStep, classifyTool, saveTrace, listTraces, loadTrace, deleteTrace, pruneTraces, traceSummary, diagnoseTrace, TRACES_DIR
+  newTrace, addStep, classifyTool, saveTrace, listTraces, listTracesByGitRef, loadTrace, deleteTrace, pruneTraces, traceSummary, diagnoseTrace, TRACES_DIR
 } from './src/core/trace.js';
 import {
   traceToCase, runEval, listEvals, loadEval, deleteEval, pruneEvals, EVALS_DIR
 } from './src/core/eval.js';
 import { createKnowledge } from './src/core/knowledge.js';
 import { emptyTodoState } from './src/core/todo.js';
-import { isGitRepo, isClean, gitCommit } from './src/core/git.js';
+import { isGitRepo, isClean, gitCommit, gitHeadInfo } from './src/core/git.js';
 import { verifyWorkspace, detectVerify } from './src/core/verify.js';
 import { findBadCommit, chooseGoodRef, formatHuntReport } from './src/core/bisect.js';
 
@@ -722,8 +722,12 @@ async function handleAtlasRecall(req, res, reqUrl) {
 // ---------- Agenite Run Trace handlers ----------
 
 async function handleTracesList(req, res) {
-  const traces = await listTraces(TRACES_DIR);
-  return sendJson(res, 200, { ok: true, traces });
+  const u = new URL(req.url || '/', 'http://localhost');
+  const ref = u.searchParams.get('gitRef');
+  const traces = ref
+    ? await listTracesByGitRef(TRACES_DIR, ref)
+    : await listTraces(TRACES_DIR);
+  return sendJson(res, 200, { ok: true, traces, gitRef: ref || null });
 }
 
 async function handleTraceGet(req, res, reqUrl) {
@@ -1495,6 +1499,9 @@ async function handleChat(req, res) {
     model: config.model,
     provider: config.provider
   });
+  // Anchor the run to the checkout it executes against (v0.48). Best-effort:
+  // null when not a git repo or git is unavailable — never breaks the chat.
+  trace.gitStart = await gitHeadInfo(WORKSPACE).catch(() => null);
   let traceTurnId = null; // current model-turn step (parent for its tools)
   let traceSubId = null;  // current sub-agent step (parent for its tools)
 
@@ -1598,6 +1605,9 @@ async function handleChat(req, res) {
         trace.finishedAt = Date.now();
         trace.stopped = payload?.stopped || null;
         trace.turns = payload?.turns || 0;
+        // Capture the post-run checkout too (the git safety net may have
+        // committed since the run started), so the anchor shows the net span.
+        gitHeadInfo(WORKSPACE).then((g) => { trace.gitEnd = g; }).catch(() => {});
       }
     } catch { /* trace capture is strictly best-effort */ }
   };

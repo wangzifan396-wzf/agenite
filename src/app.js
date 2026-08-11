@@ -3617,6 +3617,30 @@ function chip(label, val, cls = '') {
   return `<span class="tchip ${cls}"><b>${escapeHtml(String(val))}</b><i>${label}</i></span>`;
 }
 
+function traceHistoryItemHtml(t) {
+  const loop = t.consecutiveLoop ? ' <span class="th-loop" title="检测到重复调用">⚠循环</span>' : '';
+  const err = t.stats && t.stats.errors ? ' th-err' : '';
+  return `<div class="th-item${err}" data-run="${escapeHtml(t.runId)}">` +
+    `<div class="th-top"><span class="th-title">${escapeHtml(t.title || '(无标题)')}</span>${loop}</div>` +
+    `<div class="th-meta muted small">${new Date(t.createdAt).toLocaleString()} · ${stoppedLabel(t.stopped)} · ${t.stats ? t.stats.steps : 0}步 / ${t.stats ? t.stats.tools : 0}工具 / $${(t.cost || 0).toFixed(4)}</div>` +
+    `<button class="th-del mini-btn danger-text" data-run="${escapeHtml(t.runId)}" title="删除该轨迹">删除</button>` +
+    `</div>`;
+}
+
+function renderTraceHistoryList(list, box) {
+  if (!list || !list.length) { box.innerHTML = '<div class="muted small">暂无历史运行。</div>'; return; }
+  box.innerHTML = list.map(traceHistoryItemHtml).join('');
+  box.querySelectorAll('.th-item').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('th-del')) return;
+      openHistoryTrace(el.getAttribute('data-run'));
+    });
+  });
+  box.querySelectorAll('.th-del').forEach((el) => {
+    el.addEventListener('click', (e) => { e.stopPropagation(); deleteHistoryTrace(el.getAttribute('data-run')); });
+  });
+}
+
 async function loadTraceHistory() {
   const box = $('trace-history');
   box.innerHTML = '<div class="muted small">加载中…</div>';
@@ -3624,25 +3648,29 @@ async function loadTraceHistory() {
     const r = await fetch('/api/traces').then((x) => x.json());
     const list = (r && r.traces) || [];
     $('trace-hist-count').textContent = '(' + list.length + ')';
-    if (!list.length) { box.innerHTML = '<div class="muted small">暂无历史运行。</div>'; return; }
-    box.innerHTML = list.map((t) => {
-      const loop = t.consecutiveLoop ? ' <span class="th-loop" title="检测到重复调用">⚠循环</span>' : '';
-      const err = t.stats && t.stats.errors ? ' th-err' : '';
-      return `<div class="th-item${err}" data-run="${escapeHtml(t.runId)}">` +
-        `<div class="th-top"><span class="th-title">${escapeHtml(t.title || '(无标题)')}</span>${loop}</div>` +
-        `<div class="th-meta muted small">${new Date(t.createdAt).toLocaleString()} · ${stoppedLabel(t.stopped)} · ${t.stats ? t.stats.steps : 0}步 / ${t.stats ? t.stats.tools : 0}工具 / $${(t.cost || 0).toFixed(4)}</div>` +
-        `<button class="th-del mini-btn danger-text" data-run="${escapeHtml(t.runId)}" title="删除该轨迹">删除</button>` +
-        `</div>`;
-    }).join('');
-    box.querySelectorAll('.th-item').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        if (e.target.classList.contains('th-del')) return;
-        openHistoryTrace(el.getAttribute('data-run'));
-      });
-    });
-    box.querySelectorAll('.th-del').forEach((el) => {
-      el.addEventListener('click', (e) => { e.stopPropagation(); deleteHistoryTrace(el.getAttribute('data-run')); });
-    });
+    renderTraceHistoryList(list, box);
+  } catch {
+    box.innerHTML = '<div class="muted small">加载失败。</div>';
+  }
+}
+
+// v0.48: from the regression hunter's blamed commit, jump straight to the agent
+// runs that executed against that exact code state — the decision evidence chain
+// for "what was the agent doing when this broke" (anchored via trace.gitStart).
+async function openTraceAtCommit(hash) {
+  if (!hash) return;
+  $('trace-modal').classList.remove('hidden');
+  $('trace-title').textContent = '提交 ' + hash + ' 时期的执行轨迹';
+  const box = $('trace-history');
+  box.innerHTML = '<div class="muted small">加载中…</div>';
+  try {
+    const r = await fetch('/api/traces?gitRef=' + encodeURIComponent(hash)).then((x) => x.json());
+    const list = (r && r.traces) || [];
+    $('trace-hist-count').textContent = '(' + list.length + ')';
+    renderTraceHistoryList(list, box);
+    if (!list.length) {
+      box.innerHTML = '<div class="muted small">该提交时期没有保存的执行轨迹。可先在该提交上跑一次智能体，或在回归猎手定位前就曾在同一提交上调试过它。</div>';
+    }
   } catch {
     box.innerHTML = '<div class="muted small">加载失败。</div>';
   }
@@ -3950,6 +3978,7 @@ function renderRegResult(j) {
     ${files.length ? `<div class="reg-files">${files.map((f) => `<code>${escapeHtml(f)}</code>`).join('')}${(r.files || []).length > files.length ? `<span class="muted small">等 ${r.files.length} 个</span>` : ''}</div>` : ''}
     <div class="reg-actions">
       <button id="reg-ask" class="mini-btn">让智能体分析这个提交</button>
+      <button id="reg-trace" class="mini-btn">🛰️ 查看该提交时期的执行轨迹</button>
       <code class="reg-cmdhint">git show ${escapeHtml(c.short || '')}</code>
     </div>`;
   const ask = $('reg-ask');
@@ -3960,6 +3989,8 @@ function renderRegResult(j) {
       $('input').focus();
     };
   }
+  const tr = $('reg-trace');
+  if (tr) tr.onclick = () => openTraceAtCommit(c.hash || c.short);
 }
 
 async function runRegressionHunt() {

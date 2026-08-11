@@ -57,6 +57,34 @@ export async function isClean(dir) {
   return body === '';
 }
 
+// Snapshot the current checkout so a run trace can be anchored to the exact
+// code state it executed against. This is what lets the regression hunter say
+// "here are the agent runs that happened while HEAD was the bad commit".
+// Returns null (never throws) when dir isn't a git repo or git is unavailable.
+export async function gitHeadInfo(dir) {
+  if (!isGitRepo(dir)) return null;
+  try {
+    const [full, short, branchRaw, status] = await Promise.all([
+      git(['rev-parse', 'HEAD'], dir, { allowFail: true }),
+      git(['rev-parse', '--short', 'HEAD'], dir, { allowFail: true }),
+      git(['symbolic-ref', '--quiet', '--short', 'HEAD'], dir, { allowFail: true }),
+      gitStatus(dir)
+    ]);
+    const branch = (branchRaw.stdout || '').trim()
+      || (status.split('\n')[0] || '').replace(/^##\s*/, '').split('...')[0].trim()
+      || 'detached';
+    const body = status.split('\n').filter((l) => !l.startsWith('##')).join('\n').trim();
+    return {
+      hash: (full.stdout || '').trim(),
+      short: (short.stdout || '').trim(),
+      branch,
+      dirty: body !== ''
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function gitAddAll(dir) {
   await git(['add', '-A'], dir);
 }

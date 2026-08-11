@@ -6,7 +6,8 @@ import { join } from 'node:path';
 
 import {
   newTrace, addStep, classifyTool, detectLoops, detectConsecutiveLoops,
-  traceSummary, saveTrace, loadTrace, deleteTrace, pruneTraces, diagnoseTrace, traceCost
+  traceSummary, saveTrace, loadTrace, deleteTrace, pruneTraces, diagnoseTrace, traceCost,
+  matchGitRef, listTracesByGitRef
 } from '../src/core/trace.js';
 
 function tempDir() {
@@ -193,4 +194,82 @@ test('diagnoseTrace warns when over the budget cap', () => {
   assert.ok(d.findings.some((f) => f.title.includes('预算')));
   // without a cap, the same cost is fine
   assert.equal(diagnoseTrace(t, { maxCostUSD: 0 }).severity, 'ok');
+});
+
+// --- v0.48: git anchoring + regression-hunter linkage ---
+
+test('matchGitRef matches by full hash, short hash, and prefix (both directions)', () => {
+  const git = { hash: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', short: 'a1b2c3d', branch: 'main', dirty: false };
+  // exact full hash
+  assert.equal(matchGitRef(git, 'a1b2c3d4e5f60718293a4b5c6d7e8f90'), true);
+  // exact short hash
+  assert.equal(matchGitRef(git, 'a1b2c3d'), true);
+  // ref is a prefix of the full hash (regression-hunter blames a long sha)
+  assert.equal(matchGitRef(git, 'a1b2c3d4e5'), true);
+  // stored short hash is a prefix of the ref (only short was captured)
+  assert.equal(matchGitRef(git, 'a1b2c3d4e5f6'), true);
+  // case-insensitive
+  assert.equal(matchGitRef(git, 'A1B2C3D4E5F6'), true);
+  // whitespace is tolerated
+  assert.equal(matchGitRef(git, '  a1b2c3d  '), true);
+});
+
+test('matchGitRef rejects non-matches and degenerate inputs', () => {
+  const git = { hash: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', short: 'a1b2c3d', branch: 'main', dirty: false };
+  assert.equal(matchGitRef(git, 'ffeeddcc'), false);
+  assert.equal(matchGitRef(null, 'a1b2c3d'), false);
+  assert.equal(matchGitRef(git, null), false);
+  assert.equal(matchGitRef(git, ''), false);
+  assert.equal(matchGitRef(git, '   '), false);
+  // a completely different anchor does not match
+  assert.equal(matchGitRef({ hash: '1111111', short: '1111' }, 'a1b2c3d'), false);
+});
+
+test('listTracesByGitRef filters traces anchored to a commit', async () => {
+  const dir = tempDir();
+  try {
+    // trace A: anchored to commit deadbeef
+    const a = newTrace({ title: 'at-deadbeef' });
+    a.gitStart = { hash: 'deadbeef00', short: 'deadbe', branch: 'main', dirty: false };
+    addStep(a, { kind: 'turn', name: '推理' });
+    await saveTrace(a, dir);
+
+    // trace B: anchored to commit cafe1234 (short only)
+    const b = newTrace({ title: 'at-cafe' });
+    b.gitStart = { hash: 'cafe1234cafe1234cafe1234cafe1234', short: 'cafe1234', branch: 'main', dirty: true };
+    await saveTrace(b, dir);
+
+    // trace C: no git anchor (e.g. workspace isn't a repo)
+    const c = newTrace({ title: 'no-git' });
+    c.gitStart = null;
+    await saveTrace(c, dir);
+
+    // query by full hash of A
+    const byFull = await listTracesByGitRef(dir, 'deadbeef00');
+    assert.equal(byFull.length, 1);
+    assert.equal(byFull[0].runId, a.runId);
+
+    // query by short hash of B
+    const byShort = await listTracesByGitRef(dir, 'cafe1234');
+    assert.equal(byShort.length, 1);
+    assert.equal(byShort[0].runId, b.runId);
+
+    // query by a prefix of B's full hash
+    const byPrefix = await listTracesByGitRef(dir, 'cafe1234cafe');
+    assert.equal(byPrefix.length, 1);
+    assert.equal(byPrefix[0].runId, b.runId);
+
+    // a commit with no traces -> empty
+    const none = await listTracesByGitRef(dir, 'ffffffff');
+    assert.equal(none.length, 0);
+
+    // empty / blank ref is a no-op
+    assert.deepEqual(await listTracesByGitRef(dir, ''), []);
+    assert.deepEqual(await listTracesByGitRef(dir, '   '), []);
+
+    // the summary object exposes the git anchor so the UI can show it
+    assert.equal(byFull[0].git && byFull[0].git.hash, 'deadbeef00');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -57,6 +57,12 @@ export function newTrace(meta = {}) {
     stopped: null,
     turns: 0,
     cost: 0,
+    // git anchoring (v0.48): the checkout each run executed against, so traces
+    // can be correlated with commits — e.g. "what was the agent doing at the
+    // commit regression-hunt just blamed?" Populated by the server; null when
+    // the workspace isn't a git repo or git is unavailable.
+    gitStart: null,
+    gitEnd: null,
     steps: [],
     stats: emptyStats()
   };
@@ -159,7 +165,8 @@ export function traceSummary(trace) {
     cost: trace.cost,
     loops,
     consecutiveLoop: consecutive,
-    stats: { ...trace.stats }
+    stats: { ...trace.stats },
+    git: trace.gitStart || null
   };
 }
 
@@ -262,6 +269,25 @@ export function diagnoseTrace(trace, opts = {}) {
 }
 
 // --- persistence (injected directory) ---
+
+// Pure match: does a trace's git anchor match a commit reference? Accepts a
+// full hash, short hash, or any unambiguous prefix in either direction, so
+// both "abc1234" and a full 40-char sha resolve against a short anchor.
+export function matchGitRef(git, ref) {
+  if (!git || !ref) return false;
+  ref = String(ref).trim().toLowerCase();
+  if (!ref) return false;
+  const cand = [git.hash, git.short].filter(Boolean).map((x) => String(x).toLowerCase());
+  return cand.some((c) => c === ref || c.startsWith(ref) || ref.startsWith(c));
+}
+
+// All traces whose git anchor matches `ref`. Used by the regression hunter to
+// surface "the agent runs that happened at the commit we just blamed".
+export async function listTracesByGitRef(dir = TRACES_DIR, ref) {
+  if (!ref || !String(ref).trim()) return [];
+  const all = await listTraces(dir);
+  return all.filter((s) => matchGitRef(s.git, ref));
+}
 
 export async function listTraces(dir = TRACES_DIR) {
   let names;
