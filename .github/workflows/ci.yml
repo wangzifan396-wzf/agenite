@@ -6,10 +6,15 @@ on:
   pull_request:
     branches: [main, master]
 
+# Skip the real-browser smoke test and its worker teardown — CI has no Chrome.
+env:
+  AGENITE_SKIP_CHROME: "1"
+
 jobs:
   test:
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

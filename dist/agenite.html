@@ -2593,6 +2593,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <div class="atlas-toolbar">
           <span id="trace-title" class="trace-title">实时轨迹</span>
           <div class="grow"></div>
+          <button id="trace-export" class="mini-btn" title="把当前运行导出为可分享的单文件 HTML">📤 导出运行报告</button>
           <button id="trace-refresh" class="mini-btn" title="刷新历史运行列表">刷新历史</button>
         </div>
         <div class="trace-cols">
@@ -4667,6 +4668,7 @@ function buildEmptyState() {
     onboard +
     `<div class="welcome-features">${feat}</div>` +
     `<div class="starter-grid">${grid}</div>` +
+    '<p class="welcome-foot welcome-steps">新手上路：① 点右上角 <b>⚙ 设置</b> 填入模型 API Key（仅存本机） · ② 打开 <b>Agent</b> 开关 · ③ 选上面任一示例或随手发个任务。</p>' +
     '<p class="welcome-foot">提示：按 <kbd>Ctrl</kbd>+<kbd>/</kbd> 看全部快捷键 · 点左侧「🌐 浏览器」看 Agent 正在操作的网页</p>';
   wrap.querySelectorAll('.starter').forEach((btn) => {
     btn.onclick = () => {
@@ -5685,7 +5687,7 @@ function conversationToMarkdown(conv) {
       if ((m.content || '').trim()) lines.push(m.content.trim(), '');
     }
   }
-  lines.push('---', '', '_由 [Agenite](https://github.com/your-org/agenite) 导出_');
+  lines.push('---', '', '_由 [Agenite](https://github.com/wangzifan396-wzf/agenite) 导出_');
   return lines.join('\n');
 }
 
@@ -5813,12 +5815,88 @@ function exportCurrentHtml() {
   <h1>${escapeHtml(c.title || 'Agenite 对话')}</h1>
   <div class="sub">创建于 ${new Date(c.createdAt || Date.now()).toLocaleString()}${instr ? ' · 含对话专属指令' : ''} · 由 Agenite 导出</div>
   ${msgs}
-  <footer>由 <a href="https://github.com/your-org/agenite">Agenite</a> 导出 · 本地运行的开源智能体</footer>
+  <footer>由 <a href="https://github.com/wangzifan396-wzf/agenite">Agenite</a> 导出 · 本地运行的开源智能体</footer>
 </div>
 </body>
 </html>`;
   downloadBlob(`${safe}.html`, doc, 'text/html;charset=utf-8');
   toast('已导出独立 HTML 文件');
+}
+
+// Export the currently displayed agent run (live or a replayed history run) as a
+// self-contained HTML file — the "show off what your agent actually did" feature
+// that turns the Flight Recorder into something you can hand to a teammate or post.
+function exportTraceHtml() {
+  const trace = historyTrace || liveTrace;
+  if (!trace || !trace.steps || !trace.steps.length) return toast('当前没有可导出的运行记录');
+  const safe = (trace.id || 'run').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+  const st = trace.stats || { steps: 0, tools: 0, subagents: 0, errors: 0, compactions: 0, memoryOps: 0, totalMs: 0 };
+  const depths = traceDepth(trace);
+  const stepsHtml = trace.steps.map((s) => traceStepHtml(s, depths[s.id])).join('\n');
+  const diag = trace.diagnosis;
+  let diagHtml = '';
+  if (diag && diag.severity && diag.severity !== 'ok') {
+    const items = (diag.findings || []).map((f) =>
+      `<li><b>${escapeHtml(f.title)}</b>${f.detail ? ' — ' + escapeHtml(f.detail) : ''}</li>`).join('');
+    diagHtml = `<div class="diag"><b>运行自检 · ${diag.severity === 'bad' ? '发现问题' : '需要关注'}（${diag.findings.length} 项）</b><ul>${items}</ul></div>`;
+  } else if (diag && diag.severity === 'ok') {
+    diagHtml = `<div class="diag ok">运行自检 · 正常</div>`;
+  }
+  const g = trace.gitStart || trace.git;
+  const gitTxt = g ? ` · git ${escapeHtml((g.short || (g.hash || '').slice(0, 12) || '').slice(0, 12))}${g.branch ? ' @ ' + escapeHtml(g.branch) : ''}` : '';
+  const doc = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenite 运行报告 · ${escapeHtml(safe)}</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.6; background: #f5f6f8; color: #1c1d22; }
+  @media (prefers-color-scheme: dark) { body { background: #16181d; color: #e7e9ee; } }
+  .page { max-width: 920px; margin: 0 auto; padding: 28px 18px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #8a8f9a; font-size: 13px; margin-bottom: 18px; }
+  .sub code { background: rgba(120,120,140,.16); padding: 1px 6px; border-radius: 5px; }
+  .tchip { display: inline-block; background: rgba(120,120,140,.14); border-radius: 10px; padding: 5px 10px; font-size: 13px; margin: 0 6px 6px 0; }
+  .tchip b { margin-right: 4px; } .tchip i { font-style: normal; opacity: .7; }
+  .diag { margin: 14px 0; padding: 10px 14px; border-radius: 10px; border: 1px solid #e0a0a0; background: #fbeaea; }
+  .diag.ok { border-color: #9fd0a0; background: #eaf6ea; }
+  @media (prefers-color-scheme: dark) { .diag { background: #2a1d1d; } .diag.ok { background: #1d2a1d; } }
+  .diag ul { margin: 6px 0 0; padding-left: 18px; }
+  .tstep { border: 1px solid #e3e6ea; border-radius: 10px; background: #fff; margin: 8px 0; padding: 8px 12px; }
+  @media (prefers-color-scheme: dark) { .tstep { background: #1d2026; border-color: #2a2e36; } }
+  .tstep-err { border-color: #e6a0a0; }
+  .tstep-head { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tstep-ic { opacity: .8; } .tstep-kind { font-size: 12px; opacity: .65; }
+  .tstep-ms { font-size: 12px; opacity: .55; margin-left: auto; } .tstep-bad { color: #c0392b; font-size: 12px; }
+  .tstep-detail { margin-top: 6px; } .tstep-detail summary { cursor: pointer; font-size: 13px; }
+  .tstep-kv { margin: 6px 0; } .tstep-kv b { font-size: 12px; opacity: .7; }
+  .tstep-kv pre { white-space: pre-wrap; word-break: break-word; background: rgba(120,120,140,.1); padding: 8px 10px; border-radius: 8px; font-size: 12.5px; overflow-x: auto; }
+  .tstep-content { white-space: pre-wrap; font-size: 13px; opacity: .9; }
+  footer { margin-top: 40px; font-size: 12px; color: #8a8f9a; text-align: center; }
+  a { color: #3b6fd4; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Agenite 运行报告</h1>
+  <div class="sub">运行 ID <code>${escapeHtml(trace.id || '—')}</code> · 创建于 ${new Date(trace.createdAt || Date.now()).toLocaleString()}${gitTxt}</div>
+  <div>
+    ${chip('步数', st.steps)}${chip('工具', st.tools)}${chip('子智能体', st.subagents)}${chip('错误', st.errors)}${chip('耗时', fmtMs(st.totalMs))}${chip('成本', '
+</body>
+</html>
+ + (trace.cost || 0).toFixed(4))}${chip('轮次', trace.turns || 0)}${chip('状态', stoppedLabel(trace.stopped))}
+  </div>
+  ${diagHtml}
+  <div class="steps">${stepsHtml}</div>
+  <footer>由 <a href="https://github.com/wangzifan396-wzf/agenite">Agenite</a> 导出 · 本地运行的开源智能体 · 飞行记录仪</footer>
+</div>
+</body>
+</html>`;
+  downloadBlob(`${safe}-report.html`, doc, 'text/html;charset=utf-8');
+  toast('已导出运行报告');
 }
 
 function openKeys() { $('keys-modal').classList.remove('hidden'); }
@@ -8560,6 +8638,7 @@ function wire() {
   $('open-atlas').onclick = openAtlas;
   $('close-atlas').onclick = closeAtlas;
   $('open-trace').onclick = openTrace;
+  const te = $('trace-export'); if (te) te.onclick = exportTraceHtml;
   $('close-trace').onclick = closeTrace;
   $('trace-refresh').onclick = refreshTrace;
   $('open-eval').onclick = openEval;

@@ -8,7 +8,76 @@
 
 ---
 
+<p align="center">
+  <img src="docs/architecture.svg" alt="Agenite 架构" width="760">
+</p>
+
+<div align="center">
+
+**Agenite** —— 一个你敢把代码交给它的、本地优先的多模型智能体。
+
+[![CI](https://github.com/wangzifan396-wzf/agenite/actions/workflows/ci.yml/badge.svg)](https://github.com/wangzifan396-wzf/agenite/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![Stars](https://img.shields.io/github/stars/wangzifan396-wzf/agenite?style=social)](https://github.com/wangzifan396-wzf/agenite/stargazers)
+
+</div>
+
+## 为什么是 Agenite
+
+大多数"AI 智能体"很自信，却不负责：它们改了你的文件，然后告诉你"搞定了"——哪怕其实坏了。Agenite 的设计核心是**可追责（accountability）**：
+
+- **它证明自己真的做对了。** 每次改动后都会跑你真实的测试 / 校验命令，只有从**绿**的运行里才学出可复用的技能。
+- **它绝不会弄丢你的代码。** 每次改动自动 `git` 检查点存档，一键 `git undo` 即可回退。
+- **它把推理过程摊开给你看。** 内置飞行记录仪记录每一步、每次工具调用、每个循环，并把每条轨迹锚定到它运行时所在的 git 提交。
+- **出问题时，它能定位元凶。** 回归猎手自动驱动 `git bisect` 找出第一个引入问题的提交，再打开那个提交时期的执行轨迹，让你看见**bug 出现那一刻 Agent 究竟在干什么**。
+
+零依赖、可纯离线、密钥除了调模型外从不出本机。对标 LobeChat / Open WebUI / LibreChat，但更小巧、更透明、可直接审计。
+
+## 快速上手
+
+```bash
+# 无需 npm install —— 本项目零依赖
+git clone https://github.com/wangzifan396-wzf/agenite.git
+cd agenite
+node server.js
+# 打开 http://localhost:4173
+```
+
+或者一条 Docker 命令（数据存进卷，重启不丢）：
+
+```bash
+docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite
+```
+
+在设置里填入模型 API Key（OpenAI / Anthropic / Gemini / DeepSeek / Qwen / Ollama / …），打开 **Agent** 开关，开聊即可。
+
+## Agenite 与同类对比
+
+| 能力 | Agenite | Open WebUI | LobeChat | LibreChat |
+|---|---|---|---|---|
+| 本地优先 · 零依赖 | ✓ | 部分 | 部分 | 部分 |
+| 自主智能体循环（写码·执行·调工具） | ✓ | 部分 | 部分 | 部分 |
+| 改完即校验（跑你的测试） | ✓ | — | — | — |
+| 自动 git 检查点 + 回退 | ✓ | — | — | — |
+| 飞行记录仪（每次运行轨迹） | ✓ | — | — | — |
+| 回归猎手（自动 git bisect） | ✓ | — | — | — |
+| 验证门控的技能学习 | ✓ | — | — | — |
+| MCP 工具生态 | ✓ | ✓ | ✓ | 有限 |
+| 多模型中枢（12+ 厂商） | ✓ | ✓ | ✓ | ✓ |
+| 本地 RAG / 长期记忆 | ✓ | ✓ | — | — |
+
+_实话实说：Agenite 还年轻——插件/主题生态和移动端比老牌项目薄弱。它用这份"薄弱"换来了让你可以放心把任务委托出去的可靠性底座。_
+
+## 能力矩阵
+
+浏览器自动化 · 文件与命令执行 · 代码执行器 · 联网搜索 · 多智能体并行派发 · 长期 + 语义记忆 · 本地 RAG · 计划模式 · 对话分支 · Token 与成本统计 · 技能画廊 · 语音朗读 · 多模态看图 · 跨对话搜索。
+
+---
+
 ## ✨ 功能
+
+- **成熟度与"让人愿意用"发布（v0.49.0）**：agent 功能已完整，本版聚焦**好用、好分享**。新增亮点：**可分享的运行报告**——打开任意执行轨迹（实时或回放），一键导出成自包含 HTML 文件，可直接发给同事或贴出来；**一键 Docker 镜像**（`docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite`）；**CI 工作流**在 Node 18/20/22 上跑全量测试（绿徽章）；重写的落地 README 含与 Open WebUI / LobeChat / LibreChat 的对比表。首次使用也加了"3 步上手"提示与示例任务。
 
 - **飞行记录仪 ↔ git 提交联动（v0.48.0）**：把 v0.17.0 的「执行轨迹」从"能看"变成"能用来排障"。每条 trace 现在都会**锚定到它运行时所在的 git 提交**——运行开始记 `gitStart`、结束记 `gitEnd`（自动检查点可能在运行中又提交了，所以两端都记），于是每条轨迹都精确知道归属于哪个提交。这和 v0.47.0 的「回归猎手」形成闭环：一旦 `regression_hunt` 定位出坏提交，结果面板就多一个一键 **🛰️ 查看该提交时期的执行轨迹** 按钮，直接拉起按该提交过滤的执行轨迹回放（`GET /api/traces?gitRef=<hash>`）——让你看到**那个 bug 被引入的瞬间，Agent 到底在干什么：它的推理、它的工具调用、它那次静默的死循环**，而不只是对着 diff 猜。匹配是纯函数、零依赖的 `matchGitRef`：完整哈希 / 短哈希 / 任意前缀都能双向解析，64 位 SHA-256 与 7 位短哈希都能正确命中。
 

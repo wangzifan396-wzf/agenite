@@ -1,0 +1,10 @@
+.git
+node_modules
+test
+docs
+.github
+.workbuddy
+.trash*
+*.log
+.env
+agenite.config.json

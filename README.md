@@ -8,7 +8,76 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 
 ---
 
+<p align="center">
+  <img src="docs/architecture.svg" alt="Agenite architecture" width="760">
+</p>
+
+<div align="center">
+
+**Agenite** — a local-first, multi-provider AI agent you can *trust with your code*.
+
+[![CI](https://github.com/wangzifan396-wzf/agenite/actions/workflows/ci.yml/badge.svg)](https://github.com/wangzifan396-wzf/agenite/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![Stars](https://img.shields.io/github/stars/wangzifan396-wzf/agenite?style=social)](https://github.com/wangzifan396-wzf/agenite/stargazers)
+
+</div>
+
+## Why Agenite
+
+Most "AI agents" are confident but unaccountable: they edit your files, then tell you it worked — even when it didn't. Agenite is built around **accountability**:
+
+- **It proves its work.** After every change it runs your real test / verify command, and only keeps a skill learned from a *green* run.
+- **It never loses your code.** Every mutation is auto-checkpointed to git — one `git undo` away.
+- **It shows its reasoning.** A built-in Flight Recorder captures every step, tool call, and loop, and anchors each run to the exact git commit it ran against.
+- **When it breaks, it finds the culprit.** The Regression Hunter auto-drives `git bisect` to pinpoint the first bad commit, then opens that commit's execution trace so you can see *what the agent was doing when the bug appeared*.
+
+Zero dependencies. Fully offline-capable. Your keys never leave your machine except to call the model. In the spirit of LobeChat / Open WebUI / LibreChat — but smaller, transparent, and auditable.
+
+## Quick start
+
+```bash
+# No npm install — the project ships zero dependencies
+git clone https://github.com/wangzifan396-wzf/agenite.git
+cd agenite
+node server.js
+# open http://localhost:4173
+```
+
+Or with Docker (one command, data persists in a volume):
+
+```bash
+docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite
+```
+
+Add your model API key in Settings (OpenAI / Anthropic / Gemini / DeepSeek / Qwen / Ollama / …), flip the **Agent** switch on, and chat. That's it.
+
+## Agenite vs the others
+
+| Capability | Agenite | Open WebUI | LobeChat | LibreChat |
+|---|---|---|---|---|
+| Local-first, zero-dependency | ✓ | partial | partial | partial |
+| Autonomous agent loop (code · run · tools) | ✓ | partial | partial | partial |
+| Verify-after-edit (runs your tests) | ✓ | — | — | — |
+| Auto git checkpoint + undo | ✓ | — | — | — |
+| Flight Recorder (per-run trace) | ✓ | — | — | — |
+| Regression Hunter (auto git bisect) | ✓ | — | — | — |
+| Verification-gated skill learning | ✓ | — | — | — |
+| MCP tool ecosystem | ✓ | ✓ | ✓ | limited |
+| Multi-model hub (12+ providers) | ✓ | ✓ | ✓ | ✓ |
+| Local RAG / long-term memory | ✓ | ✓ | — | — |
+
+_Honest note: Agenite is younger — its plugin/theme ecosystem and mobile story are thinner than the incumbents. What it trades that for is a reliability harness that makes delegation safe._
+
+## Capability matrix
+
+Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search.
+
+---
+
 ## ✨ Features
+
+- **Maturity & adoption release (v0.49.0)**: the agent is feature-complete, so this release is about *being worth using and sharing*. New highlights: a **shareable Run Report** — open any execution trace (live or replayed) and export it as a self-contained HTML file you can hand to a teammate or post; a **one-command Docker image** (`docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite`); a **CI workflow** that runs the full test suite on Node 18/20/22 (green badge); and a rewritten landing README with a comparison table against Open WebUI / LobeChat / LibreChat. First-run also got a 3-step onboarding hint and example tasks.
 
 - **Flight Recorder ↔ git commit linkage (v0.48.0)**: the Run Trace from v0.17.0 becomes *debuggable*. Every trace is now **anchored to the git checkout it ran against** — `gitStart` captured when the run begins and `gitEnd` when it ends (the auto-checkpoint may commit mid-run, so we record both) — so each trace knows exactly which commit it belongs to. This closes the loop with the v0.47.0 Regression Hunter: once `regression_hunt` blames a commit, its result panel offers a one-click **🛰️ 查看该提交时期的执行轨迹** button that opens the trace replay filtered to that commit (`GET /api/traces?gitRef=<hash>`), so you can see *what the agent was actually doing — the reasoning, the tool calls, the silent loop — at the moment the bug was introduced*, not just read the diff. The match is pure and zero-dependency: `matchGitRef` resolves a full / short / prefix hash in either direction, so a 64-char SHA-256 and a 7-char short both resolve correctly.
 

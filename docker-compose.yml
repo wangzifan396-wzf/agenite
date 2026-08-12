@@ -1,0 +1,17 @@
+services:
+  agenite:
+    build: .
+    # Once a published image exists, swap the two lines below:
+    # image: ghcr.io/wangzifan396-wzf/agenite:latest
+    container_name: agenite
+    ports:
+      - "4173:4173"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=4173
+    volumes:
+      - agenite-data:/root/.agenite
+    restart: unless-stopped
+
+volumes:
+  agenite-data:

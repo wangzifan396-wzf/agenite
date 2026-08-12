@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 380" font-family="-apple-system, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6470"/>
+    </marker>
+    <style>
+      .box { fill:#fff; stroke:#c4c9d2; stroke-width:1.5; rx:12; }
+      .accent { fill:#eaf1fd; stroke:#3b6fd4; stroke-width:2; }
+      .key { fill:#eafaf0; stroke:#2e9e5b; stroke-width:2; }
+      .ttl { font-size:15px; font-weight:700; fill:#1c1d22; }
+      .lbl { font-size:12.5px; fill:#3a3f4a; }
+      .sub { font-size:11.5px; fill:#6b7280; }
+      .arr { stroke:#5b6470; stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="760" height="380" fill="#fbfcfd"/>
+  <text x="380" y="28" text-anchor="middle" class="ttl">Agenite — an accountable local agent</text>
+  <text x="380" y="48" text-anchor="middle" class="sub">Your code never leaves your machine except to call the model · zero runtime dependencies</text>
+
+  <!-- User -->
+  <rect class="box" x="24" y="160" width="120" height="64" rx="12"/>
+  <text x="84" y="190" text-anchor="middle" class="ttl">You</text>
+  <text x="84" y="210" text-anchor="middle" class="sub">chat + API key</text>
+
+  <!-- Agent loop -->
+  <rect class="accent" x="178" y="110" width="190" height="170" rx="14"/>
+  <text x="273" y="138" text-anchor="middle" class="ttl">Agent loop</text>
+  <text x="192" y="166" class="lbl">1 · Plan   (todo_write)</text>
+  <text x="192" y="190" class="lbl">2 · Execute tools</text>
+  <text x="192" y="214" class="lbl">3 · Verify  (run tests)</text>
+  <text x="192" y="238" class="lbl">4 · Git checkpoint</text>
+  <text x="192" y="262" class="lbl">5 · Distill skill</text>
+
+  <!-- Tools / MCP -->
+  <rect class="box" x="178" y="300" width="190" height="52" rx="12"/>
+  <text x="273" y="324" text-anchor="middle" class="lbl">Tools · MCP · Browser</text>
+  <text x="273" y="342" text-anchor="middle" class="sub">read/write · run · web</text>
+
+  <!-- Flight Recorder -->
+  <rect class="key" x="430" y="60" width="210" height="92" rx="14"/>
+  <text x="535" y="88" text-anchor="middle" class="ttl">Flight Recorder</text>
+  <text x="535" y="110" text-anchor="middle" class="sub">every step · tool call · loop</text>
+  <text x="535" y="130" text-anchor="middle" class="sub">anchored to git commit</text>
+
+  <!-- Regression Hunter -->
+  <rect class="key" x="430" y="210" width="210" height="92" rx="14"/>
+  <text x="535" y="238" text-anchor="middle" class="ttl">Regression Hunter</text>
+  <text x="535" y="260" text-anchor="middle" class="sub">auto git bisect →</text>
+  <text x="535" y="280" text-anchor="middle" class="sub">first bad commit</text>
+
+  <!-- Export -->
+  <rect class="box" x="680" y="135" width="64" height="64" rx="12"/>
+  <text x="712" y="162" text-anchor="middle" class="lbl">Share</text>
+  <text x="712" y="180" text-anchor="middle" class="sub">HTML</text>
+
+  <!-- arrows -->
+  <path class="arr" d="M144,192 L174,192"/>
+  <path class="arr" d="M273,300 L273,282"/>
+  <path class="arr" d="M368,170 C400,150 410,130 428,120"/>
+  <path class="arr" d="M368,250 C400,250 410,250 428,250"/>
+  <path class="arr" d="M535,152 L535,208"/>
+  <path class="arr" d="M640,150 L676,160"/>
+</svg>
