@@ -9,7 +9,14 @@
 ---
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Agenite 架构" width="760">
+  <img src="docs/screenshots/02-run.png" alt="Agenite 正在读取系统信息并执行命令，工具卡片带有风险等级" width="880"><br>
+  <i>Agenite 读取本机信息、执行 shell 命令，每一步都以带风险等级、可折叠的工具卡片摊开给你看。</i>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/01-welcome.png" alt="Agenite 首次欢迎页" width="640"><br><br>
+  <img src="docs/screenshots/03-atlas.png" alt="Agenite Atlas 记忆图谱" width="640"><br>
+  <i>首次欢迎页（上）与 Atlas 长期记忆图谱（下）。</i>
 </p>
 
 <div align="center">
@@ -75,7 +82,17 @@ _实话实说：Agenite 还年轻——插件/主题生态和移动端比老牌�
 
 ---
 
+## 工作原理
+
+<p align="center">
+  <img src="docs/architecture.svg" alt="Agenite 架构" width="760">
+</p>
+
+---
+
 ## ✨ 功能
+
+- **真实产品截图（v0.50.0）**：README 不再用手绘占位图，而是放上 Agenite 真实运行 Agent 任务的 UI 截图——带风险等级的工具卡片、首次欢迎页、Atlas 长期记忆图谱。图片存于 `docs/screenshots/`，用 `puppeteer-core` 驱动真实应用生成，随着界面迭代可同步更新。
 
 - **成熟度与"让人愿意用"发布（v0.49.0）**：agent 功能已完整，本版聚焦**好用、好分享**。新增亮点：**可分享的运行报告**——打开任意执行轨迹（实时或回放），一键导出成自包含 HTML 文件，可直接发给同事或贴出来；**一键 Docker 镜像**（`docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite`）；**CI 工作流**在 Node 18/20/22 上跑全量测试（绿徽章）；重写的落地 README 含与 Open WebUI / LobeChat / LibreChat 的对比表。首次使用也加了"3 步上手"提示与示例任务。
 

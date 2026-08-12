@@ -9,7 +9,14 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
 ---
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Agenite architecture" width="760">
+  <img src="docs/screenshots/02-run.png" alt="Agenite agent run: reading system info and running commands with risk-badged tool cards" width="880"><br>
+  <i>Agenite reads your local machine and runs shell commands with risk-badged, collapsible tool cards — every step is visible.</i>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/01-welcome.png" alt="Agenite welcome screen" width="640"><br><br>
+  <img src="docs/screenshots/03-atlas.png" alt="Agenite Atlas memory graph" width="640"><br>
+  <i>First-run welcome (top) and Atlas long-term memory graph (bottom).</i>
 </p>
 
 <div align="center">
@@ -75,7 +82,17 @@ Browser automation · file & command execution · code interpreter · web search
 
 ---
 
+## How it works
+
+<p align="center">
+  <img src="docs/architecture.svg" alt="Agenite architecture" width="760">
+</p>
+
+---
+
 ## ✨ Features
+
+- **Real product visuals (v0.50.0)**: the README now shows actual UI screenshots — not hand-drawn mockups — of Agenite running a real agent task with risk-badged tool cards, the first-run welcome screen, and the Atlas long-term memory graph. Images live in `docs/screenshots/` and are captured from the real app via `puppeteer-core`, so they stay honest as the UI evolves.
 
 - **Maturity & adoption release (v0.49.0)**: the agent is feature-complete, so this release is about *being worth using and sharing*. New highlights: a **shareable Run Report** — open any execution trace (live or replayed) and export it as a self-contained HTML file you can hand to a teammate or post; a **one-command Docker image** (`docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite`); a **CI workflow** that runs the full test suite on Node 18/20/22 (green badge); and a rewritten landing README with a comparison table against Open WebUI / LobeChat / LibreChat. First-run also got a 3-step onboarding hint and example tasks.
 
