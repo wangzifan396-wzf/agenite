@@ -8072,7 +8072,7 @@ async function loadEvalTraces() {
         <input type="checkbox" class="eval-trace-cb" value="${escapeHtml(t.runId)}" />
         <span class="eti-main">
           <span class="eti-title">${escapeHtml(t.title || t.runId)}</span>
-          <span class="eti-meta">${t.steps} 步 · ${escapeHtml(t.stopped || '—')} · ${evalFmtDate(t.createdAt)}</span>
+          <span class="eti-meta">${t.turns ?? 0} 步 · ${escapeHtml(t.stopped || '—')} · ${evalFmtDate(t.createdAt)}</span>
         </span>
       </label>`).join('');
   } catch {

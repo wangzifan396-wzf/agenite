@@ -33,7 +33,7 @@ import {
   newTrace, addStep, classifyTool, saveTrace, listTraces, listTracesFull, listTracesByGitRef, loadTrace, deleteTrace, pruneTraces, traceSummary, diagnoseTrace, TRACES_DIR
 } from './src/core/trace.js';
 import {
-  traceToCase, runEval, listEvals, loadEval, deleteEval, pruneEvals, EVALS_DIR
+  traceToCase, runEval, listEvals, loadEval, deleteEval, pruneEvals, newEvalId, EVALS_DIR
 } from './src/core/eval.js';
 import { createKnowledge } from './src/core/knowledge.js';
 import { emptyTodoState } from './src/core/todo.js';
@@ -891,26 +891,23 @@ async function handleEvalCreate(req, res) {
   const callModel = buildCallModel(config, tools, ac.signal);
 
   // Start the background run and remember the job so GET /api/evals/:id can
-  // report "running" until the report is persisted.
-  const placeholder = { status: 'running' };
-  // runEval generates its own evalId; capture it via the returned report. We
-  // can't know the id before running, so stash by a temp key and re-key after.
-  const tempKey = 'tmp_' + Date.now().toString(36);
-  evalJobs.set(tempKey, placeholder);
-  void runEval({ cases, callModel, config, tools, trials, dir: EVALS_DIR })
-    .then((report) => {
-      evalJobs.delete(tempKey);
-      evalJobs.set(report.evalId, { status: 'done' });
+  // report "running" until the report is persisted. We mint the evalId up front
+  // (rather than re-keying from a temp key after the fact) so the client can
+  // poll the same id the whole time — otherwise the report never surfaces.
+  const evalId = newEvalId();
+  evalJobs.set(evalId, { status: 'running' });
+  void runEval({ cases, callModel, config, tools, trials, dir: EVALS_DIR, evalId })
+    .then(() => {
+      evalJobs.set(evalId, { status: 'done' });
       return pruneEvals(EVALS_DIR);
     })
     .catch((e) => {
-      evalJobs.delete(tempKey);
-      evalJobs.set(tempKey, { status: 'error', error: e && e.message ? e.message : String(e) });
+      evalJobs.set(evalId, { status: 'error', error: e && e.message ? e.message : String(e) });
     });
 
   return sendJson(res, 202, {
-    ok: true, status: 'running', tempKey, cases: cases.length, trials,
-    note: '评估在后台运行（会真实调用模型并消耗额度），完成后可在「历史评估」中查看报告。'
+    ok: true, status: 'running', evalId, cases: cases.length, trials,
+    note: '评估在后台运行（会真实调用模型并消耗额度），完成后会在下方显示报告。'
   });
 }
 

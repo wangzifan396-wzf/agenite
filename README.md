@@ -24,6 +24,11 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   <i>Cost & Governance center: total spend, per-model cost bars, daily cost, and an auditable list of every medium/high-risk tool call.</i>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/05-eval.png" alt="Agenite Eval regression report" width="880"><br>
+  <i>Eval & Regression: replay a saved run with frozen tools, change only the model, and surface regressions in pass rate, cost, and tool adherence.</i>
+</p>
+
 <div align="center">
 
 **Agenite** — a local-first, multi-provider AI agent you can *trust with your code*.
@@ -42,6 +47,7 @@ Most "AI agents" are confident but unaccountable: they edit your files, then tel
 - **It proves its work.** After every change it runs your real test / verify command, and only keeps a skill learned from a *green* run.
 - **It never loses your code.** Every mutation is auto-checkpointed to git — one `git undo` away.
 - **It shows its reasoning.** A built-in Flight Recorder captures every step, tool call, and loop, and anchors each run to the exact git commit it ran against.
+- **It measures itself.** The built-in **Eval** turns any saved run into a frozen "golden replay" regression suite: the tool results are replayed exactly, the model is the only variable, and Agenite reports pass rate, cost, turn count, and tool-adherence regressions against the previous baseline.
 - **When it breaks, it finds the culprit.** The Regression Hunter auto-drives `git bisect` to pinpoint the first bad commit, then opens that commit's execution trace so you can see *what the agent was doing when the bug appeared*.
 
 Zero dependencies. Fully offline-capable. Your keys never leave your machine except to call the model. In the spirit of LobeChat / Open WebUI / LibreChat — but smaller, transparent, and auditable.
@@ -74,6 +80,7 @@ Add your model API key in Settings (OpenAI / Anthropic / Gemini / DeepSeek / Qwe
 | Auto git checkpoint + undo | ✓ | — | — | — |
 | Flight Recorder (per-run trace) | ✓ | — | — | — |
 | Regression Hunter (auto git bisect) | ✓ | — | — | — |
+| Trace-driven Eval / regression suite | ✓ | — | — | — |
 | Verification-gated skill learning | ✓ | — | — | — |
 | MCP tool ecosystem | ✓ | ✓ | ✓ | limited |
 | Multi-model hub (12+ providers) | ✓ | ✓ | ✓ | ✓ |
@@ -83,7 +90,7 @@ _Honest note: Agenite is younger — its plugin/theme ecosystem and mobile story
 
 ## Capability matrix
 
-Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search.
+Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search · trace-driven Eval / regression suite.
 
 ---
 
@@ -96,6 +103,8 @@ Browser automation · file & command execution · code interpreter · web search
 ---
 
 ## ✨ Features
+
+- **Trace-driven Eval & Regression (v0.52.0)**: Agenite already records every run as a trace. Now the built-in **Eval** panel turns those real runs into a local, deterministic regression suite. Pick saved traces, replay them against a model with **frozen tool results** (the model is the only variable), and get a CLASS-style report: pass rate, cost, turn count, tool adherence, and diagnosis. The next run is automatically compared to the previous baseline, surfacing regressions before they reach production. No synthetic benchmark, no cloud harness, no separate tooling. This is the observability layer that separates "works once" from "keeps working".
 
 - **Cost & Governance center (v0.51.0)**: a commercial-grade accountability layer for teams that need to see what the agent did and what it cost. The new **📊 用量与审计** panel aggregates spend, runs, tool calls, and high-risk calls across every saved run; shows per-model and per-day cost bars; and lists every medium/high-risk tool call in an auditable table with one-click CSV export. This directly answers the two questions a CTO asks before trusting an agent with production code: *how much is it costing us?* and *what risky operations did it perform?*
 

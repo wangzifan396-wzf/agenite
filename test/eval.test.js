@@ -213,3 +213,35 @@ test('eval persistence: save/load/list/delete + prune', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('runEval: a worse second run is flagged as a baseline regression', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenite-eval-'));
+  try {
+    const t = makeTrace({ steps: [{ name: 'read_file', args: { path: 'a' }, result: 'x' }] });
+    const c = traceToCase(t);
+    const r1 = await runEval({ cases: [c], callModel: replayModel(c), config: CONFIG, tools: [], trials: 1, dir });
+    assert.equal(r1.regressions.length, 0);
+    assert.equal(r1.summary.passRate, 1);
+    // Second run with a model that drifts to an unknown tool => worse passRate.
+    const r2 = await runEval({ cases: [c], callModel: driftModel('unknown_tool'), config: CONFIG, tools: [], trials: 1, dir });
+    assert.equal(r2.summary.passRate, 0);
+    assert.ok(r2.regressions.length > 0, 'expected at least one regression');
+    assert.ok(r2.regressions.some((x) => x.metric === 'passRate'), 'passRate regression should be detected');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runEval respects an injected evalId (stable polling key)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenite-eval-'));
+  try {
+    const t = makeTrace({ steps: [{ name: 'read_file', args: { path: 'a' }, result: 'x' }] });
+    const c = traceToCase(t);
+    const report = await runEval({ cases: [c], callModel: replayModel(c), config: CONFIG, tools: [], trials: 1, dir, evalId: 'eval_fixed_id' });
+    assert.equal(report.evalId, 'eval_fixed_id');
+    const loaded = await loadEval(dir, 'eval_fixed_id');
+    assert.equal(loaded.evalId, 'eval_fixed_id');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

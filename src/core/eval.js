@@ -199,21 +199,25 @@ function r3(n) { return Math.round(n * 1000) / 1000; }
 
 export function diffBaseline(summary, baseline) {
   if (!baseline) return [];
+  // loadBaseline persists { savedAt, summary }; tolerate both shapes so the
+  // baseline comparison works whether it's called with the file object or the
+  // bare summary.
+  const b = (baseline && baseline.summary) ? baseline.summary : baseline;
   const reg = [];
-  if (baseline.passRate > summary.passRate + 1e-4) {
-    reg.push({ metric: 'passRate', before: r3(baseline.passRate), after: r3(summary.passRate), delta: r3(summary.passRate - baseline.passRate), worse: true });
+  if (b.passRate > summary.passRate + 1e-4) {
+    reg.push({ metric: 'passRate', before: r3(b.passRate), after: r3(summary.passRate), delta: r3(summary.passRate - b.passRate), worse: true });
   }
-  if (summary.avgCost > baseline.avgCost * 1.05) {
-    reg.push({ metric: 'avgCost', before: r3(baseline.avgCost), after: r3(summary.avgCost), delta: r3(summary.avgCost - baseline.avgCost), worse: true });
+  if (summary.avgCost > (b.avgCost || 0) * 1.05) {
+    reg.push({ metric: 'avgCost', before: r3(b.avgCost), after: r3(summary.avgCost), delta: r3(summary.avgCost - b.avgCost), worse: true });
   }
-  if (summary.avgTurns > baseline.avgTurns * 1.1) {
-    reg.push({ metric: 'avgTurns', before: r3(baseline.avgTurns), after: r3(summary.avgTurns), delta: r3(summary.avgTurns - baseline.avgTurns), worse: true });
+  if (summary.avgTurns > (b.avgTurns || 0) * 1.1) {
+    reg.push({ metric: 'avgTurns', before: r3(b.avgTurns), after: r3(summary.avgTurns), delta: r3(summary.avgTurns - b.avgTurns), worse: true });
   }
   return reg;
 }
 
 // ── Full eval run ───────────────────────────────────────────────────────────
-export async function runEval({ cases, callModel, config, tools, trials = 1, onEvent, dir = EVALS_DIR }) {
+export async function runEval({ cases, callModel, config, tools, trials = 1, onEvent, dir = EVALS_DIR, evalId }) {
   const results = [];
   for (const c of cases) {
     if (onEvent) onEvent('eval_case_start', { caseId: c.id, title: c.title });
@@ -234,7 +238,7 @@ export async function runEval({ cases, callModel, config, tools, trials = 1, onE
   const regressions = diffBaseline(summary, baseline);
   const report = {
     version: EVAL_VERSION,
-    evalId: eid(),
+    evalId: evalId || eid(),
     createdAt: Date.now(),
     model: config.model,
     provider: config.provider,
@@ -348,5 +352,7 @@ export async function pruneEvals(dir = EVALS_DIR, max = MAX_EVALS) {
   }
   return removed;
 }
+
+export const newEvalId = eid;
 
 export { TRACE_VERSION };
