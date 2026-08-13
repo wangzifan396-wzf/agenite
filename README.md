@@ -85,12 +85,13 @@ Add your model API key in Settings (OpenAI / Anthropic / Gemini / DeepSeek / Qwe
 | MCP tool ecosystem | ✓ | ✓ | ✓ | limited |
 | Multi-model hub (12+ providers) | ✓ | ✓ | ✓ | ✓ |
 | Local RAG / long-term memory | ✓ | ✓ | — | — |
+| Shareable config presets (key never exported) | ✓ | partial | — | — |
 
 _Honest note: Agenite is younger — its plugin/theme ecosystem and mobile story are thinner than the incumbents. What it trades that for is a reliability harness that makes delegation safe._
 
 ## Capability matrix
 
-Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search · trace-driven Eval / regression suite.
+Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search · trace-driven Eval / regression suite · shareable config presets.
 
 ---
 
@@ -103,6 +104,8 @@ Browser automation · file & command execution · code interpreter · web search
 ---
 
 ## ✨ Features
+
+- **Shareable Agent Config Presets (v0.53.0)**: the missing distribution channel for "here's how I set up my agent". The sidebar **🎚️ 预设** panel lets you **freeze the current agent config** — model, tools, skills, memory, system prompt, run mode, and safety gates — into a portable preset you can **export as JSON, import from a friend, or clone from 3 built-in examples** (通用助手 / 代码工程师 / 只读研究助手). The hard rule: a preset **never exports your API key or your workspace directory** — applying someone else's preset can never steal your secret or relocate your sandbox; your key and path are always preserved locally. This is the adoption lever: share a tuned agent the way you'd share a `.gitignore`, and the community starts compounding configurations instead of rediscovering them.
 
 - **Trace-driven Eval & Regression (v0.52.0)**: Agenite already records every run as a trace. Now the built-in **Eval** panel turns those real runs into a local, deterministic regression suite. Pick saved traces, replay them against a model with **frozen tool results** (the model is the only variable), and get a CLASS-style report: pass rate, cost, turn count, tool adherence, and diagnosis. The next run is automatically compared to the previous baseline, surfacing regressions before they reach production. No synthetic benchmark, no cloud harness, no separate tooling. This is the observability layer that separates "works once" from "keeps working".
 

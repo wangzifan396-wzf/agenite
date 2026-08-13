@@ -84,6 +84,7 @@
         <button id="open-kb" class="side-link">📚 知识库</button>
         <button id="open-agents" class="side-link">🤖 智能体</button>
         <button id="open-skills" class="side-link">🧩 技能</button>
+        <button id="open-presets" class="side-link">🎚️ 预设</button>
         <button id="open-usage" class="side-link">📊 用量审计</button>
       </div>
     </aside>
@@ -385,6 +386,30 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 预设 · 可分享的 Agent 配置（导出 / 导入 / 克隆人格，永不带密钥） -->
+  <div id="presets-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card presets-card">
+      <div class="drawer-head">
+        <h2>预设 · Presets</h2>
+        <button id="close-presets" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body presets-body">
+        <p class="muted small">把当前 Agent 配置（模型 / 工具 / 技能 / 记忆 / 系统提示 / 运行模式 / 安全闸门）固化为可分享的预设。预设<b>永不导出 API Key 与本地目录</b>，可放心分享给他人，或一键导入社区配置。</p>
+        <div class="preset-actions-top">
+          <button id="preset-save" class="btn-primary">＋ 把当前配置存为预设</button>
+          <label class="btn-ghost preset-file-label">导入文件
+            <input id="preset-file" type="file" accept="application/json,.json" hidden />
+          </label>
+        </div>
+        <div class="field-title">我的预设</div>
+        <div id="preset-mine" class="preset-list"></div>
+        <div class="field-title">内置示例预设</div>
+        <div id="preset-builtin" class="preset-list"></div>
+        <div id="preset-import-msg" class="preset-msg hidden"></div>
       </div>
     </div>
   </div>

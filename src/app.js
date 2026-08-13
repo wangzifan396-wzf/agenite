@@ -6,10 +6,12 @@ import { uid, escapeHtml, fuzzyFilter, formatBytes } from './core/util.js';
 import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, VERIFY_LEVELS, COMPRESS_MODES, modelsForProvider, modelLabel } from './core/config.js';
 import { errorHint, errorSeverity } from './core/errors.js';
 import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
+import { buildPreset, validatePreset, applyPresetToConfig, presetSummary, BUILTIN_PRESETS } from './core/presets.js';
 
 const $ = (id) => document.getElementById(id);
 const LS = {
   config: 'agenite:config',
+  presets: 'agenite:presets',
   convs: 'agenite:conversations',
   cur: 'agenite:current',
   theme: 'agenite:theme',
@@ -4549,7 +4551,169 @@ async function renderSkills() {
   $('skills-current').textContent = active.length ? ('已启用 ' + active.length + ' 个技能包') : '未启用技能包';
 }
 
-// Curation, on demand: retire the skills that have had a fair number of tries
+// ---------- 预设 · Shareable agent config presets ----------
+// A preset freezes the shareable slice of the config (model / tools / skills /
+// memory / system prompt / run mode / safety gates) into a JSON you can export,
+// import, or hand to a friend. apiKey + workspace NEVER travel with it.
+
+function loadPresets() {
+  try { const a = JSON.parse(localStorage.getItem(LS.presets) || '[]'); return Array.isArray(a) ? a : []; }
+  catch { return []; }
+}
+function savePresets(list) { localStorage.setItem(LS.presets, JSON.stringify(list)); }
+
+function openPresets() {
+  $('presets-modal').classList.remove('hidden');
+  hidePresetMsg();
+  renderPresets();
+}
+function closePresets() { $('presets-modal').classList.add('hidden'); }
+
+// Re-sync every piece of UI that reflects config after a preset is applied.
+// Safe to call whether or not the settings panel is open.
+function resyncConfigUI() {
+  renderModelChip();
+  renderPermChip();
+  renderAgentChip();
+  renderPlanChip();
+  if (!$('settings-modal').classList.contains('hidden')) fillSettings();
+}
+
+function applyPreset(preset) {
+  try {
+    config = applyPresetToConfig(preset, config);
+    saveConfig();
+    resyncConfigUI();
+    toast('已应用预设：' + (preset.name || '未命名'));
+    closePresets();
+  } catch (e) {
+    toast('预设无效：' + (e.message || e));
+  }
+}
+
+function saveCurrentAsPreset() {
+  const name = window.prompt('给这个预设起个名字（例如「我的代码助手」）：', '');
+  if (name == null) return;
+  if (!name.trim()) { toast('名字不能为空'); return; }
+  const desc = window.prompt('可选：一句话描述这个预设的用途', '') || '';
+  const preset = buildPreset(config, { name: name.trim(), description: desc.trim(), author: '我' });
+  const list = loadPresets();
+  const dup = list.findIndex((p) => p.name === preset.name);
+  if (dup >= 0) {
+    if (!window.confirm('已存在同名预设「' + preset.name + '」，要覆盖它吗？')) return;
+    list[dup] = preset;
+  } else {
+    list.push(preset);
+  }
+  savePresets(list);
+  toast('已保存预设：' + preset.name);
+  renderPresets();
+}
+
+function deletePreset(name) {
+  if (!window.confirm('删除预设「' + name + '」？此操作不可撤销。')) return;
+  savePresets(loadPresets().filter((p) => p.name !== name));
+  toast('已删除预设：' + name);
+  renderPresets();
+}
+
+function exportPreset(preset) {
+  const data = JSON.stringify(preset, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (preset.name || 'preset').replace(/[^\w一-龥-]+/g, '_') + '.agenite-preset.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function importPresetText(text) {
+  let obj;
+  try { obj = JSON.parse(text); }
+  catch { showPresetMsg('导入失败：不是合法的 JSON。', true); return false; }
+  try {
+    const clean = validatePreset(obj);
+    const list = loadPresets();
+    const dup = list.findIndex((p) => p.name === clean.name);
+    if (dup >= 0) {
+      if (!window.confirm('已存在同名预设「' + clean.name + '」，要覆盖它吗？')) { showPresetMsg('已取消导入。'); return false; }
+      list[dup] = clean;
+    } else {
+      list.push(clean);
+    }
+    savePresets(list);
+    showPresetMsg('已导入预设：' + clean.name, false);
+    renderPresets();
+    return true;
+  } catch (e) {
+    showPresetMsg('导入失败：' + (e.message || e), true);
+    return false;
+  }
+}
+
+function showPresetMsg(msg, isErr) {
+  const el = $('preset-import-msg');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'preset-msg' + (isErr ? ' is-err' : '');
+  el.classList.remove('hidden');
+}
+function hidePresetMsg() {
+  const el = $('preset-import-msg');
+  if (el) { el.classList.add('hidden'); el.textContent = ''; }
+}
+
+function presetCardHtml(p, opts = {}) {
+  const sum = presetSummary(p);
+  const desc = p.description ? `<div class="preset-desc">${escapeHtml(p.description)}</div>` : '';
+  const meta = [];
+  if (p.author) meta.push('作者：' + escapeHtml(p.author));
+  const metaLine = meta.length ? `<div class="preset-meta">${meta.join(' · ')}</div>` : '';
+  const delBtn = opts.deletable ? `<button class="preset-del" data-name="${escapeHtml(p.name)}" title="删除">🗑</button>` : '';
+  return `<div class="preset-card">
+    <div class="preset-main">
+      <div class="preset-name">${escapeHtml(p.name)}</div>
+      ${desc}
+      <div class="preset-sum">${escapeHtml(sum)}</div>
+      ${metaLine}
+    </div>
+    <div class="preset-actions">
+      <button class="btn-primary preset-apply" data-name="${escapeHtml(p.name)}">应用</button>
+      <button class="btn-ghost preset-export" data-name="${escapeHtml(p.name)}">导出</button>
+      ${delBtn}
+    </div>
+  </div>`;
+}
+
+function renderPresets() {
+  const mine = $('preset-mine');
+  const built = $('preset-builtin');
+  if (!mine || !built) return;
+  const list = loadPresets();
+  mine.innerHTML = list.length
+    ? list.map((p) => presetCardHtml(p, { deletable: true })).join('')
+    : '<div class="muted small">还没有保存的预设。点上面的「把当前配置存为预设」即可创建，或导入一份社区配置。</div>';
+  built.innerHTML = BUILTIN_PRESETS.map((p) => presetCardHtml(p, { deletable: false })).join('');
+
+  mine.querySelectorAll('.preset-apply').forEach((b) => {
+    b.onclick = () => { const p = list.find((x) => x.name === b.dataset.name); if (p) applyPreset(p); };
+  });
+  mine.querySelectorAll('.preset-export').forEach((b) => {
+    b.onclick = () => { const p = list.find((x) => x.name === b.dataset.name); if (p) exportPreset(p); };
+  });
+  mine.querySelectorAll('.preset-del').forEach((b) => {
+    b.onclick = () => deletePreset(b.dataset.name);
+  });
+  built.querySelectorAll('.preset-apply').forEach((b) => {
+    b.onclick = () => { const p = BUILTIN_PRESETS.find((x) => x.name === b.dataset.name); if (p) applyPreset(p); };
+  });
+  built.querySelectorAll('.preset-export').forEach((b) => {
+    b.onclick = () => { const p = BUILTIN_PRESETS.find((x) => x.name === b.dataset.name); if (p) exportPreset(p); };
+  });
+}
 // and still keep losing. Nothing is deleted — the .md stays on disk.
 async function pruneCustomSkills() {
   const btn = $('skills-prune');
@@ -4758,6 +4922,17 @@ function wire() {
   $('open-skills').onclick = openSkills;
   $('close-skills').onclick = closeSkills;
   if ($('skills-prune')) $('skills-prune').onclick = pruneCustomSkills;
+  $('open-presets').onclick = openPresets;
+  $('close-presets').onclick = closePresets;
+  $('preset-save').onclick = saveCurrentAsPreset;
+  $('preset-file').onchange = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { importPresetText(String(reader.result || '')); e.target.value = ''; };
+    reader.onerror = () => { showPresetMsg('读取文件失败。', true); e.target.value = ''; };
+    reader.readAsText(f);
+  };
   $('new-agent').onclick = openAgentEditor;
   $('agent-cancel').onclick = closeAgentEditor;
   $('agent-editor').addEventListener('submit', saveCustomAgent);
@@ -5014,6 +5189,7 @@ function wire() {
   $('regression-modal').addEventListener('mousedown', (e) => { if (e.target === $('regression-modal')) closeRegression(); });
   $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
   $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
+  $('presets-modal').addEventListener('mousedown', (e) => { if (e.target === $('presets-modal')) closePresets(); });
 
   // ---------- voice: 语音输入（听写）+ 朗读 ----------
   // 纯浏览器能力（Web Speech API），零依赖；不支持的浏览器自动降级隐藏。
@@ -5197,6 +5373,7 @@ function wire() {
       else if (!$('regression-modal').classList.contains('hidden')) closeRegression();
       else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
       else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
+      else if (!$('presets-modal').classList.contains('hidden')) closePresets();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
