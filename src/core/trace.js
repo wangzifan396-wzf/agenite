@@ -309,6 +309,28 @@ export async function listTraces(dir = TRACES_DIR) {
   return out;
 }
 
+// Full traces (with every step) — used by the governance/audit view, which
+// needs per-step tool names, risk and status rather than the rolled-up summary.
+export async function listTracesFull(dir = TRACES_DIR) {
+  let names;
+  try {
+    names = (await readdir(dir)).filter((n) => n.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const n of names) {
+    try {
+      const t = await loadTrace(dir, n.replace(/\.json$/, ''));
+      out.push(t);
+    } catch {
+      // skip unreadable / corrupt trace files
+    }
+  }
+  out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return out;
+}
+
 export async function loadTrace(dir = TRACES_DIR, runId) {
   const text = await readFile(join(dir, TRACE_FILE(runId)), 'utf8');
   const t = JSON.parse(text);

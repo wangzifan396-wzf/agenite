@@ -19,6 +19,11 @@ Zero dependencies, fully offline, data stays in your browser. In the spirit of L
   <i>First-run welcome (top) and Atlas long-term memory graph (bottom).</i>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/04-usage.png" alt="Agenite Cost & Governance dashboard" width="880"><br>
+  <i>Cost & Governance center: total spend, per-model cost bars, daily cost, and an auditable list of every medium/high-risk tool call.</i>
+</p>
+
 <div align="center">
 
 **Agenite** — a local-first, multi-provider AI agent you can *trust with your code*.
@@ -92,7 +97,9 @@ Browser automation · file & command execution · code interpreter · web search
 
 ## ✨ Features
 
-- **Real product visuals (v0.50.0)**: the README now shows actual UI screenshots — not hand-drawn mockups — of Agenite running a real agent task with risk-badged tool cards, the first-run welcome screen, and the Atlas long-term memory graph. Images live in `docs/screenshots/` and are captured from the real app via `puppeteer-core`, so they stay honest as the UI evolves.
+- **Cost & Governance center (v0.51.0)**: a commercial-grade accountability layer for teams that need to see what the agent did and what it cost. The new **📊 用量与审计** panel aggregates spend, runs, tool calls, and high-risk calls across every saved run; shows per-model and per-day cost bars; and lists every medium/high-risk tool call in an auditable table with one-click CSV export. This directly answers the two questions a CTO asks before trusting an agent with production code: *how much is it costing us?* and *what risky operations did it perform?*
+
+- **Real product visuals (v0.50.0)**: the README now shows actual UI screenshots — not hand-drawn mockups — of Agenite running a real agent task with risk-badged tool cards, the first-run welcome screen, the Atlas long-term memory graph, and the new Cost & Governance dashboard. Images live in `docs/screenshots/` and are captured from the real app via `puppeteer-core`, so they stay honest as the UI evolves.
 
 - **Maturity & adoption release (v0.49.0)**: the agent is feature-complete, so this release is about *being worth using and sharing*. New highlights: a **shareable Run Report** — open any execution trace (live or replayed) and export it as a self-contained HTML file you can hand to a teammate or post; a **one-command Docker image** (`docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite`); a **CI workflow** that runs the full test suite on Node 18/20/22 (green badge); and a rewritten landing README with a comparison table against Open WebUI / LobeChat / LibreChat. First-run also got a 3-step onboarding hint and example tasks.
 

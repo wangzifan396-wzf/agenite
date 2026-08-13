@@ -3786,6 +3786,144 @@ function refreshTrace() {
   loadTraceHistory();
 }
 
+// ---------- Usage & Governance (Cost & Audit center) ----------
+// Builds an enterprise-grade accountability view from the flight recorder:
+// total spend, per-model / per-day cost breakdown, and an auditable list of
+// every medium/high-risk tool call across all runs — the two questions a CTO
+// asks before trusting an agent with the team's code and budget.
+let usageAuditRows = [];
+
+function openUsage() {
+  $('usage-modal').classList.remove('hidden');
+  loadUsage();
+}
+function closeUsage() { $('usage-modal').classList.add('hidden'); }
+function refreshUsage() { loadUsage(); }
+
+function traceCostNum(t) {
+  const c = t && t.cost;
+  if (typeof c === 'number') return c;
+  if (c && typeof c.amount === 'number') return c.amount;
+  return 0;
+}
+
+function computeUsage(traces) {
+  let totalCost = 0, runs = 0, tools = 0, errors = 0, highRisk = 0;
+  const byModel = new Map();
+  const byDay = new Map();
+  const audit = [];
+  for (const t of traces || []) {
+    runs++;
+    const cost = traceCostNum(t);
+    totalCost += cost;
+    const model = (t.model && String(t.model).trim()) || '(未记录模型)';
+    if (!byModel.has(model)) byModel.set(model, { cost: 0, runs: 0 });
+    const m = byModel.get(model); m.cost += cost; m.runs++;
+    const day = new Date(t.createdAt || Date.now()).toISOString().slice(0, 10);
+    byDay.set(day, (byDay.get(day) || 0) + cost);
+    const st = t.stats || {};
+    tools += st.tools || 0;
+    errors += st.errors || 0;
+    for (const s of (t.steps || [])) {
+      if (s.kind !== 'tool') continue;
+      const risk = riskOf(s);
+      if (risk === 'high' || risk === 'med') {
+        audit.push({ ts: s.ts || t.createdAt || 0, conv: t.title || t.runId || '', tool: s.name || '', risk, status: s.status || 'ok' });
+        if (risk === 'high') highRisk++;
+      }
+    }
+  }
+  return { totalCost, runs, tools, errors, highRisk, byModel, byDay, audit };
+}
+
+function escCsv(v) {
+  const s = String(v == null ? '' : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function toolStatusLabel(s) { return s === 'ok' ? '成功' : (s === 'error' || s === 'aborted') ? '失败' : (s || '—'); }
+
+function renderUsage(data) {
+  const { totalCost, runs, tools, errors, highRisk, byModel, byDay, audit } = data;
+  // summary cards
+  $('usage-summary').innerHTML = [
+    statCard('总花费（估算）', fmtCost(totalCost), '计价币种随模型而定，多为 USD'),
+    statCard('运行次数', String(runs), '本机保存的全部执行轨迹'),
+    statCard('工具调用', String(tools), '其中失败 ' + errors + ' 次'),
+    statCard('高风险调用', String(highRisk), '写文件 / 执行命令等需审批的操作')
+  ].join('');
+
+  // per-model bars
+  const models = [...byModel.entries()].sort((a, b) => b[1].cost - a[1].cost);
+  const maxModel = models.length ? models[0][1].cost : 0;
+  $('usage-by-model').innerHTML = models.length
+    ? models.map(([name, v]) => barRow(name, v.cost, maxModel, v.runs + ' 次运行')).join('')
+    : '<div class="muted small">暂无记录。</div>';
+
+  // per-day bars
+  const days = [...byDay.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
+  const maxDay = days.length ? Math.max(...days.map((d) => d[1])) : 0;
+  $('usage-by-day').innerHTML = days.length
+    ? days.map(([day, cost]) => barRow(day, cost, maxDay, '')).join('')
+    : '<div class="muted small">暂无记录。</div>';
+
+  // audit table
+  audit.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  usageAuditRows = audit;
+  const shown = audit.slice(0, 300);
+  $('usage-audit-count').textContent = audit.length ? '（共 ' + audit.length + ' 条，显示最近 300）' : '';
+  if (!audit.length) {
+    $('usage-audit').innerHTML = '<div class="muted small">没有中 / 高风险工具调用记录，干得漂亮。</div>';
+    return;
+  }
+  const rows = shown.map((r) => {
+    const meta = RISK_META[r.risk] || { label: r.risk, cls: '' };
+    const d = new Date(r.ts || 0);
+    const when = isNaN(d) ? '—' : d.toLocaleString();
+    return '<tr><td class="mono">' + escHtml(when) + '</td><td>' + escHtml(r.conv) +
+      '</td><td class="mono">' + escHtml(r.tool) + '</td><td><span class="risk-badge ' + meta.cls + '">' +
+      meta.label + '</span></td><td>' + toolStatusLabel(r.status) + '</td></tr>';
+  }).join('');
+  $('usage-audit').innerHTML =
+    '<table class="usage-table"><thead><tr><th>时间</th><th>对话</th><th>工具</th><th>风险</th><th>状态</th></tr></thead><tbody>' +
+    rows + '</tbody></table>';
+}
+
+function statCard(label, value, hint) {
+  return '<div class="stat-card"><div class="stat-label">' + label + '</div><div class="stat-value">' +
+    value + '</div>' + (hint ? '<div class="stat-hint">' + hint + '</div>' : '') + '</div>';
+}
+function barRow(label, cost, max, suffix) {
+  const pct = max > 0 ? Math.max(2, Math.round((cost / max) * 100)) : 0;
+  return '<div class="usage-bar-row"><span class="usage-bar-label" title="' + escHtml(label) + '">' +
+    escHtml(label) + '</span><span class="usage-bar-track"><span class="usage-bar-fill" style="width:' + pct + '%"></span></span>' +
+    '<span class="usage-bar-val">' + fmtCost(cost) + (suffix ? ' <span class="muted small">' + escHtml(suffix) + '</span>' : '') + '</span></div>';
+}
+async function loadUsage() {
+  const box = $('usage-summary');
+  box.innerHTML = '<div class="muted small">统计中…</div>';
+  try {
+    const r = await fetch('/api/traces?full=1').then((x) => x.json());
+    const traces = (r && r.traces) || [];
+    renderUsage(computeUsage(traces));
+  } catch (e) {
+    box.innerHTML = '<div class="muted small">加载失败：' + escHtml(e.message || e) + '</div>';
+  }
+}
+
+function exportUsageCsv() {
+  if (!usageAuditRows.length) { toast('没有可导出的审计记录'); return; }
+  const header = ['时间', '对话', '工具', '风险', '状态'];
+  const lines = [header.map(escCsv).join(',')];
+  for (const r of usageAuditRows) {
+    const d = new Date(r.ts || 0);
+    const when = isNaN(d) ? '' : d.toISOString();
+    lines.push([when, r.conv, r.tool, (RISK_META[r.risk] || {}).label || r.risk, toolStatusLabel(r.status)].map(escCsv).join(','));
+  }
+  const doc = '﻿' + lines.join('\r\n');
+  downloadBlob('agenite-audit-' + new Date().toISOString().slice(0, 10) + '.csv', doc, 'text/csv;charset=utf-8');
+  toast('已导出审计 CSV');
+}
+
 // ---------- Eval (trace-driven local regression suite) ----------
 // Turn the machine's own saved runs into a deterministic test set: freeze each
 // run's tool results and replay against the model, so the model is the only
@@ -4589,6 +4727,10 @@ function wire() {
   const te = $('trace-export'); if (te) te.onclick = exportTraceHtml;
   $('close-trace').onclick = closeTrace;
   $('trace-refresh').onclick = refreshTrace;
+  $('open-usage').onclick = openUsage;
+  $('close-usage').onclick = closeUsage;
+  $('usage-refresh').onclick = refreshUsage;
+  const ue = $('usage-export'); if (ue) ue.onclick = exportUsageCsv;
   $('open-eval').onclick = openEval;
   $('close-eval').onclick = closeEval;
   $('open-regression').onclick = openRegression;

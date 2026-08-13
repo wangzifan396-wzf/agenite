@@ -1597,6 +1597,43 @@ select.text-input { appearance: auto; padding-right: 8px; }
 }
 [data-theme="dark"] .atlas-card { box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255,255,255,.04) inset, 0 0 80px -30px var(--glow); }
 
+/* ---------- Usage & Governance center ---------- */
+.usage-card { width: min(980px, 96vw); height: min(840px, 94vh); }
+.usage-body {
+  flex: 1; min-height: 0; overflow: auto;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 14px 16px 18px;
+}
+.usage-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.stat-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--panel-2); }
+.stat-label { font-size: 12px; color: var(--text-2); }
+.stat-value { font-size: 22px; font-weight: 680; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat-hint { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+
+.usage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.usage-col { min-width: 0; }
+@media (max-width: 760px) { .usage-grid { grid-template-columns: 1fr; } .usage-summary { grid-template-columns: repeat(2, 1fr); } }
+
+.usage-bar-row { display: flex; align-items: center; gap: 10px; margin: 7px 0; font-size: 13px; }
+.usage-bar-label {
+  flex: 0 0 150px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+.usage-bar-track { flex: 1; height: 8px; border-radius: 6px; background: var(--border); overflow: hidden; }
+.usage-bar-fill {
+  display: block; height: 100%; border-radius: 6px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #fff));
+}
+.usage-bar-val { flex: 0 0 auto; font-variant-numeric: tabular-nums; min-width: 96px; text-align: right; }
+
+.usage-audit { border: 1px solid var(--border); border-radius: 12px; overflow: auto; max-height: 340px; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.usage-table th, .usage-table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.usage-table th { position: sticky; top: 0; background: var(--panel-2); color: var(--text-2); font-weight: 600; }
+.usage-table tbody tr:hover { background: var(--panel-2); }
+.usage-table .mono { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 11.5px; color: var(--text-2); }
+.risk-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid; }
+
 .atlas-body {
   flex: 1; min-height: 0;
   display: grid;

@@ -30,7 +30,7 @@ import {
   exportAtlasMarkdown, importAtlasMarkdown, mergeGraph
 } from './src/core/atlas.js';
 import {
-  newTrace, addStep, classifyTool, saveTrace, listTraces, listTracesByGitRef, loadTrace, deleteTrace, pruneTraces, traceSummary, diagnoseTrace, TRACES_DIR
+  newTrace, addStep, classifyTool, saveTrace, listTraces, listTracesFull, listTracesByGitRef, loadTrace, deleteTrace, pruneTraces, traceSummary, diagnoseTrace, TRACES_DIR
 } from './src/core/trace.js';
 import {
   traceToCase, runEval, listEvals, loadEval, deleteEval, pruneEvals, EVALS_DIR
@@ -724,10 +724,12 @@ async function handleAtlasRecall(req, res, reqUrl) {
 async function handleTracesList(req, res) {
   const u = new URL(req.url || '/', 'http://localhost');
   const ref = u.searchParams.get('gitRef');
-  const traces = ref
-    ? await listTracesByGitRef(TRACES_DIR, ref)
-    : await listTraces(TRACES_DIR);
-  return sendJson(res, 200, { ok: true, traces, gitRef: ref || null });
+  const full = u.searchParams.get('full') === '1';
+  let traces;
+  if (ref) traces = await listTracesByGitRef(TRACES_DIR, ref);
+  else if (full) traces = await listTracesFull(TRACES_DIR);
+  else traces = await listTraces(TRACES_DIR);
+  return sendJson(res, 200, { ok: true, traces, gitRef: ref || null, full: !!full });
 }
 
 async function handleTraceGet(req, res, reqUrl) {

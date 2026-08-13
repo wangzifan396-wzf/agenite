@@ -84,6 +84,7 @@
         <button id="open-kb" class="side-link">📚 知识库</button>
         <button id="open-agents" class="side-link">🤖 智能体</button>
         <button id="open-skills" class="side-link">🧩 技能</button>
+        <button id="open-usage" class="side-link">📊 用量审计</button>
       </div>
     </aside>
 
@@ -314,6 +315,39 @@
               <div class="muted small">加载中…</div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 用量与审计 · Cost & Governance：跨所有运行的成本与高风险调用合规看板 -->
+  <div id="usage-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card usage-card">
+      <div class="drawer-head">
+        <h2>用量与审计 · Cost &amp; Governance</h2>
+        <button id="close-usage" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body usage-body">
+        <div class="atlas-toolbar">
+          <span id="usage-range" class="trace-title">全部运行</span>
+          <div class="grow"></div>
+          <button id="usage-refresh" class="mini-btn" title="重新统计全部运行">刷新</button>
+          <button id="usage-export" class="mini-btn accent" title="导出高风险 / 中风险工具调用审计清单为 CSV（合规留痕）">⬇ 导出审计 CSV</button>
+        </div>
+        <div id="usage-summary" class="usage-summary"></div>
+        <div class="usage-grid">
+          <div class="usage-col">
+            <div class="field-title">按模型成本拆分</div>
+            <div id="usage-by-model" class="usage-by-model"></div>
+          </div>
+          <div class="usage-col">
+            <div class="field-title">按日期成本</div>
+            <div id="usage-by-day" class="usage-by-day"></div>
+          </div>
+        </div>
+        <div class="field-title">高风险 / 中风险工具调用审计 <span id="usage-audit-count" class="muted small"></span></div>
+        <div id="usage-audit" class="usage-audit">
+          <div class="muted small">加载中…</div>
         </div>
       </div>
     </div>
