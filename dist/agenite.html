@@ -4088,6 +4088,20 @@ function defaultConfig() {
     verifyCmd: '',
     verifyTimeoutMs: 120000,
     maxVerifyFixes: 2,
+    // --- pre-flight Experience Guard (v0.57, composable runtime) ---
+    // Turns the v0.56 Experience Manual into an ACTIVE safety gate: before a
+    // world-mutating tool runs, it recalls the agent's own hard-won lessons.
+    //   'off'   disabled (pure pass-through)
+    //   'warn'  (default) surface the relevant safety lessons as a pre-flight
+    //           reminder (UI + folded into the tool result); the tool still runs
+    //   'block' additionally refuse the highest-risk verbs when a strong
+    //           runaway-loop lesson exists — conservative, opt-in
+    reflectionGuard: 'warn',
+    // --- project instruction files (v0.57, AGENTS.md / CLAUDE.md compatible) ---
+    // Auto-load the repo's "how to work here" file (AGENTS.md / CLAUDE.md / …)
+    // and fold it into the system prompt so repo conventions are respected
+    // without the user pasting them every time. Set false to disable.
+    instructionFiles: true,
 
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
@@ -4152,6 +4166,8 @@ function normalizeConfig(input = {}) {
   cfg.verifyCmd = typeof cfg.verifyCmd === 'string' ? cfg.verifyCmd.trim().slice(0, 300) : '';
   cfg.verifyTimeoutMs = Math.round(clampNum(cfg.verifyTimeoutMs, 5000, 900000, 120000));
   cfg.maxVerifyFixes = Math.round(clampNum(cfg.maxVerifyFixes, 0, 5, 2));
+  cfg.reflectionGuard = ['off', 'warn', 'block'].includes(cfg.reflectionGuard) ? cfg.reflectionGuard : 'warn';
+  cfg.instructionFiles = cfg.instructionFiles !== false;
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
@@ -6579,6 +6595,15 @@ async function runTurn(conv, opts = {}) {
 </body>
 </html>
  + (Number(data.max) || 0).toFixed(2) + ' 上限，已强制停止并让模型总结', 4500);
+      } else if (event === 'guard') {
+        // v0.57 pre-flight Experience Guard: a world-mutating tool was recalled
+        // against the agent's own Experience Manual. block = refused outright;
+        // warn = a reminding nudge shown BEFORE it mutates the world.
+        if (data && data.level === 'block') {
+          toast('🛑 经验护栏拦截：' + (data.reason || '该操作曾导致问题'), 5200);
+        } else if (data && data.level === 'warn' && Array.isArray(data.reasons) && data.reasons.length) {
+          toast('⚠️ 经验护栏：' + data.reasons[0], 4200);
+        }
       } else if (event === 'diagnosis') {
         // Graded self-check for this run. Persist on the message so it survives
         // re-renders, and render it inline as a report card.

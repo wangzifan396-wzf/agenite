@@ -333,6 +333,20 @@ export function defaultConfig() {
     verifyCmd: '',
     verifyTimeoutMs: 120000,
     maxVerifyFixes: 2,
+    // --- pre-flight Experience Guard (v0.57, composable runtime) ---
+    // Turns the v0.56 Experience Manual into an ACTIVE safety gate: before a
+    // world-mutating tool runs, it recalls the agent's own hard-won lessons.
+    //   'off'   disabled (pure pass-through)
+    //   'warn'  (default) surface the relevant safety lessons as a pre-flight
+    //           reminder (UI + folded into the tool result); the tool still runs
+    //   'block' additionally refuse the highest-risk verbs when a strong
+    //           runaway-loop lesson exists — conservative, opt-in
+    reflectionGuard: 'warn',
+    // --- project instruction files (v0.57, AGENTS.md / CLAUDE.md compatible) ---
+    // Auto-load the repo's "how to work here" file (AGENTS.md / CLAUDE.md / …)
+    // and fold it into the system prompt so repo conventions are respected
+    // without the user pasting them every time. Set false to disable.
+    instructionFiles: true,
 
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
@@ -397,6 +411,8 @@ export function normalizeConfig(input = {}) {
   cfg.verifyCmd = typeof cfg.verifyCmd === 'string' ? cfg.verifyCmd.trim().slice(0, 300) : '';
   cfg.verifyTimeoutMs = Math.round(clampNum(cfg.verifyTimeoutMs, 5000, 900000, 120000));
   cfg.maxVerifyFixes = Math.round(clampNum(cfg.maxVerifyFixes, 0, 5, 2));
+  cfg.reflectionGuard = ['off', 'warn', 'block'].includes(cfg.reflectionGuard) ? cfg.reflectionGuard : 'warn';
+  cfg.instructionFiles = cfg.instructionFiles !== false;
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));

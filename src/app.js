@@ -1444,6 +1444,15 @@ async function runTurn(conv, opts = {}) {
         // The server hit the interactive cost cap and forced a stop. Toast it so
         // the user knows why the run ended early, not just that it did.
         toast('🛡️ 预算护栏触发：已达 $' + (Number(data.max) || 0).toFixed(2) + ' 上限，已强制停止并让模型总结', 4500);
+      } else if (event === 'guard') {
+        // v0.57 pre-flight Experience Guard: a world-mutating tool was recalled
+        // against the agent's own Experience Manual. block = refused outright;
+        // warn = a reminding nudge shown BEFORE it mutates the world.
+        if (data && data.level === 'block') {
+          toast('🛑 经验护栏拦截：' + (data.reason || '该操作曾导致问题'), 5200);
+        } else if (data && data.level === 'warn' && Array.isArray(data.reasons) && data.reasons.length) {
+          toast('⚠️ 经验护栏：' + data.reasons[0], 4200);
+        }
       } else if (event === 'diagnosis') {
         // Graded self-check for this run. Persist on the message so it survives
         // re-renders, and render it inline as a report card.

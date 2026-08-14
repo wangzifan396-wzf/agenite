@@ -18,6 +18,10 @@ import {
   classifyRun, mergeLessons, selectForPrompt, lessonToPromptText,
   serializeLessons, deserializeLessons, enrichLesson, detectLoopFromTrace
 } from './src/core/reflect.js';
+import {
+  HookBus, runToolPipeline, createPluginRegistry, reflectionGuardPlugin,
+  detectInstructionFiles, formatInstructionBlock
+} from './src/core/hooks.js';
 import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
 import { BROWSER } from './src/core/browser.js';
 import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
@@ -1516,6 +1520,19 @@ async function handleChat(req, res) {
   }
   if (experienceBlock) systemContent += '\n\n' + experienceBlock;
 
+  // ── Project instruction files (v0.57): AGENTS.md / CLAUDE.md compatible ──
+  // Like Claude Code / DeepSeek Harness, read the repo's "how to work here" file
+  // and fold it into the system prompt so repo conventions are respected without
+  // the user pasting them every turn. Skipped entirely when disabled or absent.
+  let instructionBlock = '';
+  if (config.instructionFiles !== false) {
+    try {
+      const instFiles = detectInstructionFiles(WORKSPACE);
+      if (instFiles.length) instructionBlock = formatInstructionBlock(instFiles);
+    } catch { /* never break the chat */ }
+  }
+  if (instructionBlock) systemContent += '\n\n' + instructionBlock;
+
   const messages = hasSystem ? incoming : [{ role: 'system', content: systemContent }, ...incoming];
 
   const callModel = buildCallModel(config, tools, ac.signal);
@@ -1717,11 +1734,40 @@ async function handleChat(req, res) {
     return executeTool(name, args, o);
   };
 
+  // ── Composable runtime (v0.57): HookBus + tool pipeline with pre/post stages,
+  // borrowed in spirit from DeepSeek Harness's "everything is a plugin". The only
+  // plugin shipped now is the pre-flight Experience Guard, which turns the v0.56
+  // Experience Manual into an ACTIVE safety gate. Additive: agent.js / tools.js
+  // hot paths are untouched, so there is zero regression risk. Every tool call —
+  // including sub-agent / fan-out children (they receive this same executor) —
+  // now passes through the pre-flight guard before mutating the world.
+  const hooks = new HookBus();
+  const pluginRegistry = createPluginRegistry();
+  pluginRegistry.register(reflectionGuardPlugin({
+    getLessons: loadLessonsState,
+    isDestructive: isDestructiveTool,
+    mode: config.reflectionGuard
+  }));
+  pluginRegistry.applyAll(hooks);
+
+  // Wrap the real executor with the pipeline. Same signature as executeTool, so
+  // the agent loop and sub-agents call it transparently.
+  const executeToolGuarded = (name, args, o) =>
+    runToolPipeline({
+      name,
+      args,
+      opts: o || {},
+      execute: executeToolWithMcp,
+      hooks,
+      onEvent,
+      ctx: { workspace: WORKSPACE, config }
+    });
+
   // Sub-agent runner: the `delegate` tool calls this. It spins a child agent
   // loop in an isolated context and streams its steps back as `subagent` SSE.
   const runSubAgent = createSubAgentRunner({
     callModel,
-    executeTool: executeToolWithMcp,
+    executeTool: executeToolGuarded,
     baseConfig: config,
     tools,
     memoryBase: MEMORY_DIR,
@@ -1746,7 +1792,7 @@ async function handleChat(req, res) {
     const result = await runAgent({
       messages,
       callModel,
-      executeTool: executeToolWithMcp,
+      executeTool: executeToolGuarded,
       onEvent,
       config,
       tools,
