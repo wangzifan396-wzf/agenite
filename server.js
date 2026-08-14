@@ -6,6 +6,7 @@
 // workspace sandbox and a human approval step. Zero dependencies.
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { extname, join, normalize, sep, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -13,6 +14,10 @@ import { spawn } from 'node:child_process';
 import { normalizeConfig, validateConfig, PROVIDER_PRESETS, APPROVAL_MODES } from './src/core/config.js';
 import { runAgent } from './src/core/agent.js';
 import { callModelStream, verifyKey } from './src/core/client.js';
+import {
+  classifyRun, mergeLessons, selectForPrompt, lessonToPromptText,
+  serializeLessons, deserializeLessons, enrichLesson, detectLoopFromTrace
+} from './src/core/reflect.js';
 import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore } from './src/core/tools.js';
 import { BROWSER } from './src/core/browser.js';
 import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
@@ -53,6 +58,40 @@ const WORKSPACE = resolve(process.env.AGENITE_WORKSPACE || process.cwd());
 const MEMORY_DIR = process.env.AGENITE_MEMORY_DIR
   ? resolve(process.env.AGENITE_MEMORY_DIR)
   : defaultMemoryDir();
+
+// Experience Manual (v0.56): distilled lessons persist as a small JSON file
+// next to the agent's long-term memory. Helpers are sync + best-effort so a
+// disk hiccup can never break a chat.
+const LESSONS_PATH = join(MEMORY_DIR, 'lessons.json');
+
+// Tools that actually mutate the world (files / commands). Used to flag runs
+// that changed things without later verifying. Mirrors agent.js MUTATION_TOOLS.
+const DESTRUCTIVE_TOOLS = new Set([
+  'write_file', 'edit_file', 'create_file', 'delete_file', 'rename_file', 'move_file',
+  'apply_patch', 'run_command', 'git_commit', 'git_reset', 'shell', 'exec',
+  'write', 'edit', 'delete', 'browser_navigate', 'write_document'
+]);
+function isDestructiveTool(name) {
+  return DESTRUCTIVE_TOOLS.has(name) || (typeof name === 'string' && name.startsWith('git_'));
+}
+
+function loadLessonsState() {
+  try {
+    const raw = readFileSync(LESSONS_PATH, 'utf8');
+    return deserializeLessons(JSON.parse(raw));
+  } catch {
+    return deserializeLessons(null);
+  }
+}
+function saveLessonsState(state) {
+  try {
+    mkdirSync(dirname(LESSONS_PATH), { recursive: true });
+    writeFileSync(LESSONS_PATH, JSON.stringify(serializeLessons(state), null, 2), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Local knowledge base (RAG), stored next to the agent's long-term memory.
 // Opened lazily so importing server.js in tests doesn't create a file.
@@ -293,6 +332,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/regression-hunt') return handleHuntDefaults(req, res);
   if (req.method === 'POST' && url === '/api/regression-hunt') return handleHuntStart(req, res);
   if (req.method === 'GET' && url.startsWith('/api/regression-hunt/')) return handleHuntPoll(req, res, req.url);
+  if (req.method === 'GET' && url === '/api/lessons') return handleLessonsGet(res);
+  if (req.method === 'POST' && url === '/api/lessons') return handleLessonsPost(req, res);
 
   // ---- Agenite Browser: built-in live web browsing (local Chrome) ----
   if (req.method === 'GET' && url === '/api/browser') return handleBrowserGet(req, res);
@@ -1460,6 +1501,21 @@ async function handleChat(req, res) {
       '\n\n## 本次对话的专属指令\n以下是用户针对【当前这次对话】单独设定的要求，优先级高于上面的通用设定，请在本对话中始终遵守：\n' +
       convInstructions;
   }
+  // ── Experience Manual (v0.56): inject distilled lessons from past runs ──
+  // The agent "remembers" what worked / what bit it, so it starts wiser. Pure
+  // read of the local lessons file; skipped entirely when injection is off.
+  let experienceBlock = '';
+  if (config.experienceInjection !== false) {
+    try {
+      const state = loadLessonsState();
+      if (state.meta.injectionEnabled !== false) {
+        const picks = selectForPrompt(state.lessons, { limit: 6, maxTokens: 900 });
+        if (picks.length) experienceBlock = lessonToPromptText(picks);
+      }
+    } catch { /* never break the chat */ }
+  }
+  if (experienceBlock) systemContent += '\n\n' + experienceBlock;
+
   const messages = hasSystem ? incoming : [{ role: 'system', content: systemContent }, ...incoming];
 
   const callModel = buildCallModel(config, tools, ac.signal);
@@ -1510,12 +1566,21 @@ async function handleChat(req, res) {
   // plan. Model self-assessment is deliberately NOT part of it.
   const gate = { verifyOk: null, verifyLabel: '', gitCommit: null, todoDone: 0, aborted: false };
 
+  // ── Experience Manual signals (v0.56) ──
+  // Accumulated during the run and fed to classifyRun on completion: how many
+  // tool calls failed, and whether any world-mutating tool ran.
+  const runSignals = { errorTools: 0, destructiveUsed: false };
+
   const onEvent = (type, payload) => {
     // forward to the client unchanged
     if (type === 'delta') sse('delta', { content: payload });
     else if (type === 'reasoning') sse('reasoning', { content: payload });
     else if (type === 'tool_start') sse('tool_start', payload);
-    else if (type === 'tool') sse('tool', payload);
+    else if (type === 'tool') {
+      sse('tool', payload);
+      if (payload && payload.ok === false) runSignals.errorTools++;
+      if (payload && isDestructiveTool(payload.name)) runSignals.destructiveUsed = true;
+    }
     else if (type === 'compact') sse('compact', payload);
     else if (type === 'shrink') sse('shrink', payload);
     else if (type === 'usage') sse('usage', payload);
@@ -1731,6 +1796,51 @@ async function handleChat(req, res) {
       }
     }
 
+    // ── Metacognitive reflection (v0.56): distill this run into reusable
+    // experience and persist it for future runs. The classification itself is
+    // pure + cost-free; LLM enrichment only happens when the user opts in
+    // (state.meta.enrich). The result is broadcast as an `experience` SSE so
+    // the client can surface "learned N new lessons" without a refresh.
+    if (config.experienceInjection !== false) {
+      try {
+        const run = {
+          stopped: result.stopped,
+          turns: result.turns,
+          cost: (result.cost && typeof result.cost.amount === 'number') ? result.cost.amount : 0,
+          verifyOk: gate.verifyOk,
+          verifyLabel: gate.verifyLabel,
+          gitCommit: gate.gitCommit,
+          todoDone: gate.todoDone,
+          aborted: gate.aborted,
+          errorTools: runSignals.errorTools,
+          destructiveUsed: runSignals.destructiveUsed,
+          loopDetected: detectLoopFromTrace(trace),
+          taskHint: firstUser
+        };
+        const candidates = classifyRun(run);
+        if (candidates.length) {
+          const state = loadLessonsState();
+          let toSave = candidates;
+          if (state.meta.enrich) {
+            try {
+              let best = toSave[0];
+              for (const l of toSave) if (l.score > best.score) best = l;
+              const enriched = await enrichLesson(best, (msgs) => callModel(msgs, {}), { taskHint: run.taskHint });
+              toSave = toSave.map((l) => (l.id === best.id ? enriched : l));
+            } catch { /* keep the template lessons */ }
+          }
+          state.lessons = mergeLessons(state.lessons, toSave, { max: 80 });
+          state.meta.updatedAt = new Date().toISOString();
+          saveLessonsState(state);
+          sse('experience', {
+            added: candidates.length,
+            enabled: state.meta.injectionEnabled !== false,
+            lessons: candidates.slice(0, 3).map((l) => ({ id: l.id, type: l.type, text: l.text, context: l.context, score: l.score }))
+          });
+        }
+      } catch { /* never break the chat */ }
+    }
+
     // Run self-check on the completed trace and surface it as a graded report
     // (ok / warn / bad) — this is the "observability -> actionable" step: the
     // client shows the user WHAT to worry about, not just that the run happened.
@@ -1762,6 +1872,53 @@ async function handleChat(req, res) {
         .trim();
       if (recent) void buildAtlasFromText(recent, config).catch(() => {});
     }
+  }
+}
+
+// ── Experience Manual (v0.56) API ────────────────────────────────────────────
+// The client reads the manual + toggles injection/enrichment/clear from here.
+// All persistence goes through lessons.json next to the long-term memory.
+
+async function handleLessonsGet(res) {
+  try {
+    const state = loadLessonsState();
+    sendJson(res, 200, { ok: true, meta: state.meta, lessons: state.lessons, count: state.lessons.length });
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: e.message });
+  }
+}
+
+async function handleLessonsPost(req, res) {
+  let body;
+  try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return sendJson(res, 400, { ok: false, error: '请求体解析失败' }); }
+  try {
+    const state = loadLessonsState();
+    const action = body && body.action;
+    if (action === 'setInjection') {
+      state.meta.injectionEnabled = body.enabled !== false;
+    } else if (action === 'setEnrich') {
+      state.meta.enrich = !!body.enabled;
+    } else if (action === 'toggle') {
+      const l = state.lessons.find((x) => x.id === body.id);
+      if (!l) return sendJson(res, 404, { ok: false, error: '未找到该经验' });
+      l.enabled = l.enabled === false;
+    } else if (action === 'delete') {
+      state.lessons = state.lessons.filter((x) => x.id !== body.id);
+    } else if (action === 'clear') {
+      state.lessons = [];
+    } else if (action === 'prune') {
+      state.lessons = state.lessons
+        .filter((l) => l.enabled !== false)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 20);
+    } else {
+      return sendJson(res, 400, { ok: false, error: '未知操作: ' + action });
+    }
+    state.meta.updatedAt = new Date().toJSON();
+    saveLessonsState(state);
+    sendJson(res, 200, { ok: true, meta: state.meta, lessons: state.lessons, count: state.lessons.length });
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: e.message });
   }
 }
 

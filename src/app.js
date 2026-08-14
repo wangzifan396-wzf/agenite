@@ -8,6 +8,7 @@ import { errorHint, errorSeverity } from './core/errors.js';
 import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
 import { buildPreset, validatePreset, applyPresetToConfig, presetSummary, BUILTIN_PRESETS } from './core/presets.js';
 import { traceHealth, rankTraces, configSignature, diffConfigs, computeDrift, bestModelFromTraces, distillBestPreset } from './core/evolve.js';
+import { LESSON_TYPES } from './core/reflect.js';
 
 const $ = (id) => document.getElementById(id);
 const LS = {
@@ -1448,6 +1449,14 @@ async function runTurn(conv, opts = {}) {
         // re-renders, and render it inline as a report card.
         aMsg.selfCheck = data;
         renderSelfCheck(el, data);
+      } else if (event === 'experience') {
+        // v0.56: this run just distilled N new experiences. Toast a hint and
+        // mark the manual dirty so it refreshes on next open.
+        const n = data && data.added ? data.added : 0;
+        if (n > 0) {
+          toast(`📖 本次运行提炼了 ${n} 条新经验，已写入经验手册`, 3200);
+          lessonsDirty = true;
+        }
       } else if (event === 'done' || event === 'end') {
         el.classList.remove('is-thinking');
         paintFallback(md, aMsg.content, '<span class="muted small">（没有文本输出）</span>');
@@ -4857,6 +4866,92 @@ function snapshotNow() {
   toast('已记录当前配置快照');
 }
 
+// ── Experience Manual (v0.56) ────────────────────────────────────────────────
+// Mirror of the self-evolution panel, but for *behavior* lessons: the agent
+// distills reusable experience from each run and injects it into future runs.
+let lessonsDirty = false;
+
+function openLessons() {
+  const m = $('lessons-modal'); if (m) m.classList.remove('hidden');
+  loadLessons();
+}
+function closeLessons() {
+  const m = $('lessons-modal'); if (m) m.classList.add('hidden');
+}
+
+async function loadLessons() {
+  const list = $('lessons-list');
+  const meta = $('lessons-meta');
+  if (list) list.innerHTML = '<div class="muted small">加载中…</div>';
+  lessonsDirty = false;
+  let state = { meta: { injectionEnabled: true, enrich: false }, lessons: [] };
+  try {
+    const r = await fetch('/api/lessons').then((x) => x.json());
+    if (r && r.ok) state = { meta: r.meta || state.meta, lessons: Array.isArray(r.lessons) ? r.lessons : [] };
+  } catch {
+    if (meta) meta.textContent = '（无法连接本地服务，经验手册需要服务端运行）';
+  }
+  renderLessons(state);
+}
+
+function renderLessons(state) {
+  const list = $('lessons-list');
+  const meta = $('lessons-meta');
+  const count = $('lessons-count');
+  if (!list) return;
+  const lessons = state.lessons || [];
+  const metaInfo = state.meta || {};
+  if (meta) {
+    const inj = metaInfo.injectionEnabled !== false ? '注入中' : '已暂停注入';
+    const enr = metaInfo.enrich ? '· 模型细化开' : '· 模板经验';
+    const upd = metaInfo.updatedAt ? ' · 更新于 ' + new Date(metaInfo.updatedAt).toLocaleString() : '';
+    meta.textContent = `共 ${lessons.length} 条经验 · ${inj}${enr}${upd}`;
+  }
+  if (count) count.textContent = '（' + lessons.length + '）';
+  const injChk = $('lessons-inject'); if (injChk) injChk.checked = metaInfo.injectionEnabled !== false;
+  const enrChk = $('lessons-enrich'); if (enrChk) enrChk.checked = !!metaInfo.enrich;
+
+  if (!lessons.length) {
+    list.innerHTML = '<div class="muted small">还没有经验。跑几个任务后，Agenite 会根据每次运行的结果（验证是否通过、是否卡死循环、变更后是否缺验证等）自动提炼经验，注入后续对话。</div>';
+    return;
+  }
+  list.innerHTML = lessons.map((l) => {
+    const typeLabel = LESSON_TYPES[l.type] || '经验';
+    const cls = (l.type || 'general').replace(/[^a-zA-Z]/g, '');
+    const score = typeof l.score === 'number' ? l.score.toFixed(2) : '—';
+    const ctx = l.context ? `<span class="lesson-ctx">${escapeHtml(l.context)}</span>` : '';
+    return `<div class="lesson-item${l.enabled === false ? ' disabled' : ''}" data-id="${escapeHtml(l.id)}">
+      <label class="lesson-toggle"><input type="checkbox" class="lesson-enable" data-id="${escapeHtml(l.id)}" ${l.enabled !== false ? 'checked' : ''}/></label>
+      <div class="lesson-main">
+        <div class="lesson-head">
+          <span class="lesson-chip lesson-${cls}">${escapeHtml(typeLabel)}</span>
+          <span class="lesson-score">权重 ${score}</span>
+          ${ctx}
+        </div>
+        <div class="lesson-text">${escapeHtml(l.text || '')}</div>
+      </div>
+      <button class="mini-btn danger-text lesson-del" data-id="${escapeHtml(l.id)}">删除</button>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.lesson-enable').forEach((c) => {
+    c.onclick = (e) => { e.stopPropagation(); postLessons({ action: 'toggle', id: c.dataset.id }).then(loadLessons); };
+  });
+  list.querySelectorAll('.lesson-del').forEach((b) => {
+    b.onclick = () => postLessons({ action: 'delete', id: b.dataset.id }).then(loadLessons);
+  });
+}
+
+async function postLessons(body) {
+  try {
+    await fetch('/api/lessons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch { /* server down — ignore, UI stays consistent on next open */ }
+}
+
 function rollbackSnapshot(id) {
   const snap = loadEvolution().find((s) => s.id === id);
   if (!snap) return;
@@ -5083,6 +5178,12 @@ function wire() {
   $('open-evolve').onclick = openEvolve;
   $('close-evolve').onclick = closeEvolve;
   $('evolve-snapshot').onclick = snapshotNow;
+  $('open-lessons').onclick = openLessons;
+  $('close-lessons').onclick = closeLessons;
+  const li = $('lessons-inject'); if (li) li.onchange = (e) => postLessons({ action: 'setInjection', enabled: e.target.checked }).then(loadLessons);
+  const le = $('lessons-enrich'); if (le) le.onchange = (e) => postLessons({ action: 'setEnrich', enabled: e.target.checked }).then(loadLessons);
+  const lclr = $('lessons-clear'); if (lclr) lclr.onclick = () => { if (confirm('确定清空全部经验？此操作不可撤销。')) postLessons({ action: 'clear' }).then(loadLessons); };
+  const lrf = $('lessons-refresh'); if (lrf) lrf.onclick = loadLessons;
   $('preset-save').onclick = saveCurrentAsPreset;
   $('preset-file').onchange = (e) => {
     const f = e.target.files && e.target.files[0];
@@ -5350,6 +5451,7 @@ function wire() {
   $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
   $('presets-modal').addEventListener('mousedown', (e) => { if (e.target === $('presets-modal')) closePresets(); });
   $('evolve-modal').addEventListener('mousedown', (e) => { if (e.target === $('evolve-modal')) closeEvolve(); });
+  $('lessons-modal').addEventListener('mousedown', (e) => { if (e.target === $('lessons-modal')) closeLessons(); });
 
   // ---------- voice: 语音输入（听写）+ 朗读 ----------
   // 纯浏览器能力（Web Speech API），零依赖；不支持的浏览器自动降级隐藏。
@@ -5535,6 +5637,7 @@ function wire() {
       else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
       else if (!$('presets-modal').classList.contains('hidden')) closePresets();
       else if (!$('evolve-modal').classList.contains('hidden')) closeEvolve();
+      else if (!$('lessons-modal').classList.contains('hidden')) closeLessons();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }

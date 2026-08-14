@@ -86,6 +86,7 @@
         <button id="open-skills" class="side-link">🧩 技能</button>
         <button id="open-presets" class="side-link">🎚️ 预设</button>
         <button id="open-evolve" class="side-link">🧬 自进化</button>
+        <button id="open-lessons" class="side-link">📖 经验手册</button>
         <button id="open-usage" class="side-link">📊 用量审计</button>
       </div>
     </aside>
@@ -437,6 +438,37 @@
         </div>
         <div id="evolve-diff" class="evolve-diff"></div>
         <div id="evolve-snapshots" class="evolve-snapshots"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 经验手册 · Metacognitive Reflection：把每次运行的反思提炼成可复用经验，注入后续对话 -->
+  <div id="lessons-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card lessons-card">
+      <div class="drawer-head">
+        <h2>📖 经验手册 · Reflection</h2>
+        <button id="close-lessons" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body lessons-body">
+        <p class="muted small">Agenite 会从每次运行<b>提炼可复用的经验</b>（原则 / 流程 / 警示），注入后续对话的系统提示——真正「越用越会干活」。经验来自你自己的运行信号（验证是否通过、是否卡死循环、变更后是否缺验证等），<b>不上云、不猜</b>。</p>
+        <div class="lessons-toolbar">
+          <label class="switch-row inline-switch">
+            <span><b>注入下一轮对话</b></span>
+            <input id="lessons-inject" type="checkbox" checked />
+          </label>
+          <label class="switch-row inline-switch">
+            <span><b>用模型细化经验</b><em>额外一次反思调用，把模板经验改写成具体可执行的条目（更准但更费）</em></span>
+            <input id="lessons-enrich" type="checkbox" />
+          </label>
+          <div class="grow"></div>
+          <button id="lessons-refresh" class="mini-btn" title="重新读取本机经验">刷新</button>
+          <button id="lessons-clear" class="mini-btn danger-text" title="清空全部经验">清空</button>
+        </div>
+        <div id="lessons-meta" class="muted small lessons-meta"></div>
+        <div class="field-title">经验条目 <span id="lessons-count" class="muted small"></span></div>
+        <div id="lessons-list" class="lessons-list">
+          <div class="muted small">加载中…</div>
+        </div>
       </div>
     </div>
   </div>
