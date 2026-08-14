@@ -7,11 +7,13 @@ import { defaultConfig, PROVIDER_PRESETS, APPROVAL_MODES, VERIFY_LEVELS, COMPRES
 import { errorHint, errorSeverity } from './core/errors.js';
 import { listSnippets, addSnippet, removeSnippet, insertSnippetInto } from './core/snippets.js';
 import { buildPreset, validatePreset, applyPresetToConfig, presetSummary, BUILTIN_PRESETS } from './core/presets.js';
+import { traceHealth, rankTraces, configSignature, diffConfigs, computeDrift, bestModelFromTraces, distillBestPreset } from './core/evolve.js';
 
 const $ = (id) => document.getElementById(id);
 const LS = {
   config: 'agenite:config',
   presets: 'agenite:presets',
+  evolution: 'agenite:evolution',
   convs: 'agenite:conversations',
   cur: 'agenite:current',
   theme: 'agenite:theme',
@@ -4584,11 +4586,18 @@ function applyPreset(preset) {
     config = applyPresetToConfig(preset, config);
     saveConfig();
     resyncConfigUI();
+    pushEvolutionSnapshot('preset:' + (preset.name || '未命名'));
     toast('已应用预设：' + (preset.name || '未命名'));
-    closePresets();
+    closeConfigModals();
   } catch (e) {
     toast('预设无效：' + (e.message || e));
   }
+}
+
+// Close both configuration panels (presets + self-evolution) after an apply.
+function closeConfigModals() {
+  const a = $('presets-modal'); if (a) a.classList.add('hidden');
+  const b = $('evolve-modal'); if (b) b.classList.add('hidden');
 }
 
 function saveCurrentAsPreset() {
@@ -4713,6 +4722,153 @@ function renderPresets() {
   built.querySelectorAll('.preset-export').forEach((b) => {
     b.onclick = () => { const p = BUILTIN_PRESETS.find((x) => x.name === b.dataset.name); if (p) exportPreset(p); };
   });
+}
+
+// ── Self-Evolution panel (v0.54): turn past runs into a compounding loop ──
+
+let evolveTraces = [];
+
+function loadEvolution() {
+  try { return JSON.parse(localStorage.getItem(LS.evolution) || '[]'); } catch { return []; }
+}
+function saveEvolution(list) {
+  localStorage.setItem(LS.evolution, JSON.stringify(list.slice(0, 20)));
+}
+// Snapshot the *current* config as a preset so it can be rolled back to later.
+// Triggered automatically when a preset is applied, and manually on demand.
+function pushEvolutionSnapshot(source) {
+  const list = loadEvolution();
+  list.unshift({
+    id: 'evo_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    createdAt: Date.now(),
+    source: source || 'manual',
+    preset: buildPreset(config, { name: '配置快照', description: '自动记录于 ' + new Date().toLocaleString() })
+  });
+  saveEvolution(list);
+}
+
+function openEvolve() {
+  const m = $('evolve-modal'); if (m) m.classList.remove('hidden');
+  loadEvolveData();
+}
+function closeEvolve() {
+  const m = $('evolve-modal'); if (m) m.classList.add('hidden');
+}
+
+async function loadEvolveData() {
+  renderEvolveSnapshots(); // local, instant
+  let traces = [];
+  try {
+    const r = await fetch('/api/traces').then((x) => x.json());
+    traces = (r && Array.isArray(r.traces)) ? r.traces : [];
+  } catch {
+    traces = []; // server not running (e.g. pure file:// mode) — degrade gracefully
+  }
+  evolveTraces = traces;
+  renderEvolveHealth(traces);
+  renderEvolveBest(traces);
+}
+
+function renderEvolveHealth(traces) {
+  const el = $('evolve-health');
+  if (!el) return;
+  if (!traces.length) {
+    el.innerHTML = '<div class="muted small">还没有运行记录。先跑几个任务，Agenite 会给每次运行打分，并帮你找出最稳和最糟的那几次。</div>';
+    return;
+  }
+  const ranked = rankTraces(traces);
+  const best = ranked.slice(0, 3);
+  const worst = ranked.slice().reverse().slice(0, 3);
+  const row = (h) => `<div class="evolve-row ${h.severity}">
+    <span class="evolve-title">${escapeHtml(h.title || h.runId || '')}</span>
+    <span class="evolve-metric">模型 ${escapeHtml(h.model || '-')}</span>
+    <span class="evolve-metric">健康 ${Math.round(h.score * 100)}</span>
+    <span class="evolve-metric">错误 ${h.errors}</span>
+    <span class="evolve-metric">成本 $${Number(h.cost || 0).toFixed(4)}</span>
+  </div>`;
+  el.innerHTML =
+    '<div class="evolve-sub">最稳的 ' + best.length + ' 次运行</div>' + best.map(row).join('') +
+    '<div class="evolve-sub">最糟的 ' + worst.length + ' 次运行</div>' + worst.map(row).join('');
+}
+
+function renderEvolveBest(traces) {
+  const el = $('evolve-best');
+  if (!el) return;
+  const best = bestModelFromTraces(traces);
+  if (!best) {
+    el.innerHTML = '<div class="muted small">运行记录不足，无法蒸馏最佳模型。多用几个模型跑任务后，这里会给出表现最好的那一个。</div>';
+    return;
+  }
+  el.innerHTML = `<div class="evolve-best-card">
+    <div class="evolve-best-name">${escapeHtml(best.model)} <span class="muted small">(${escapeHtml(best.provider)})</span></div>
+    <div class="evolve-best-meta">平均健康分 ${Math.round(best.avgHealth * 100)} · 平均成本 $${Number(best.avgCost || 0).toFixed(4)} · 样本 ${best.samples} 次</div>
+    <button class="btn-primary" id="evolve-adopt">采纳为当前配置</button>
+  </div>`;
+  const adopt = $('evolve-adopt');
+  if (adopt) adopt.onclick = adoptBestModel;
+}
+
+function adoptBestModel() {
+  if (!evolveTraces || !evolveTraces.length) { toast('还没有运行记录'); return; }
+  const best = bestModelFromTraces(evolveTraces);
+  const p = distillBestPreset(evolveTraces, config, { name: '经验最佳配置 · ' + (best ? best.model : 'auto') });
+  if (!p) { toast('蒸馏失败'); return; }
+  applyPreset(p); // applyPreset closes both panels + records the snapshot
+}
+
+function renderEvolveSnapshots() {
+  const el = $('evolve-snapshots');
+  if (!el) return;
+  const list = loadEvolution();
+  const diffEl = $('evolve-diff');
+  if (diffEl) {
+    if (list.length) {
+      const last = list[0];
+      const d = diffConfigs(last.preset.config, config);
+      const changed = d.filter((x) => x.changed);
+      diffEl.innerHTML = changed.length
+        ? '<div class="evolve-sub">当前配置 vs 最近快照（' + escapeHtml(last.source || '') + '）的变化</div>' +
+          changed.map((x) => `<div class="diff-changed">${escapeHtml(x.label)}：${escapeHtml(String(x.before))} → ${escapeHtml(String(x.after))}</div>`).join('')
+        : '<div class="muted small">当前配置与最近快照一致，没有漂移。</div>';
+    } else {
+      diffEl.innerHTML = '<div class="muted small">还没有配置快照。</div>';
+    }
+  }
+  if (!list.length) {
+    el.innerHTML = '<div class="muted small">还没有配置快照。点「记录当前配置快照」即可存一份，应用预设时也会自动记录——之后随时可一键回滚。</div>';
+    return;
+  }
+  el.innerHTML = list.map((s) => `<div class="snapshot-card">
+    <div class="snapshot-main">
+      <div class="snapshot-src">${escapeHtml(s.source || '手动')}</div>
+      <div class="snapshot-time">${new Date(s.createdAt).toLocaleString()}</div>
+      <div class="snapshot-sum">${escapeHtml(presetSummary(s.preset))}</div>
+    </div>
+    <div class="snapshot-actions">
+      <button class="btn-ghost snapshot-rollback" data-id="${s.id}">回滚</button>
+    </div>
+  </div>`).join('');
+  el.querySelectorAll('.snapshot-rollback').forEach((b) => { b.onclick = () => rollbackSnapshot(b.dataset.id); });
+}
+
+function snapshotNow() {
+  pushEvolutionSnapshot('manual');
+  renderEvolveSnapshots();
+  toast('已记录当前配置快照');
+}
+
+function rollbackSnapshot(id) {
+  const snap = loadEvolution().find((s) => s.id === id);
+  if (!snap) return;
+  try {
+    config = applyPresetToConfig(snap.preset, config);
+    saveConfig();
+    resyncConfigUI();
+    toast('已回滚到快照：' + (snap.source || '手动'));
+  } catch (e) {
+    toast('回滚失败：' + (e.message || e));
+  }
+  renderEvolveSnapshots();
 }
 // and still keep losing. Nothing is deleted — the .md stays on disk.
 async function pruneCustomSkills() {
@@ -4924,6 +5080,9 @@ function wire() {
   if ($('skills-prune')) $('skills-prune').onclick = pruneCustomSkills;
   $('open-presets').onclick = openPresets;
   $('close-presets').onclick = closePresets;
+  $('open-evolve').onclick = openEvolve;
+  $('close-evolve').onclick = closeEvolve;
+  $('evolve-snapshot').onclick = snapshotNow;
   $('preset-save').onclick = saveCurrentAsPreset;
   $('preset-file').onchange = (e) => {
     const f = e.target.files && e.target.files[0];
@@ -5190,6 +5349,7 @@ function wire() {
   $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
   $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
   $('presets-modal').addEventListener('mousedown', (e) => { if (e.target === $('presets-modal')) closePresets(); });
+  $('evolve-modal').addEventListener('mousedown', (e) => { if (e.target === $('evolve-modal')) closeEvolve(); });
 
   // ---------- voice: 语音输入（听写）+ 朗读 ----------
   // 纯浏览器能力（Web Speech API），零依赖；不支持的浏览器自动降级隐藏。
@@ -5374,6 +5534,7 @@ function wire() {
       else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
       else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
       else if (!$('presets-modal').classList.contains('hidden')) closePresets();
+      else if (!$('evolve-modal').classList.contains('hidden')) closeEvolve();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }

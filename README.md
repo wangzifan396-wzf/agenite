@@ -91,7 +91,7 @@ _Honest note: Agenite is younger — its plugin/theme ecosystem and mobile story
 
 ## Capability matrix
 
-Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search · trace-driven Eval / regression suite · shareable config presets.
+Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search · trace-driven Eval / regression suite · shareable config presets · self-evolution loop (distills best config from real traces + config-drift sentinel).
 
 ---
 
@@ -104,6 +104,8 @@ Browser automation · file & command execution · code interpreter · web search
 ---
 
 ## ✨ Features
+
+- **Self-Evolution: experience compounding (v0.54.0)**: Agenite already records every run (trace), measures each run (eval), and lets you share a tuned setup (presets) — but those three instruments were not yet *closed into a loop*. The new sidebar **🧬 自进化** panel shows a **health leaderboard** of your real runs (graded by errors, cost, turns, and silent loops), **distills the best config** from those traces (picks the highest-health provider/model and freezes it as a one-click preset — never exporting your API key or workspace), and runs a **drift sentinel** that flags when your current config scores worse than a past run's, with a one-click **rollback to any experience snapshot**. This is the rigor the 2026 "agent that grows with you" wave (Hermes, OpenJarvis) promises — grounded in hard verify + eval signals instead of a heuristic — so the agent gets more accurate the more you use it, never silently.
 
 - **Shareable Agent Config Presets (v0.53.0)**: the missing distribution channel for "here's how I set up my agent". The sidebar **🎚️ 预设** panel lets you **freeze the current agent config** — model, tools, skills, memory, system prompt, run mode, and safety gates — into a portable preset you can **export as JSON, import from a friend, or clone from 3 built-in examples** (通用助手 / 代码工程师 / 只读研究助手). The hard rule: a preset **never exports your API key or your workspace directory** — applying someone else's preset can never steal your secret or relocate your sandbox; your key and path are always preserved locally. This is the adoption lever: share a tuned agent the way you'd share a `.gitignore`, and the community starts compounding configurations instead of rediscovering them.
 
@@ -261,7 +263,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (315, via node:test)
+npm test       # run core unit tests (505, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

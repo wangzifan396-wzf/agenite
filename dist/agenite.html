@@ -1634,6 +1634,46 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .preset-msg { font-size: 12.5px; padding: 8px 11px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--panel-2); color: var(--text-2); }
 .preset-msg.is-err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
 
+/* ---------- Self-Evolution (v0.54) ---------- */
+.evolve-card { width: min(720px, 96vw); height: min(820px, 94vh); }
+.evolve-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 18px; }
+.evolve-sub { font-size: 12px; color: var(--text-2); margin: 8px 0 4px; }
+.evolve-health { display: flex; flex-direction: column; gap: 5px; }
+.evolve-row {
+  display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 10px; align-items: center;
+  padding: 7px 10px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--panel-2);
+  border-left-width: 3px;
+}
+.evolve-row.ok { border-left-color: color-mix(in srgb, var(--ok) 70%, var(--border)); }
+.evolve-row.warn { border-left-color: color-mix(in srgb, var(--warn) 70%, var(--border)); }
+.evolve-row.bad { border-left-color: color-mix(in srgb, var(--danger) 70%, var(--border)); }
+.evolve-title { font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evolve-metric { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.evolve-best { display: flex; }
+.evolve-best-card {
+  flex: 1; display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+.evolve-best-name { font-size: 16px; font-weight: 660; }
+.evolve-best-meta { font-size: 12.5px; color: var(--text-2); }
+.evolve-snap-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.evolve-diff { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px; }
+.diff-changed {
+  font-size: 12.5px; padding: 5px 9px; border-radius: var(--r-sm); border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--border));
+  background: color-mix(in srgb, var(--warn) 6%, var(--panel)); color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+.evolve-snapshots { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.snapshot-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2);
+}
+.snapshot-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.snapshot-src { font-weight: 560; font-size: 13.5px; }
+.snapshot-time { font-size: 11.5px; color: var(--muted); }
+.snapshot-sum { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snapshot-actions { flex: 0 0 auto; }
+
 /* ---------- Usage & Governance center ---------- */
 .usage-card { width: min(980px, 96vw); height: min(840px, 94vh); }
 .usage-body {
@@ -2447,6 +2487,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <button id="open-agents" class="side-link">🤖 智能体</button>
         <button id="open-skills" class="side-link">🧩 技能</button>
         <button id="open-presets" class="side-link">🎚️ 预设</button>
+        <button id="open-evolve" class="side-link">🧬 自进化</button>
         <button id="open-usage" class="side-link">📊 用量审计</button>
       </div>
     </aside>
@@ -2772,6 +2813,32 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <div class="field-title">内置示例预设</div>
         <div id="preset-builtin" class="preset-list"></div>
         <div id="preset-import-msg" class="preset-msg hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自进化 · Experience Compounding：从真实运行蒸馏最佳配置 + 配置漂移哨兵 -->
+  <div id="evolve-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card evolve-card">
+      <div class="drawer-head">
+        <h2>自进化 · Experience Compounding</h2>
+        <button id="close-evolve" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body evolve-body">
+        <p class="muted small">让 Agent <b>越用越准</b>：Agenite 给每次运行打分，从真实记录里蒸馏出表现最好的模型配置，并记住每一次配置变化，随时一键回滚。所有信号都来自你自己的运行数据，不上云、不猜。</p>
+
+        <div class="field-title">轨迹健康洞察</div>
+        <div id="evolve-health" class="evolve-health"></div>
+
+        <div class="field-title">最佳模型蒸馏</div>
+        <div id="evolve-best" class="evolve-best"></div>
+
+        <div class="field-title">配置漂移 &amp; 经验快照</div>
+        <div class="evolve-snap-row">
+          <button id="evolve-snapshot" class="btn-primary">记录当前配置快照</button>
+        </div>
+        <div id="evolve-diff" class="evolve-diff"></div>
+        <div id="evolve-snapshots" class="evolve-snapshots"></div>
       </div>
     </div>
   </div>
@@ -4350,6 +4417,229 @@ const BUILTIN_PRESETS = [
   }
 ];
 
+/* evolve.js */
+// Experience Compounding — Agenite's self-evolution layer.
+//
+// Agenite already records every run as a trace and can replay runs as an eval
+// suite (v0.48 / v0.52). That gives us *instruments* but not a *loop*. This
+// module closes the loop: it turns the firehose of past runs into a small set
+// of actionable, rigorous signals — "your agent's best-known configuration",
+// "this change regressed 3 historical tasks", "here is the config that worked
+// last time, one click away" — so the agent literally compounds experience
+// instead of starting from zero every session.
+//
+// Why this is defensible vs. the 2026 field: Hermes Agent (60k stars) brands
+// itself "the agent that grows with you" but its self-improvement is a
+// 5-tool-call heuristic. Agenite grounds the same idea in hard signals it
+// already has: per-run health (errors / cost / turns / loops) and eval
+// pass-rate, so a "best config" is earned from evidence, not guessed.
+//
+// Pure module: no DOM, no fs, no node: imports. Safe to import from the
+// browser bundle (app.js) and from node:test. Depends only on presets.js
+// (which pulls in the pure config.js).
+
+// Behavioral config fields that meaningfully change *how the agent behaves*.
+// Used for the stable config signature and the human-readable diff. Secrets
+// and local paths are deliberately absent (they come from PRESET_FIELDS rules
+// upstream and are never diffed/exposed here).
+const EVOLVE_FIELDS = [
+  'provider', 'model', 'approvalMode', 'planMode', 'dangerTools',
+  'autoVerify', 'contextCompress', 'maxReflections', 'selfHeal',
+  'gitCheckpoint', 'kbEnabled', 'autoSkill', 'agentEnabled'
+];
+
+const FIELD_LABELS = {
+  provider: '模型厂商',
+  model: '模型',
+  approvalMode: '权限模式',
+  planMode: '计划模式',
+  dangerTools: '危险工具',
+  autoVerify: '自动验证',
+  contextCompress: '上下文压缩',
+  maxReflections: '最大反思轮',
+  selfHeal: '自愈',
+  gitCheckpoint: 'git 检查点',
+  kbEnabled: '知识库',
+  autoSkill: '自动技能',
+  agentEnabled: '智能体',
+  toolAllowlist: '工具白名单数',
+  skills: '技能数'
+};
+
+// ── Per-run health ──────────────────────────────────────────────────────────
+
+// Grade a single run into a 0..1 health score plus a coarse severity. Uses only
+// what a stored trace actually carries (stats / cost / turns / stopped) so it
+// works identically in the browser (from /api/traces) and in node:test.
+function traceHealth(trace, opts = {}) {
+  const t = trace || {};
+  const s = t.stats || {};
+  const errors = Number(s.errors) || 0;
+  const cost = Number(t.cost) || 0;
+  const turns = Number(t.turns) || 0;
+  const tools = Number(s.tools) || 0;
+  const loops = Number(t.loops) || (t.consecutiveLoop && t.consecutiveLoop.count) || 0;
+  const stopped = !!t.stopped;
+
+  let score = 1;
+  if (stopped) score -= 0.2;                       // ran but was halted mid-task
+  score -= Math.min(errors * 0.06, 0.35);          // each failed tool call hurts
+  score -= Math.min(loops * 0.08, 0.3);            // spinning in a loop is bad
+  score -= Math.min(cost * 0.05, 0.2);             // burning budget is bad
+  score -= Math.min(Math.max(turns - 1, 0) * 0.015, 0.2); // more turns = more risk
+  score = Math.max(0, Math.min(1, score));
+  score = Math.round(score * 1000) / 1000;
+
+  const severity = score >= 0.85 ? 'ok' : score >= 0.55 ? 'warn' : 'bad';
+  return {
+    runId: t.runId,
+    title: t.title,
+    model: t.model,
+    provider: t.provider,
+    createdAt: t.createdAt,
+    errors,
+    cost,
+    turns,
+    tools,
+    loops,
+    stopped,
+    score,
+    severity
+  };
+}
+
+// Rank traces by a metric. dir: 'score' (best first, default), 'cost',
+// 'errors', 'turns' (each worst-first). Returns traceHealth objects.
+function rankTraces(traces, dir = 'score') {
+  const list = (traces || []).map(traceHealth);
+  const cmp = {
+    score: (a, b) => b.score - a.score,
+    cost: (a, b) => b.cost - a.cost,
+    errors: (a, b) => b.errors - a.errors,
+    turns: (a, b) => b.turns - a.turns
+  }[dir] || ((a, b) => b.score - a.score);
+  return list.sort(cmp);
+}
+
+// ── Config fingerprint & diff ───────────────────────────────────────────────
+
+// Stable, comparable fingerprint of a config's *behavior*. Two configs that
+// behave identically produce the same signature even if their secrets or
+// workspace differ — so it's safe to compare "before vs after a change".
+function configSignature(config) {
+  const c = config || {};
+  const fmt = (v) => (Array.isArray(v) ? v.length : (v === undefined || v === null ? '' : v));
+  const parts = EVOLVE_FIELDS.map((k) => k + '=' + fmt(c[k]));
+  parts.push('toolAllowlist=' + (Array.isArray(c.toolAllowlist) ? c.toolAllowlist.length : 0));
+  parts.push('skills=' + (Array.isArray(c.skills) ? c.skills.length : 0));
+  return parts.join('|');
+}
+
+// Field-level diff between two configs. Only the behavioral fields are compared
+// (arrays reduced to their length). Returns one row per field with `changed`.
+function diffConfigs(before, after) {
+  const a = before || {};
+  const b = after || {};
+  const keys = [...EVOLVE_FIELDS, 'toolAllowlist', 'skills'];
+  return keys.map((k) => {
+    let av = a[k];
+    let bv = b[k];
+    if (Array.isArray(av)) av = av.length;
+    if (Array.isArray(bv)) bv = bv.length;
+    const changed = JSON.stringify(av) !== JSON.stringify(bv);
+    return { field: k, label: FIELD_LABELS[k] || k, before: av, after: bv, changed };
+  });
+}
+
+// ── Eval drift (generalizes diffBaseline into a reusable reporter) ───────────
+
+const r3 = (x) => Math.round((Number(x) || 0) * 1000) / 1000;
+
+// Compare two eval summaries (passRate / avgCost / avgTurns) and classify each
+// metric as better / worse / same. Higher passRate is better; lower cost and
+// lower turns are better. Thresholds mirror the v0.52 baseline gate so the
+// sentinel and the eval harness agree on what counts as a regression.
+function computeDrift(before = {}, after = {}) {
+  const items = [];
+  if ('passRate' in before || 'passRate' in after) {
+    const b = r3(before.passRate), a = r3(after.passRate);
+    const worse = a < b - 1e-4;
+    const better = a > b + 1e-4;
+    items.push({ metric: 'passRate', label: '通过率', before: b, after: a, delta: r3(a - b), direction: worse ? 'worse' : better ? 'better' : 'same' });
+  }
+  if ('avgCost' in before || 'avgCost' in after) {
+    const b = r3(before.avgCost), a = r3(after.avgCost);
+    const worse = a > b * 1.05 + 1e-9;
+    const better = a < b * 0.95 - 1e-9;
+    items.push({ metric: 'avgCost', label: '平均成本', before: b, after: a, delta: r3(a - b), direction: worse ? 'worse' : better ? 'better' : 'same' });
+  }
+  if ('avgTurns' in before || 'avgTurns' in after) {
+    const b = r3(before.avgTurns), a = r3(after.avgTurns);
+    const worse = a > b * 1.10 + 1e-9;
+    const better = a < b * 0.90 - 1e-9;
+    items.push({ metric: 'avgTurns', label: '平均轮次', before: b, after: a, delta: r3(a - b), direction: worse ? 'worse' : better ? 'better' : 'same' });
+  }
+  return {
+    improved: items.filter((i) => i.direction === 'better'),
+    regressed: items.filter((i) => i.direction === 'worse'),
+    unchanged: items.filter((i) => i.direction === 'same'),
+    items
+  };
+}
+
+// ── Best-config distillation ─────────────────────────────────────────────────
+
+// Group runs by (provider / model) and pick the combo with the highest average
+// health; ties break toward the cheaper one. This is the "your agent's best
+// self so far" — earned from real runs, not a guess.
+function bestModelFromTraces(traces) {
+  const list = (traces || []).map(traceHealth).filter((h) => h.model);
+  if (!list.length) return null;
+  const groups = new Map();
+  for (const h of list) {
+    const key = (h.provider || '?') + '/' + h.model;
+    if (!groups.has(key)) groups.set(key, { model: h.model, provider: h.provider, scores: [], costs: [] });
+    const g = groups.get(key);
+    g.scores.push(h.score);
+    g.costs.push(h.cost);
+  }
+  const mean = (arr) => arr.reduce((s, x) => s + x, 0) / arr.length;
+  let best = null;
+  for (const g of groups.values()) {
+    const avgHealth = Math.round(mean(g.scores) * 1000) / 1000;
+    const avgCost = Math.round(mean(g.costs) * 1000) / 1000;
+    const samples = g.scores.length;
+    if (
+      !best ||
+      avgHealth > best.avgHealth + 1e-9 ||
+      (Math.abs(avgHealth - best.avgHealth) <= 1e-9 && avgCost < best.avgCost - 1e-9)
+    ) {
+      best = { model: g.model, provider: g.provider, avgHealth, avgCost, samples };
+    }
+  }
+  return best;
+}
+
+// Distill the best-performing model into a shareable preset built on top of the
+// user's current config. Reuses buildPreset, which hard-excludes apiKey /
+// workspace — so the distilled preset can never carry a secret or relocate the
+// sandbox. Returns null when there are no runs to learn from.
+function distillBestPreset(traces, baseConfig, meta = {}) {
+  const best = bestModelFromTraces(traces);
+  if (!best) return null;
+  const cfg = { ...(baseConfig || {}), model: best.model, provider: best.provider };
+  return buildPreset(cfg, {
+    name: meta.name || ('经验最佳配置 · ' + best.model),
+    description:
+      meta.description ||
+      `从 ${best.samples} 次真实运行中蒸馏出表现最佳的模型配置（平均健康分 ${best.avgHealth}，平均成本 ${best.avgCost}）。`,
+    author: meta.author || 'Agenite 自进化'
+  });
+}
+
+// Re-export for callers that want the allowlist without importing presets.js.
+
+
 /* app.js */
 // Agenite browser controller: settings, streaming chat with tool visualization
 // and human-in-the-loop approvals, multi-conversation management, theme.
@@ -4360,10 +4650,12 @@ const BUILTIN_PRESETS = [
 
 
 
+
 const $ = (id) => document.getElementById(id);
 const LS = {
   config: 'agenite:config',
   presets: 'agenite:presets',
+  evolution: 'agenite:evolution',
   convs: 'agenite:conversations',
   cur: 'agenite:current',
   theme: 'agenite:theme',
@@ -8948,11 +9240,18 @@ function applyPreset(preset) {
     config = applyPresetToConfig(preset, config);
     saveConfig();
     resyncConfigUI();
+    pushEvolutionSnapshot('preset:' + (preset.name || '未命名'));
     toast('已应用预设：' + (preset.name || '未命名'));
-    closePresets();
+    closeConfigModals();
   } catch (e) {
     toast('预设无效：' + (e.message || e));
   }
+}
+
+// Close both configuration panels (presets + self-evolution) after an apply.
+function closeConfigModals() {
+  const a = $('presets-modal'); if (a) a.classList.add('hidden');
+  const b = $('evolve-modal'); if (b) b.classList.add('hidden');
 }
 
 function saveCurrentAsPreset() {
@@ -9077,6 +9376,153 @@ function renderPresets() {
   built.querySelectorAll('.preset-export').forEach((b) => {
     b.onclick = () => { const p = BUILTIN_PRESETS.find((x) => x.name === b.dataset.name); if (p) exportPreset(p); };
   });
+}
+
+// ── Self-Evolution panel (v0.54): turn past runs into a compounding loop ──
+
+let evolveTraces = [];
+
+function loadEvolution() {
+  try { return JSON.parse(localStorage.getItem(LS.evolution) || '[]'); } catch { return []; }
+}
+function saveEvolution(list) {
+  localStorage.setItem(LS.evolution, JSON.stringify(list.slice(0, 20)));
+}
+// Snapshot the *current* config as a preset so it can be rolled back to later.
+// Triggered automatically when a preset is applied, and manually on demand.
+function pushEvolutionSnapshot(source) {
+  const list = loadEvolution();
+  list.unshift({
+    id: 'evo_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    createdAt: Date.now(),
+    source: source || 'manual',
+    preset: buildPreset(config, { name: '配置快照', description: '自动记录于 ' + new Date().toLocaleString() })
+  });
+  saveEvolution(list);
+}
+
+function openEvolve() {
+  const m = $('evolve-modal'); if (m) m.classList.remove('hidden');
+  loadEvolveData();
+}
+function closeEvolve() {
+  const m = $('evolve-modal'); if (m) m.classList.add('hidden');
+}
+
+async function loadEvolveData() {
+  renderEvolveSnapshots(); // local, instant
+  let traces = [];
+  try {
+    const r = await fetch('/api/traces').then((x) => x.json());
+    traces = (r && Array.isArray(r.traces)) ? r.traces : [];
+  } catch {
+    traces = []; // server not running (e.g. pure file:// mode) — degrade gracefully
+  }
+  evolveTraces = traces;
+  renderEvolveHealth(traces);
+  renderEvolveBest(traces);
+}
+
+function renderEvolveHealth(traces) {
+  const el = $('evolve-health');
+  if (!el) return;
+  if (!traces.length) {
+    el.innerHTML = '<div class="muted small">还没有运行记录。先跑几个任务，Agenite 会给每次运行打分，并帮你找出最稳和最糟的那几次。</div>';
+    return;
+  }
+  const ranked = rankTraces(traces);
+  const best = ranked.slice(0, 3);
+  const worst = ranked.slice().reverse().slice(0, 3);
+  const row = (h) => `<div class="evolve-row ${h.severity}">
+    <span class="evolve-title">${escapeHtml(h.title || h.runId || '')}</span>
+    <span class="evolve-metric">模型 ${escapeHtml(h.model || '-')}</span>
+    <span class="evolve-metric">健康 ${Math.round(h.score * 100)}</span>
+    <span class="evolve-metric">错误 ${h.errors}</span>
+    <span class="evolve-metric">成本 ${Number(h.cost || 0).toFixed(4)}</span>
+  </div>`;
+  el.innerHTML =
+    '<div class="evolve-sub">最稳的 ' + best.length + ' 次运行</div>' + best.map(row).join('') +
+    '<div class="evolve-sub">最糟的 ' + worst.length + ' 次运行</div>' + worst.map(row).join('');
+}
+
+function renderEvolveBest(traces) {
+  const el = $('evolve-best');
+  if (!el) return;
+  const best = bestModelFromTraces(traces);
+  if (!best) {
+    el.innerHTML = '<div class="muted small">运行记录不足，无法蒸馏最佳模型。多用几个模型跑任务后，这里会给出表现最好的那一个。</div>';
+    return;
+  }
+  el.innerHTML = `<div class="evolve-best-card">
+    <div class="evolve-best-name">${escapeHtml(best.model)} <span class="muted small">(${escapeHtml(best.provider)})</span></div>
+    <div class="evolve-best-meta">平均健康分 ${Math.round(best.avgHealth * 100)} · 平均成本 ${Number(best.avgCost || 0).toFixed(4)} · 样本 ${best.samples} 次</div>
+    <button class="btn-primary" id="evolve-adopt">采纳为当前配置</button>
+  </div>`;
+  const adopt = $('evolve-adopt');
+  if (adopt) adopt.onclick = adoptBestModel;
+}
+
+function adoptBestModel() {
+  if (!evolveTraces || !evolveTraces.length) { toast('还没有运行记录'); return; }
+  const best = bestModelFromTraces(evolveTraces);
+  const p = distillBestPreset(evolveTraces, config, { name: '经验最佳配置 · ' + (best ? best.model : 'auto') });
+  if (!p) { toast('蒸馏失败'); return; }
+  applyPreset(p); // applyPreset closes both panels + records the snapshot
+}
+
+function renderEvolveSnapshots() {
+  const el = $('evolve-snapshots');
+  if (!el) return;
+  const list = loadEvolution();
+  const diffEl = $('evolve-diff');
+  if (diffEl) {
+    if (list.length) {
+      const last = list[0];
+      const d = diffConfigs(last.preset.config, config);
+      const changed = d.filter((x) => x.changed);
+      diffEl.innerHTML = changed.length
+        ? '<div class="evolve-sub">当前配置 vs 最近快照（' + escapeHtml(last.source || '') + '）的变化</div>' +
+          changed.map((x) => `<div class="diff-changed">${escapeHtml(x.label)}：${escapeHtml(String(x.before))} → ${escapeHtml(String(x.after))}</div>`).join('')
+        : '<div class="muted small">当前配置与最近快照一致，没有漂移。</div>';
+    } else {
+      diffEl.innerHTML = '<div class="muted small">还没有配置快照。</div>';
+    }
+  }
+  if (!list.length) {
+    el.innerHTML = '<div class="muted small">还没有配置快照。点「记录当前配置快照」即可存一份，应用预设时也会自动记录——之后随时可一键回滚。</div>';
+    return;
+  }
+  el.innerHTML = list.map((s) => `<div class="snapshot-card">
+    <div class="snapshot-main">
+      <div class="snapshot-src">${escapeHtml(s.source || '手动')}</div>
+      <div class="snapshot-time">${new Date(s.createdAt).toLocaleString()}</div>
+      <div class="snapshot-sum">${escapeHtml(presetSummary(s.preset))}</div>
+    </div>
+    <div class="snapshot-actions">
+      <button class="btn-ghost snapshot-rollback" data-id="${s.id}">回滚</button>
+    </div>
+  </div>`).join('');
+  el.querySelectorAll('.snapshot-rollback').forEach((b) => { b.onclick = () => rollbackSnapshot(b.dataset.id); });
+}
+
+function snapshotNow() {
+  pushEvolutionSnapshot('manual');
+  renderEvolveSnapshots();
+  toast('已记录当前配置快照');
+}
+
+function rollbackSnapshot(id) {
+  const snap = loadEvolution().find((s) => s.id === id);
+  if (!snap) return;
+  try {
+    config = applyPresetToConfig(snap.preset, config);
+    saveConfig();
+    resyncConfigUI();
+    toast('已回滚到快照：' + (snap.source || '手动'));
+  } catch (e) {
+    toast('回滚失败：' + (e.message || e));
+  }
+  renderEvolveSnapshots();
 }
 // and still keep losing. Nothing is deleted — the .md stays on disk.
 async function pruneCustomSkills() {
@@ -9288,6 +9734,9 @@ function wire() {
   if ($('skills-prune')) $('skills-prune').onclick = pruneCustomSkills;
   $('open-presets').onclick = openPresets;
   $('close-presets').onclick = closePresets;
+  $('open-evolve').onclick = openEvolve;
+  $('close-evolve').onclick = closeEvolve;
+  $('evolve-snapshot').onclick = snapshotNow;
   $('preset-save').onclick = saveCurrentAsPreset;
   $('preset-file').onchange = (e) => {
     const f = e.target.files && e.target.files[0];
@@ -9554,6 +10003,7 @@ function wire() {
   $('browser-modal').addEventListener('mousedown', (e) => { if (e.target === $('browser-modal')) closeBrowserPanel(); });
   $('snippets-modal').addEventListener('mousedown', (e) => { if (e.target === $('snippets-modal')) closeSnippets(); });
   $('presets-modal').addEventListener('mousedown', (e) => { if (e.target === $('presets-modal')) closePresets(); });
+  $('evolve-modal').addEventListener('mousedown', (e) => { if (e.target === $('evolve-modal')) closeEvolve(); });
 
   // ---------- voice: 语音输入（听写）+ 朗读 ----------
   // 纯浏览器能力（Web Speech API），零依赖；不支持的浏览器自动降级隐藏。
@@ -9738,6 +10188,7 @@ function wire() {
       else if (!$('browser-modal').classList.contains('hidden')) closeBrowserPanel();
       else if (!$('snippets-modal').classList.contains('hidden')) closeSnippets();
       else if (!$('presets-modal').classList.contains('hidden')) closePresets();
+      else if (!$('evolve-modal').classList.contains('hidden')) closeEvolve();
       else closeSettings();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }

@@ -85,6 +85,7 @@
         <button id="open-agents" class="side-link">🤖 智能体</button>
         <button id="open-skills" class="side-link">🧩 技能</button>
         <button id="open-presets" class="side-link">🎚️ 预设</button>
+        <button id="open-evolve" class="side-link">🧬 自进化</button>
         <button id="open-usage" class="side-link">📊 用量审计</button>
       </div>
     </aside>
@@ -410,6 +411,32 @@
         <div class="field-title">内置示例预设</div>
         <div id="preset-builtin" class="preset-list"></div>
         <div id="preset-import-msg" class="preset-msg hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自进化 · Experience Compounding：从真实运行蒸馏最佳配置 + 配置漂移哨兵 -->
+  <div id="evolve-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card atlas-card evolve-card">
+      <div class="drawer-head">
+        <h2>自进化 · Experience Compounding</h2>
+        <button id="close-evolve" class="icon-btn" aria-label="关闭">✕</button>
+      </div>
+      <div class="atlas-body evolve-body">
+        <p class="muted small">让 Agent <b>越用越准</b>：Agenite 给每次运行打分，从真实记录里蒸馏出表现最好的模型配置，并记住每一次配置变化，随时一键回滚。所有信号都来自你自己的运行数据，不上云、不猜。</p>
+
+        <div class="field-title">轨迹健康洞察</div>
+        <div id="evolve-health" class="evolve-health"></div>
+
+        <div class="field-title">最佳模型蒸馏</div>
+        <div id="evolve-best" class="evolve-best"></div>
+
+        <div class="field-title">配置漂移 &amp; 经验快照</div>
+        <div class="evolve-snap-row">
+          <button id="evolve-snapshot" class="btn-primary">记录当前配置快照</button>
+        </div>
+        <div id="evolve-diff" class="evolve-diff"></div>
+        <div id="evolve-snapshots" class="evolve-snapshots"></div>
       </div>
     </div>
   </div>
