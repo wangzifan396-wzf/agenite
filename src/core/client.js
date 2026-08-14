@@ -31,7 +31,7 @@ export async function callOpenAIStream({ config, messages, tools = [], onDelta, 
     body.tools = toOpenAITools(tools);
     body.tool_choice = 'auto';
   }
-  const res = await fetchImpl(`${config.baseURL}/chat/completions`, {
+  const res = await fetchWithRetry(fetchImpl, `${config.baseURL}/chat/completions`, {
     method: 'POST',
     signal,
     headers: {
@@ -39,12 +39,7 @@ export async function callOpenAIStream({ config, messages, tools = [], onDelta, 
       Authorization: `Bearer ${config.apiKey}`
     },
     body: JSON.stringify(body)
-  });
-  if (!res.ok) {
-    const txt = await safeText(res);
-    const info = classifyProviderError(res.status, txt);
-    throw new Error(info.message);
-  }
+  }, { signal });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -114,7 +109,7 @@ export async function callAnthropicStream({ config, messages, tools = [], onDelt
     stream: true
   };
   if (tools.length) body.tools = toAnthropicTools(tools);
-  const res = await fetchImpl(`${config.baseURL}/messages`, {
+  const res = await fetchWithRetry(fetchImpl, `${config.baseURL}/messages`, {
     method: 'POST',
     signal,
     headers: {
@@ -123,12 +118,7 @@ export async function callAnthropicStream({ config, messages, tools = [], onDelt
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify(body)
-  });
-  if (!res.ok) {
-    const txt = await safeText(res);
-    const info = classifyProviderError(res.status, txt);
-    throw new Error(info.message);
-  }
+  }, { signal });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -231,6 +221,70 @@ export function classifyProviderError(status, text = '') {
     return { errorClass: 'SERVER', message: '模型服务端错误（5xx），请稍后重试。' };
   }
   return { errorClass: 'UNKNOWN', message: `模型接口返回 ${status}：${String(text).slice(0, 200)}` };
+}
+
+// Typed error so the retry layer (and callers) can decide whether a failure is
+// worth retrying without guessing from the message text.
+export class ModelCallError extends Error {
+  constructor(errorClass, message, status) {
+    super(message);
+    this.name = 'ModelCallError';
+    this.errorClass = errorClass;
+    this.status = status;
+  }
+}
+
+// Retry the *initial* model HTTP request on transient failures only:
+// rate-limit (429) and server errors (>=500), plus network/DNS/timeout blips.
+// We deliberately do NOT retry mid-stream failures — a reader error would have
+// already emitted partial deltas, and retrying would double-emit them. A user
+// abort (signal) is never retried. Backoff is exponential with jitter so a
+// thundering herd of 429s doesn't hit the API all at once. This is what keeps
+// a single momentary blip from aborting an entire multi-turn agent run.
+async function fetchWithRetry(fetchImpl, url, init, { signal, maxAttempts = 3 } = {}) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let lastErr;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (signal && signal.aborted) throw new Error('请求已取消');
+    try {
+      const res = await fetchImpl(url, init);
+      if (!res.ok) {
+        const info = classifyProviderError(res.status, await safeText(res));
+        const transient = res.status === 429 || res.status >= 500;
+        if (transient && attempt < maxAttempts - 1) {
+          lastErr = new ModelCallError(info.errorClass, info.message, res.status);
+          await backoff(attempt, sleep);
+          continue;
+        }
+        throw new ModelCallError(info.errorClass, info.message, res.status);
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (signal && signal.aborted) throw e;          // run cancellation
+      if (!isTransientNetwork(e)) throw e;            // permanent / unknown
+      if (attempt < maxAttempts - 1) { await backoff(attempt, sleep); continue; }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+// A network-layer failure (DNS, connection refused, undici TypeError, timeout)
+// is transient and worth one more try; an explicit AbortError means the user
+// disconnected or cancelled, which must surface immediately, not be retried.
+function isTransientNetwork(e) {
+  if (!e) return false;
+  if (e.name === 'AbortError') return false;
+  if (e.name === 'TypeError') return true;            // undici network failure
+  const m = String(e.message || '');
+  return /fetch failed|econn|enotfound|eai_|timeout|network/i.test(m);
+}
+
+async function backoff(attempt, sleep) {
+  const base = 400 * Math.pow(2, attempt);            // 400, 800, 1600...
+  const jitter = Math.floor(Math.random() * 300);
+  await sleep(base + jitter);
 }
 
 // Actually validate a provider key/model by issuing a *minimal* (1-token,

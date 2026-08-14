@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyProviderError, verifyKey, callOpenAIStream, callAnthropicStream } from '../src/core/client.js';
+import { classifyProviderError, verifyKey, callOpenAIStream, callAnthropicStream, ModelCallError } from '../src/core/client.js';
 
 // Build a fake fetch response whose body is a ReadableStream yielding the given
 // raw SSE string chunks (mirrors what a real provider streams over HTTP).
@@ -121,4 +121,61 @@ test('callAnthropicStream captures thinking_delta as reasoning', async () => {
   });
   assert.equal(r.content, 'hi there');
   assert.equal(r.reasoning, 'hmm, let me think');
+});
+
+test('callModelStream throws a typed ModelCallError carrying the provider class', async () => {
+  const fetchImpl = async () => ({ ok: false, status: 429, text: async () => 'rate limited' });
+  await assert.rejects(
+    () => callOpenAIStream({
+      config: { model: 'gpt-4o', baseURL: 'https://api.openai.com/v1', apiKey: 'k' },
+      messages: [{ role: 'user', content: 'hi' }],
+      fetchImpl
+    }),
+    (e) => e instanceof ModelCallError && e.errorClass === 'RATE_LIMIT'
+  );
+});
+
+test('callOpenAIStream retries a transient 429 then succeeds', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    if (attempts === 1) return { ok: false, status: 429, text: async () => 'rate limited' };
+    const chunks = ['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', 'data: [DONE]\n\n'];
+    return fakeSseResponse(chunks);
+  };
+  const r = await callOpenAIStream({
+    config: { model: 'gpt-4o', baseURL: 'https://api.openai.com/v1', apiKey: 'k' },
+    messages: [{ role: 'user', content: 'hi' }],
+    fetchImpl
+  });
+  assert.equal(r.content, 'ok');
+  assert.equal(attempts, 2, 'should retry exactly once after the 429');
+});
+
+test('callOpenAIStream does not retry a permanent 401', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => { attempts++; return { ok: false, status: 401, text: async () => 'invalid key' }; };
+  await assert.rejects(
+    () => callOpenAIStream({
+      config: { model: 'gpt-4o', baseURL: 'https://api.openai.com/v1', apiKey: 'bad' },
+      messages: [{ role: 'user', content: 'hi' }],
+      fetchImpl
+    }),
+    (e) => e.errorClass === 'AUTH'
+  );
+  assert.equal(attempts, 1, 'a 401 must not be retried');
+});
+
+test('callOpenAIStream gives up after maxAttempts on a persistent 429', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => { attempts++; return { ok: false, status: 429, text: async () => 'rate limited' }; };
+  await assert.rejects(
+    () => callOpenAIStream({
+      config: { model: 'gpt', baseURL: 'https://api.openai.com/v1', apiKey: 'k' },
+      messages: [{ role: 'user', content: 'hi' }],
+      fetchImpl
+    }),
+    (e) => e.errorClass === 'RATE_LIMIT'
+  );
+  assert.equal(attempts, 3, 'should attempt exactly 3 times then throw');
 });

@@ -91,7 +91,7 @@ _Honest note: Agenite is younger — its plugin/theme ecosystem and mobile story
 
 ## Capability matrix
 
-Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search · trace-driven Eval / regression suite · shareable config presets · self-evolution loop (distills best config from real traces + config-drift sentinel).
+Browser automation · file & command execution · code interpreter · web search · multi-agent fan-out · long-term + semantic memory · local RAG · planning mode · conversation branches · token & cost tracking · skills gallery · voice read-aloud · multimodal vision · cross-conversation search · trace-driven Eval / regression suite · shareable config presets · self-evolution loop (distills best config from real traces + config-drift sentinel) · resilient agent kernel (transient-error retry + stuck-loop breaker).
 
 ---
 
@@ -106,6 +106,8 @@ Browser automation · file & command execution · code interpreter · web search
 ## ✨ Features
 
 - **Self-Evolution: experience compounding (v0.54.0)**: Agenite already records every run (trace), measures each run (eval), and lets you share a tuned setup (presets) — but those three instruments were not yet *closed into a loop*. The new sidebar **🧬 自进化** panel shows a **health leaderboard** of your real runs (graded by errors, cost, turns, and silent loops), **distills the best config** from those traces (picks the highest-health provider/model and freezes it as a one-click preset — never exporting your API key or workspace), and runs a **drift sentinel** that flags when your current config scores worse than a past run's, with a one-click **rollback to any experience snapshot**. This is the rigor the 2026 "agent that grows with you" wave (Hermes, OpenJarvis) promises — grounded in hard verify + eval signals instead of a heuristic — so the agent gets more accurate the more you use it, never silently.
+
+- **Resilient agent kernel (v0.55.0)**: two quality fixes to the core loop, both from real-world pain — keeping the focus on the *agent itself*. **Transient-failure retry** — model calls (429 / 5xx / network blips) used to throw on the *first* hiccup and abort the whole multi-turn run; now `client.js` retries up to 3× with exponential backoff + jitter (no retry on hard 4xx auth, no retry on a user-cancelled `AbortError`), surfacing a typed `ModelCallError`. **Stuck-loop breaker** — `trace.js` already *detected* exact-repeat tool loops, but the agent never *acted*; `agent.js` now injects a bounded self-check reflection when the model repeats the identical tool-call set 3 turns running (order-independent, sharing the `maxReflections` budget), forcing a different approach instead of spinning forever. The agent now survives upstream noise and its own worst habit.
 
 - **Shareable Agent Config Presets (v0.53.0)**: the missing distribution channel for "here's how I set up my agent". The sidebar **🎚️ 预设** panel lets you **freeze the current agent config** — model, tools, skills, memory, system prompt, run mode, and safety gates — into a portable preset you can **export as JSON, import from a friend, or clone from 3 built-in examples** (通用助手 / 代码工程师 / 只读研究助手). The hard rule: a preset **never exports your API key or your workspace directory** — applying someone else's preset can never steal your secret or relocate your sandbox; your key and path are always preserved locally. This is the adoption lever: share a tuned agent the way you'd share a `.gitignore`, and the community starts compounding configurations instead of rediscovering them.
 
@@ -263,7 +265,7 @@ node server.js
 Then open ⚙ **Settings** (top-right): pick a provider, paste your API key, confirm the model, save, and start chatting.
 
 ```bash
-npm test       # run core unit tests (505, via node:test)
+npm test       # run core unit tests (509, via node:test)
 npm run build  # build single-file dist/agenite.html
 npm start      # alias for node server.js
 PORT=8080 node server.js   # custom port

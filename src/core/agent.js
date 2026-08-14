@@ -136,6 +136,11 @@ export async function runAgent({
   // the "stop and tell the user" message fire exactly once.
   let verifyFixes = 0;
   let verifyGaveUp = false;
+  // Stuck-loop breaker state: signature of the previous turn's tool calls and
+  // how many consecutive identical turns we've seen. trace.js already detects
+  // exact-repeat loops for display; this makes the agent *act* on them.
+  let lastTurnSig = null;
+  let loopStreak = 0;
 
   // ── Context economy ──
   // Shrink oversized tool output on the way into the history instead of waiting
@@ -374,12 +379,16 @@ export async function runAgent({
       });
     }
 
-    // ── Self-healing reflection (Loop Engineering, 2026) ──
-    // When a mutating tool failed this turn, nudge the model with a bounded
-    // user-side reflection so it re-reads live state and stops repeating a
-    // broken edit. Mirrors Aider's edit→validate→reflect→retry, capped by
-    // maxReflections so a hopeless edit can't loop forever (the Codex "same
-    // fix again" failure mode the 2026 reviews call out).
+    // ── Self-healing reflection + stuck-loop breaker (Loop Engineering, 2026) ──
+    // Two distinct failure modes get a bounded, model-side nudge so the agent
+    // self-corrects instead of burning the whole turn budget:
+    //   1) a mutating tool failed this turn → re-read live state, don't repeat.
+    //   2) this turn's tool calls are byte-identical to the previous turn → it
+    //      is looping (the "same fix again" failure mode 2026 reviews flag);
+    //      switching approach is the only way out. trace.js already *detects*
+    //      these loops for display; here we *act* on them.
+    // Both share one reflection budget (maxReflections) so a hopeless case
+    // can't nag forever — that is the door we close on infinite loops.
     let failedMutation = 0;
     let succeededMutation = 0;
     const failedNames = [];
@@ -389,18 +398,34 @@ export async function runAgent({
       if (r.res.ok) succeededMutation++;
       else { failedMutation++; failedNames.push(toolCalls[i].name); }
     }
-    if (failedMutation > 0 && config.selfHeal !== false) {
-      const cap = Number.isFinite(Number(config.maxReflections)) ? Number(config.maxReflections) : 3;
-      if (reflections < cap) {
-        reflections++;
-        messages.push({
-          role: 'user',
-          content:
-            `⚠️ 自检提醒（第 ${reflections}/${cap} 次）：本回合有工具调用未成功（${failedNames.join('、')}）。` +
-            '请先重新读取相关文件确认其【当前】内容，再核对参数后重试——不要原样重复刚才失败的调用。' +
-            '若连续多次失败，停下来向用户说明卡点，而不是继续盲试。'
-        });
+    // Order-independent signature of this turn's tool calls. Two turns with the
+    // same (name+args) set are a stuck loop; scattered re-reads of the same
+    // file in *different* turns are normal and must not trip this.
+    const thisTurnSig = toolCalls.length
+      ? toolCalls.map((tc) => tc.name + ' ' + JSON.stringify(tc.args || {})).sort().join('|')
+      : null;
+    let looping = false;
+    if (thisTurnSig && thisTurnSig === lastTurnSig) loopStreak++;
+    else loopStreak = 0;
+    lastTurnSig = thisTurnSig;
+    if (loopStreak >= 2) looping = true;
+
+    const cap = Number.isFinite(Number(config.maxReflections)) ? Number(config.maxReflections) : 3;
+    if (reflections < cap && config.selfHeal !== false && (failedMutation > 0 || looping)) {
+      reflections++;
+      let body;
+      if (looping && failedMutation === 0) {
+        body =
+          `⚠️ 自检提醒（第 ${reflections}/${cap} 次）：检测到本回合的工具调用与上几回合【完全相同】，` +
+          '重复执行不会产生新结果，说明当前思路已卡死。请立即换一种做法：重新拆解目标、换用不同工具或参数，' +
+          '或向用户澄清卡点——不要继续用相同参数重复调用。';
+      } else {
+        body =
+          `⚠️ 自检提醒（第 ${reflections}/${cap} 次）：本回合有工具调用未成功（${failedNames.join('、')}）。` +
+          '请先重新读取相关文件确认其【当前】内容，再核对参数后重试——不要原样重复刚才失败的调用。' +
+          '若连续多次失败，停下来向用户说明卡点，而不是继续盲试。';
       }
+      messages.push({ role: 'user', content: body });
     }
 
     // ── Auto git checkpoint (Aider-style safety net) ──

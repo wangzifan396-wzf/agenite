@@ -96,3 +96,45 @@ test('agent loop ignores cost guardrail when cap is 0', async () => {
   assert.equal(res.stopped, 'max_turns');
   assert.ok(!res.stopped || res.stopped !== 'guardrail');
 });
+
+test('agent loop injects a stuck-loop breaker on consecutive identical tool calls', async () => {
+  // trace.js detects exact-repeat loops; the agent should *act* on them. Three
+  // turns of the same (name+args) read must trigger one bounded reflection,
+  // after which the model can switch approach and finish.
+  const messages = [{ role: 'user', content: 'keep reading' }];
+  let callCount = 0;
+  const callModel = async (msgs, { onDelta }) => {
+    callCount++;
+    if (callCount <= 3) {
+      return { content: '', toolCalls: [{ id: 't' + callCount, name: 'read_file', args: { path: 'a.txt' } }], usage: null };
+    }
+    onDelta('done');
+    return { content: 'I rephrased and finished.', toolCalls: [], usage: null };
+  };
+  const executeTool = async () => ({ ok: true, content: 'file contents' });
+  const res = await runAgent({ messages, callModel, executeTool, config: {}, maxTurns: 10 });
+  assert.equal(res.stopped, 'done');
+  assert.equal(callCount, 4);
+  const breaker = [...messages].reverse().find((m) => m.role === 'user' && m.content.includes('完全相同'));
+  assert.ok(breaker, 'a stuck-loop breaker message should have been injected');
+});
+
+test('agent loop does not flag non-consecutive identical calls as a loop', async () => {
+  // Re-reading the same file in *different* turns (a, b, a) is normal behavior
+  // and must NOT trip the breaker — only a sustained consecutive repeat is.
+  const messages = [{ role: 'user', content: 'read a few' }];
+  let callCount = 0;
+  const callModel = async (msgs, { onDelta }) => {
+    callCount++;
+    const path = callCount === 1 ? 'a.txt' : callCount === 2 ? 'b.txt' : callCount === 3 ? 'a.txt' : null;
+    if (path) return { content: '', toolCalls: [{ id: 't' + callCount, name: 'read_file', args: { path } }], usage: null };
+    onDelta('done');
+    return { content: 'finished', toolCalls: [], usage: null };
+  };
+  const executeTool = async () => ({ ok: true, content: 'x' });
+  const res = await runAgent({ messages, callModel, executeTool, config: {}, maxTurns: 10 });
+  assert.equal(res.stopped, 'done');
+  assert.equal(callCount, 4);
+  const breaker = messages.find((m) => m.role === 'user' && m.content.includes('完全相同'));
+  assert.equal(breaker, undefined, 'non-consecutive repeats must not trigger the breaker');
+});
