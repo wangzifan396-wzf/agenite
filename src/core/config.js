@@ -347,6 +347,18 @@ export function defaultConfig() {
     // and fold it into the system prompt so repo conventions are respected
     // without the user pasting them every time. Set false to disable.
     instructionFiles: true,
+    // --- goal verification gate (v0.58) ---
+    // How an autonomous "goal" decides it is DONE. Deterministic real-test
+    // verification is the PRIMARY signal; a fresh-context LLM judge (reads the
+    // execution LOG FACTS, never the agent's self-report) is the FALLBACK.
+    //   'auto'  (default) run the project's own test/build if detected; else
+    //           fall back to the judge. Flips the old "trust the self-report"
+    //           bias to "proof required".
+    //   'full'  always run the detected test/build command; if none exists the
+    //           goal cannot be proven done and is marked failed (never silent).
+    //   'judge' always use the fresh-context judge (no test execution).
+    //   'off'   trust-but-verify disabled — legacy behaviour, not recommended.
+    goalVerify: 'auto',
 
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
@@ -413,6 +425,7 @@ export function normalizeConfig(input = {}) {
   cfg.maxVerifyFixes = Math.round(clampNum(cfg.maxVerifyFixes, 0, 5, 2));
   cfg.reflectionGuard = ['off', 'warn', 'block'].includes(cfg.reflectionGuard) ? cfg.reflectionGuard : 'warn';
   cfg.instructionFiles = cfg.instructionFiles !== false;
+  cfg.goalVerify = ['auto', 'full', 'judge', 'off'].includes(cfg.goalVerify) ? cfg.goalVerify : 'auto';
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));

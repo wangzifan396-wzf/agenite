@@ -23,6 +23,7 @@ import { callModelStream } from './client.js';
 import { createSubAgentRunner, createFanoutRunner } from './subagent.js';
 import { normalizeConfig } from './config.js';
 import { defaultMemoryDir } from './memory.js';
+import { verifyWorkspace, detectVerify } from './verify.js';
 
 export const GOALS_DIR = join(defaultMemoryDir(), 'goals');
 const MAX_CONCURRENT = 3;
@@ -228,12 +229,24 @@ export function resolveBudget(config = {}) {
   return { maxTurns, maxCostUSD, timeoutMs, retries };
 }
 
-// "已完成" passes; "未完成 / 部分完成" triggers a self-heal retry; anything
-// ambiguous (incl. a verification infra error) is treated as done so we never
-// loop forever on a broken verifier. Retries are capped by budget.retries.
-function verdictDone(v) {
-  const s = String(v || '');
-  if (s.includes('未完成') || s.includes('部分完成')) return false;
+// v0.58 — verification-gated completion.
+// Deterministic real-test verification is the PRIMARY signal; a fresh-context
+// LLM judge (sees execution LOG FACTS, never the agent's self-report) is the
+// FALLBACK; and the old false-positive bias ("trust the self-report") is flipped
+// to "proof required" — no proof means NOT done. Retries stay capped by
+// budget.retries.
+function resolveGoalVerifyMode(config) {
+  const m = (config && config.goalVerify) || 'auto';
+  return ['auto', 'full', 'judge', 'off'].includes(m) ? m : 'auto';
+}
+
+// Parse a judge's one-line verdict. A judge that says 未完成 / 部分完成 is the
+// only negative; everything else (incl. genuinely ambiguous text) passes — but
+// the judge is fresh-context and reads facts, so this is trustworthy enough to
+// be the *secondary* signal behind the deterministic test gate.
+function parseVerdictText(s) {
+  const t = String(s || '');
+  if (t.includes('未完成') || t.includes('部分完成')) return false;
   return true;
 }
 
@@ -277,22 +290,104 @@ async function makePlan(callModel, goal, workspace) {
   }
 }
 
-async function verify(callModel, goal, report, workspace) {
+// Fresh-context judge: it has NEVER seen the model's reasoning while writing
+// its report, and is fed the EXECUTION LOG FACTS (tool calls + results), not
+// the agent's self-reported narrative. This separation is exactly what stops
+// the judge from rubber-stamping the model's own claims — the 2026 reliability
+// consensus calls this the secondary, trustworthy verification signal.
+const JUDGE_SYSTEM =
+  '你是独立验收员。你没有看到模型撰写工作报告时的任何推理过程，只能依据下方【执行日志事实】判断目标是否完成。' +
+  '给出一句话结论（已完成/部分完成/未完成）并简述依据。' +
+  '判定规则：若日志显示测试/构建/lint 已通过，或目标产物已生成且无错误，判为已完成；' +
+  '若日志显示你未看到任何验证动作、或仍有报错，判为未完成。不要相信报告里的自我宣称，只信日志事实。';
+
+async function judgeGoal(callModel, goal, evidence) {
+  const r = await callModel(
+    [
+      { role: 'system', content: JUDGE_SYSTEM },
+      {
+        role: 'user',
+        content:
+          `目标：${goal}\n\n执行日志事实（按时间顺序，仅含工具调用、结果与错误，不含模型自报结论）：\n` +
+          String(evidence || '').slice(0, 6000)
+      }
+    ],
+    {}
+  );
+  return r && r.content ? r.content.trim() : '(验收未返回结论)';
+}
+
+// Collect the execution facts a judge can reason over — what the agent ACTUALLY
+// did, not what it claims. Bounded so we never blow up the judge's context.
+function buildEvidence(state) {
+  const lines = (state.log || [])
+    .filter((l) => l.type === 'tool' || l.type === 'subagent' || l.type === 'verify' || l.type === 'error')
+    .slice(-60)
+    .map((l) => `[${l.type}] ${l.text}`);
+  return lines.join('\n');
+}
+
+// The gate. Pure (no side effects) — runGoal does the logging / report merge.
+//   mode 'off'   → done, no proof (legacy escape hatch)
+//   mode 'full'  → deterministic test gate; no test detected ⇒ NOT done
+//   mode 'auto'  → test gate if a test command exists, else fresh-context judge
+//   mode 'judge' → fresh-context judge only
+// `vw`/`dv` are injected (real or fake) so the whole thing is unit-testable.
+async function verifyGate({ cm, goal, state, workspace, config, vw, dv }) {
+  const mode = resolveGoalVerifyMode(config);
+  if (mode === 'off') {
+    return { source: 'none', done: true, confidence: 0, detail: '验证门控已关闭 (goalVerify: off)，按报告直接判定完成。' };
+  }
+
+  // ── Primary: deterministic real-test gate ──
+  if (mode === 'full' || mode === 'auto') {
+    let spec = null;
+    try { spec = dv(workspace); } catch { spec = null; }
+    if (spec) {
+      let vres = null;
+      try {
+        vres = await vw(workspace, {
+          level: 'full',
+          cmd: (config && config.verifyCmd) || '',
+          changedFiles: [],
+          timeoutMs: (config && config.verifyTimeoutMs) || 120000
+        });
+      } catch (e) {
+        vres = { ran: false, ok: false, reason: '验证执行异常：' + (e && e.message ? e.message : String(e)) };
+      }
+      if (vres && vres.ran) {
+        const ok = !!vres.ok;
+        return {
+          source: 'test',
+          done: ok,
+          confidence: ok ? 1 : 0.9,
+          detail: (ok ? '✓ 验证通过：' : '✗ 验证失败：') + (vres.summary || vres.label || ''),
+          label: vres.label || '',
+          kind: vres.kind || '',
+          ran: true,
+          ok,
+          failures: vres.failures || []
+        };
+      }
+      // A test command was promised (spec) but did not actually run.
+      if (mode === 'full') {
+        return { source: 'test', done: false, confidence: 1, detail: '未探测到可执行的测试命令（' + (vres && vres.reason ? vres.reason : '命令缺失') + '）。' };
+      }
+      // 'auto' → fall through to judge.
+    } else if (mode === 'full') {
+      return { source: 'test', done: false, confidence: 1, detail: 'goalVerify=full 但未探测到任何测试命令（npm test / cargo test / go test / pytest / make test），无法给出确定性完成证据。' };
+    }
+  }
+
+  // ── Fallback: fresh-context judge reads execution facts, not self-report ──
   try {
-    const r = await callModel(
-      [
-        {
-          role: 'system',
-          content:
-            '你是质量验收员。根据你刚才的工作报告，判断目标是否已实质性完成且经过验证（如运行了测试/构建）。给出一句话结论（已完成/部分完成/未完成）并简述依据。'
-        },
-        { role: 'user', content: `目标：${goal}\n工作报告（节选）：${String(report || '').slice(0, 2000)}` }
-      ],
-      {}
-    );
-    return r && r.content ? r.content.trim() : '(未能生成验收结论)';
+    const evidence = buildEvidence(state);
+    const judgeText = await judgeGoal(cm, goal, evidence);
+    const done = parseVerdictText(judgeText);
+    return { source: 'judge', done, confidence: 0.7, detail: judgeText, evidence };
   } catch (e) {
-    return '(验收失败：' + (e && e.message ? e.message : String(e)) + ')';
+    // Judge failed: we CANNOT prove completion ⇒ flip the bias to NOT done.
+    return { source: 'judge', done: false, confidence: 0.5, detail: '验收判断失败（' + (e && e.message ? e.message : String(e)) + '），无法给出确定性结论，按未完成处理。' };
   }
 }
 
@@ -383,6 +478,11 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     const runSubAgent = deps && deps.createSubAgentRunner ? deps.createSubAgentRunner : realRunSub;
     const runFanout = createFanoutRunner(runSubAgent);
 
+    // Verification gate deps (v0.58). Real engines by default; tests inject
+    // fakes so the whole lifecycle runs without a network or a real workspace.
+    const vw = deps && deps.verifyWorkspace ? deps.verifyWorkspace : verifyWorkspace;
+    const dv = deps && deps.detectVerify ? deps.detectVerify : detectVerify;
+
     const onEvent = (type, payload) => {
       if (type === 'tool_start') append('tool', `▶ ${payload.name} ${trunc(JSON.stringify(payload.args || {}), 200)}`);
       else if (type === 'tool') {
@@ -432,7 +532,6 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       { role: 'user', content: `目标：${state.goal}\n\n请开始执行上面的计划。完成后给出最终总结。` }
     ];
     const MAX_ATTEMPTS = budget.retries + 1;
-    let verdict = '';
     let attempt = 0;
     while (attempt < MAX_ATTEMPTS) {
       attempt++;
@@ -480,15 +579,34 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
         break;
       }
 
-      // ── VERIFY ──
+      // ── VERIFY (v0.58: verification-gated) ──
       state.phase = 'verify';
-      append('system', '阶段 3/3 · 自验证');
+      append('system', '阶段 3/3 · 验证门控');
       flush();
-      verdict = await verify(cm, state.goal, state.report, workspace);
-      append('verify', verdict);
-      state.verdict = verdict;
+      const gate = await verifyGate({
+        cm,
+        goal: state.goal,
+        state,
+        workspace,
+        config,
+        vw,
+        dv
+      });
+      append('verify', `来源=${gate.source} 通过=${gate.done} 置信=${gate.confidence}\n${gate.detail}`);
+      state.verdict = gate.detail;
+      state.verdictMeta = { source: gate.source, done: gate.done, confidence: gate.confidence };
+      state.verification = {
+        source: gate.source,
+        label: gate.label || '',
+        ran: !!gate.ran,
+        ok: !!gate.ok,
+        kind: gate.kind || '',
+        failures: gate.failures || []
+      };
+      // Make the final report carry proof, not just claims.
+      state.report = (state.report ? state.report + '\n\n' : '') + '— 验证结论 —\n' + gate.detail;
 
-      if (verdictDone(verdict)) {
+      if (gate.done) {
         state.phase = 'report';
         state.status = 'done';
         state.error = '';
@@ -497,19 +615,19 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       if (attempt >= MAX_ATTEMPTS) {
         state.phase = 'report';
         state.status = 'failed';
-        state.error = '自验证未通过，且已达自愈重试上限（' + budget.retries + ' 次）。';
+        state.error = '验证未通过，且已达自愈重试上限（' + budget.retries + ' 次）。';
         append('error', state.error);
         break;
       }
-      // Not done yet — give the agent its own verdict and let it try again.
+      // Not done — feed the real evidence back so the agent can fix it.
       messages.push({
         role: 'system',
         content:
-          '上一轮自验证未通过，验收结论：' +
-          trunc(verdict, 500) +
-          '。请复盘失败原因并修正，重新运行验证（测试/构建/lint）直到通过，再给出最终总结。'
+          '上一轮验证未通过。验收证据：\n' +
+          trunc(gate.detail, 1500) +
+          '\n请复盘失败原因并修正，重新运行验证（测试/构建/lint 或对应命令）直到通过，再给出最终总结。'
       });
-      append('system', '自验证未通过，准备复盘重试');
+      append('system', '验证未通过，准备复盘重试');
     }
 
     flush();

@@ -2950,6 +2950,16 @@ function statusLabel(s) {
   );
 }
 
+function gateChip(m) {
+  const label =
+    { test: '测试门控', judge: '验收员', none: '门控关闭' }[m.source] || m.source || '验证';
+  const srcCls = { test: 'gw-test', judge: 'gw-judge', none: 'gw-none' }[m.source] || 'gw-none';
+  const result = m.done
+    ? '<span class="gw-chip gw-pass">通过</span>'
+    : '<span class="gw-chip gw-fail">未通过</span>';
+  return `<span class="gw-chip ${srcCls}">${escapeHtml(label)}</span>${result} `;
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -2969,7 +2979,9 @@ function goalCard(g) {
           .join('') || '<span class="muted">（暂无）</span>'
       }</div></div>
       ${g.report ? `<div class="goal-sub"><b>最终报告</b><pre class="goal-pre">${escapeHtml(g.report)}</pre></div>` : ''}
-      ${g.verdict ? `<div class="goal-sub"><b>验收结论</b> ${escapeHtml(g.verdict)}</div>` : ''}
+      ${g.verdict
+        ? `<div class="goal-sub"><b>验证结论</b> ${g.verdictMeta ? gateChip(g.verdictMeta) : ''}${escapeHtml(g.verdict)}</div>`
+        : ''}
       ${g.error ? `<div class="goal-sub goal-err"><b>说明</b> ${escapeHtml(g.error)}</div>` : ''}
     </div>`;
   return `

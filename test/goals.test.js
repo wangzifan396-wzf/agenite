@@ -19,9 +19,11 @@ function tmpDir() {
 
 // Fake deps: a tool-free model that returns text, a tool executor that says ok,
 // and a runAgent that emits a couple of tool events then finishes with a report.
-// opts.verify: array of verdict strings consumed per verify call (defaults to a
-// passing "已完成"). opts.costPerAttempt / turnsPerAttempt / stopped let budget
-// and retry tests drive deterministic scenarios.
+// opts.verify: array of judge verdicts consumed per verify call (defaults to a
+// passing "已完成"). The judge is fresh-context (reads execution LOG FACTS, not
+// the self-report), so we key it off the "独立验收员" system prompt.
+// detectVerify/verifyWorkspace are faked so no real test command ever runs in
+// the test sandbox (and we deterministically exercise the judge path).
 function fakeDeps(opts = {}) {
   const verifySeq = opts.verify && opts.verify.length ? opts.verify : ['已完成'];
   let vi = 0;
@@ -30,7 +32,7 @@ function fakeDeps(opts = {}) {
   return {
     callModel: async (msgs) => {
       const sys = (msgs && msgs[0] && msgs[0].content) || '';
-      if (sys.includes('质量验收员')) {
+      if (sys.includes('独立验收员')) {
         const v = vi < verifySeq.length ? verifySeq[vi] : verifySeq[verifySeq.length - 1];
         vi++;
         return { content: v };
@@ -40,6 +42,10 @@ function fakeDeps(opts = {}) {
       return { content: 'OK' };
     },
     executeTool: async () => ({ ok: true, content: 'fake tool result' }),
+    // v0.58 gate deps: no project test command exists in the sandbox, so the
+    // gate always falls through to the fresh-context judge.
+    detectVerify: () => null,
+    verifyWorkspace: async () => ({ ran: false, ok: true, level: 'full', reason: 'no tests' }),
     createSubAgentRunner: () => async () => ({ ok: true, content: 'sub' }),
     runAgent: async ({ onEvent, messages }) => {
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
@@ -247,6 +253,59 @@ test('budget: timeout cap stops the goal as failed', async () => {
     const done = await waitFor(r.id, dir, (g) => g.status === 'failed' || g.status === 'done');
     assert.equal(done.status, 'failed');
     assert.match(done.error, /时长上限/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.58 gate: goalVerify=off completes without a judge, ignoring a failing verdict', async () => {
+  const dir = tmpDir();
+  try {
+    // Judge would say "未完成", but goalVerify=off disables the gate entirely.
+    const r = await createGoal(
+      { goal: '关掉验证', config: { provider: 'openai', model: 'x', goalVerify: 'off' } },
+      dir,
+      fakeDeps({ verify: ['未完成'] })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.attempt, 1, 'should not retry when the gate is off');
+    assert.equal(done.verdictMeta && done.verdictMeta.source, 'none');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.58 gate: goalVerify=full with no detected test command fails (proof required)', async () => {
+  const dir = tmpDir();
+  try {
+    // detectVerify returns null for every attempt ⇒ no deterministic proof ⇒
+    // the goal can never be marked done and fails at the retry ceiling.
+    const r = await createGoal(
+      { goal: '必须有测试', config: { provider: 'openai', model: 'x', goalVerify: 'full', budget: { retries: 1 } } },
+      dir,
+      fakeDeps({ verify: ['已完成'] })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'failed');
+    assert.match(done.verdict, /未探测到任何测试命令/);
+    assert.equal(done.verdictMeta && done.verdictMeta.source, 'test');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.58 gate: auto mode with no tests uses the fresh-context judge', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '写个功能', config: { provider: 'openai', model: 'x' } },
+      dir,
+      fakeDeps({ verify: ['已完成'] })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.verdictMeta && done.verdictMeta.source, 'judge');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
