@@ -389,6 +389,24 @@ export function defaultConfig() {
   // "memory/experiences" under the workspace (see experience.js defaultExperienceDir).
   experienceDir: '',
 
+  // --- Procedural Skill Crystallization (v0.61) ---
+  // Hermes-style "procedural memory" layer, sitting ON TOP of the v0.60 verified
+  // experience pool. Where experiences store raw "what worked for this goal"
+  // narrative, skills store DISTILLED, reusable procedures (applicable-when /
+  // steps / known-failure-points / verification) that apply to a whole CLASS of
+  // future goals. Skills are ONLY crystallized from goals that pass BOTH the
+  // v0.58 verify gate and the v0.59 outcome gate AND were "complex" (turns>=5 or
+  // a self-heal retry or an outcome gate ran). This structurally prevents the
+  // 2026 failure mode of "memory that remembers its own mistakes". The index is
+  // matched cheaply (name + summary only); only matched bodies are loaded in
+  // full (progressive disclosure) so token cost stays flat as the library grows.
+  //   'on'   (default) recall reusable skills + crystallize new ones.
+  //   'off'  no skill read, no skill write.
+  skillCrystallization: 'on',
+  // Where the skill library lives, relative to the workspace. Empty means
+  // "memory/skills" under the workspace (see skillMemory.js defaultSkillsDir).
+  skillsDir: '',
+
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
     // content-aware (JSON → schema, logs → folded, code → outline) and always
@@ -458,6 +476,8 @@ export function normalizeConfig(input = {}) {
   cfg.goalCritic = cfg.goalCritic === 'off' ? 'off' : 'on';
   cfg.goalMemory = cfg.goalMemory === 'off' ? 'off' : 'on';
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
+  cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
+  cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));

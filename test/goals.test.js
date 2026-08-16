@@ -62,6 +62,13 @@ function fakeDeps(opts = {}) {
     // real fs-backed experience module so tests stay deterministic and offline.
     retrieveExperiences: opts.retrieveExperiences || undefined,
     recordExperience: opts.recordExperience || undefined,
+    // v0.61 — Procedural Skill Crystallization fakes. When provided, override the
+    // real fs-backed skill module so tests stay deterministic and offline.
+    matchSkills: opts.matchSkills || undefined,
+    loadSkillBody: opts.loadSkillBody || undefined,
+    distillSkill: opts.distillSkill || undefined,
+    recordSkill: opts.recordSkill || undefined,
+    updateSkill: opts.updateSkill || undefined,
     createSubAgentRunner: () => async () => ({ ok: true, content: 'sub' }),
     runAgent: async ({ onEvent, messages }) => {
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
@@ -480,6 +487,129 @@ test('v0.60 memory off: neither recalls nor crystallizes', async () => {
     assert.equal(done.status, 'done');
     assert.deepEqual(done.experience, { used: [], recorded: [] }, 'memory off must not read or write');
     assert.equal(mem.store.length, 0, 'recordExperience must not be called when memory is off');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// In-memory skill library store shared between match/load/distill/record so a
+// test can seed/observe skill behaviour deterministically (no real fs, no model).
+function memorySkills() {
+  const store = [];
+  return {
+    match: async () => ({ skills: [], used: [] }),
+    loadBody: async () => null,
+    distill: async () => ({
+      name: '测试编写技能',
+      tags: ['测试', '单测'],
+      summary: '为某模块编写单元测试覆盖',
+      body:
+        '## 适用场景\n需要补全单测的模块\n## 做法步骤\n1. 用 node --test 覆盖边界条件\n## 已知失败点\n无\n## 验证步骤\n跑测试全绿'
+    }),
+    record: async ({ skill }) => {
+      const id = 'skl_new_' + store.length;
+      store.push({ id, ...skill });
+      return id;
+    },
+    update: async () => true,
+    store
+  };
+}
+
+test('v0.61 skill on + complex: distills and crystallizes a new skill', async () => {
+  const dir = tmpDir();
+  try {
+    const sk = memorySkills();
+    const r = await createGoal(
+      { goal: '为网络模块编写单元测试', config: { provider: 'openai', model: 'x', skillCrystallization: 'on' } },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/n.js', 'test/n.test.js'], deletedTestFiles: [], diff: '+ tests' }),
+        turnsPerAttempt: 5, // makes the run "complex" (turns >= 5) ⇒ eligible to crystallize
+        matchSkills: sk.match,
+        loadSkillBody: sk.loadBody,
+        distillSkill: sk.distill,
+        recordSkill: sk.record,
+        updateSkill: sk.update
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.ok(done.skills, 'state.skills should be present');
+    assert.ok(done.skills.crystallized && done.skills.crystallized.length === 1, 'should crystallize exactly one new skill');
+    assert.equal(sk.store.length, 1, 'recordSkill should have been called once');
+    assert.equal(done.skills.crystallized[0], sk.store[0].id, 'crystallized id should match the recorded skill');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.61 skill off: no distillation and no record (even if complex)', async () => {
+  const dir = tmpDir();
+  try {
+    let distillCalls = 0;
+    let recordCalls = 0;
+    const r = await createGoal(
+      { goal: '关掉技能结晶跑一次', config: { provider: 'openai', model: 'x', skillCrystallization: 'off' } },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/d.js'], deletedTestFiles: [], diff: '+ done' }),
+        turnsPerAttempt: 5, // complex, but mode off must suppress crystallization
+        matchSkills: () => {
+          throw new Error('matchSkills must not be called when skill mode is off');
+        },
+        distillSkill: async () => {
+          distillCalls++;
+          return null;
+        },
+        recordSkill: async () => {
+          recordCalls++;
+          return null;
+        }
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(distillCalls, 0, 'distillSkill must not be called when skill mode is off');
+    assert.equal(recordCalls, 0, 'recordSkill must not be called when skill mode is off');
+    assert.deepEqual(done.skills, { used: [], crystallized: [] }, 'skill mode off must not touch skills');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.61 skill on + simple: no distillation (guarded by complexity)', async () => {
+  const dir = tmpDir();
+  try {
+    let distillCalls = 0;
+    const sk = memorySkills();
+    const r = await createGoal(
+      { goal: '做一件简单的事', config: { provider: 'openai', model: 'x', skillCrystallization: 'on' } },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        // Simple path: goalCritic=off + no git baseline ⇒ no outcome gate;
+        // turns=1, attempt=1 ⇒ not "complex", so distillation must be skipped.
+        goalCritic: 'off',
+        matchSkills: sk.match,
+        loadSkillBody: sk.loadBody,
+        distillSkill: async () => {
+          distillCalls++;
+          return null;
+        }
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(distillCalls, 0, 'distillSkill must not run for a simple (non-complex) goal');
+    assert.ok(done.skills, 'skills state should exist');
+    assert.deepEqual(done.skills.crystallized, [], 'no skill crystallized for a simple goal');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

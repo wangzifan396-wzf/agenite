@@ -2988,6 +2988,25 @@ function expChips(g) {
   return parts.join(' ');
 }
 
+// v0.61 — Procedural Skill Crystallization indicator. Surfaces whether this goal
+// leaned on a crystallized reusable skill and/or crystallized a new one.
+function skillChips(g) {
+  const sk = g.skills;
+  if (!sk) return '';
+  const parts = [];
+  if (Array.isArray(sk.used) && sk.used.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill" title="本次参考了过去已结晶、通过验证+复核的可复用技能">技能复用 ×${sk.used.length}</span>`
+    );
+  }
+  if (Array.isArray(sk.crystallized) && sk.crystallized.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill" title="本次复杂目标已通过验证+复核，并蒸馏结晶为一个可复用技能">已结晶技能 ×${sk.crystallized.length}</span>`
+    );
+  }
+  return parts.join(' ');
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -3032,7 +3051,7 @@ function goalCard(g) {
       <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
     g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
   } · ${new Date(g.updatedAt).toLocaleString()}</div>
-      ${expChips(g) ? `<div class="goal-foot">${expChips(g)}</div>` : ''}
+      ${expChips(g) || skillChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g)].filter(Boolean).join(' ')}</div>` : ''}
       ${detail}
     </div>`;
 }

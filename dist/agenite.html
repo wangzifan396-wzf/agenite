@@ -1584,6 +1584,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .gw-pass { background: color-mix(in srgb, #16a34a 16%, transparent); color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
 .gw-fail { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .gw-exp { background: color-mix(in srgb, #0ea5e9 16%, transparent); color: #0ea5e9; border-color: color-mix(in srgb, #0ea5e9 35%, transparent); }
+.gw-skill { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8b5cf6; border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
 .goal-pre {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
@@ -4153,6 +4154,24 @@ function defaultConfig() {
   // "memory/experiences" under the workspace (see experience.js defaultExperienceDir).
   experienceDir: '',
 
+  // --- Procedural Skill Crystallization (v0.61) ---
+  // Hermes-style "procedural memory" layer, sitting ON TOP of the v0.60 verified
+  // experience pool. Where experiences store raw "what worked for this goal"
+  // narrative, skills store DISTILLED, reusable procedures (applicable-when /
+  // steps / known-failure-points / verification) that apply to a whole CLASS of
+  // future goals. Skills are ONLY crystallized from goals that pass BOTH the
+  // v0.58 verify gate and the v0.59 outcome gate AND were "complex" (turns>=5 or
+  // a self-heal retry or an outcome gate ran). This structurally prevents the
+  // 2026 failure mode of "memory that remembers its own mistakes". The index is
+  // matched cheaply (name + summary only); only matched bodies are loaded in
+  // full (progressive disclosure) so token cost stays flat as the library grows.
+  //   'on'   (default) recall reusable skills + crystallize new ones.
+  //   'off'  no skill read, no skill write.
+  skillCrystallization: 'on',
+  // Where the skill library lives, relative to the workspace. Empty means
+  // "memory/skills" under the workspace (see skillMemory.js defaultSkillsDir).
+  skillsDir: '',
+
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
     // content-aware (JSON → schema, logs → folded, code → outline) and always
@@ -4222,6 +4241,8 @@ function normalizeConfig(input = {}) {
   cfg.goalCritic = cfg.goalCritic === 'off' ? 'off' : 'on';
   cfg.goalMemory = cfg.goalMemory === 'off' ? 'off' : 'on';
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
+  cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
+  cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
@@ -8196,6 +8217,25 @@ function expChips(g) {
   return parts.join(' ');
 }
 
+// v0.61 — Procedural Skill Crystallization indicator. Surfaces whether this goal
+// leaned on a crystallized reusable skill and/or crystallized a new one.
+function skillChips(g) {
+  const sk = g.skills;
+  if (!sk) return '';
+  const parts = [];
+  if (Array.isArray(sk.used) && sk.used.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill" title="本次参考了过去已结晶、通过验证+复核的可复用技能">技能复用 ×${sk.used.length}</span>`
+    );
+  }
+  if (Array.isArray(sk.crystallized) && sk.crystallized.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill" title="本次复杂目标已通过验证+复核，并蒸馏结晶为一个可复用技能">已结晶技能 ×${sk.crystallized.length}</span>`
+    );
+  }
+  return parts.join(' ');
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -8240,7 +8280,7 @@ function goalCard(g) {
       <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
     g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
   } · ${new Date(g.updatedAt).toLocaleString()}</div>
-      ${expChips(g) ? `<div class="goal-foot">${expChips(g)}</div>` : ''}
+      ${expChips(g) || skillChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g)].filter(Boolean).join(' ')}</div>` : ''}
       ${detail}
     </div>`;
 }

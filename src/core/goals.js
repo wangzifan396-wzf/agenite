@@ -31,6 +31,15 @@ import {
   recordExperience,
   formatExperiences
 } from './experience.js';
+import {
+  resolveSkillsDir,
+  matchSkills,
+  loadSkillBody,
+  recordSkill,
+  updateSkill,
+  distillSkill,
+  formatSkills
+} from './skillMemory.js';
 
 export const GOALS_DIR = join(defaultMemoryDir(), 'goals');
 const MAX_CONCURRENT = 3;
@@ -424,6 +433,11 @@ function resolveGoalMemoryMode(config) {
   return m === 'off' ? 'off' : 'on';
 }
 
+function resolveSkillCrystallizationMode(config) {
+  const m = (config && config.skillCrystallization) || 'on';
+  return m === 'off' ? 'off' : 'on';
+}
+
 // Run a git command in the workspace; resolve to stdout or null on any failure
 // (not a repo, git missing, timeout). Never throws — the outcome gate must
 // degrade gracefully to "skip" when git isn't usable.
@@ -664,6 +678,42 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     // Surface reused-experience ids on the goal for the UI; filled in on success.
     state.experience = { used: expEntries.map((e) => e.id), recorded: [] };
 
+    // ── v0.61 Procedural Skill Crystallization ──
+    // Recall the skill INDEX (cheap: name + summary only) and load the full
+    // body of only the top-k matches into the system prompt (progressive
+    // disclosure). New proven-complex goals crystallize new skills further
+    // below, in the effectiveDone block.
+    const skillMode = resolveSkillCrystallizationMode(config);
+    const skMatch = deps && deps.matchSkills ? deps.matchSkills : matchSkills;
+    const skLoadBody = deps && deps.loadSkillBody ? deps.loadSkillBody : loadSkillBody;
+    let skillsDir = '';
+    let skillMetas = [];
+    let skillBodies = [];
+    let skillBlock = '';
+    if (skillMode === 'on') {
+      skillsDir = resolveSkillsDir(config, workspace);
+      try {
+        const mp = await skMatch({ dir: skillsDir, goal: state.goal, k: 3 });
+        skillMetas = mp.skills || [];
+        if (skillMetas.length) {
+          for (const meta of skillMetas) {
+            try {
+              const body = await skLoadBody({ dir: skillsDir, id: meta.id });
+              if (body) skillBodies.push(body);
+            } catch {
+              /* ignore one failed load */
+            }
+          }
+          if (skillBodies.length) skillBlock = formatSkills(skillBodies);
+        }
+      } catch {
+        skillMetas = [];
+        skillBodies = [];
+        skillBlock = '';
+      }
+    }
+    state.skills = { used: skillMetas.map((s) => s.id), crystallized: [] };
+
     const realCallModel = (msgs, o = {}) =>
       callModelStream({
         config: { ...config, dangerTools: true, approvalMode: 'auto' },
@@ -684,6 +734,21 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     const cm = deps && deps.callModel ? deps.callModel : realCallModel;
     const ex = deps && deps.executeTool ? deps.executeTool : realExecute;
     const summarize = makeSummarize(cm);
+
+    // v0.61 skill distillation uses a TOOL-FREE model call so the distiller
+    // emits a clean procedure, not tool invocations. Tests inject fakes so the
+    // whole lifecycle runs without a network.
+    const distillModel = deps && deps.callModel
+      ? deps.callModel
+      : (msgs) =>
+          callModelStream({
+            config: { ...config, dangerTools: true, approvalMode: 'auto' },
+            messages: msgs,
+            signal: ac.signal
+          });
+    const skDistill = deps && deps.distillSkill ? deps.distillSkill : distillSkill;
+    const skRecord = deps && deps.recordSkill ? deps.recordSkill : recordSkill;
+    const skUpdate = deps && deps.updateSkill ? deps.updateSkill : updateSkill;
 
     const onSubEvent = (sid, sname, type) => append('subagent', `[${sname}] ${type}`);
     const realRunSub = createSubAgentRunner({
@@ -749,7 +814,10 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     // own verdict and let it re-run a tighter attempt — bounded by budget.retries
     // and the cumulative turn/cost ceiling. This is the "agent fixes its own
     // failures" loop that makes delegated goals feel reliable.
-    const systemPrompt = buildGoalSystemPrompt(state.goal, planText, workspace) + (expBlock ? '\n\n' + expBlock : '');
+    const systemPrompt =
+      buildGoalSystemPrompt(state.goal, planText, workspace) +
+      (expBlock ? '\n\n' + expBlock : '') +
+      (skillBlock ? '\n\n' + skillBlock : '');
     const messages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `目标：${state.goal}\n\n请开始执行上面的计划。完成后给出最终总结。` }
@@ -892,6 +960,58 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
             /* memory write failure must never fail the goal */
           }
         }
+
+        // ── v0.61 skill crystallization ──
+        // Only "complex" goals that passed BOTH gates become reusable skills.
+        // "Complex" = enough turns, OR a self-heal retry, OR an outcome gate ran.
+        // This is the structural guard against "memory that remembers its own
+        // mistakes": a trivial or failed run can never seed a skill.
+        if (skillMode === 'on' && skillsDir && gate.source !== 'none') {
+          const complex = state.turns >= 5 || attempt > 1 || !!outcome;
+          if (complex) {
+            try {
+              const distilled = await skDistill({
+                cm: distillModel,
+                goal: state.goal,
+                approach: state.plan || '',
+                verification: state.verdict || '',
+                outcome: state.outcome ? state.outcome.detail : '',
+                model: config.model || ''
+              });
+              if (distilled && distilled.name) {
+                const similar = skillMetas.find(
+                  (s) => String(s.name || '').trim().toLowerCase() === String(distilled.name).trim().toLowerCase()
+                );
+                if (similar) {
+                  await skUpdate({
+                    dir: skillsDir,
+                    id: similar.id,
+                    patch: { body: distilled.body, summary: distilled.summary, tags: distilled.tags }
+                  });
+                  state.skills.crystallized = [similar.id];
+                  append('system', '技能已精炼（更新已有）：' + similar.id);
+                } else {
+                  const sid = await skRecord({
+                    dir: skillsDir,
+                    skill: {
+                      name: distilled.name,
+                      tags: distilled.tags,
+                      summary: distilled.summary,
+                      body: distilled.body
+                    }
+                  });
+                  if (sid) {
+                    state.skills.crystallized = [sid];
+                    append('system', '已结晶技能（通过验证+复核+复杂）：' + sid);
+                  }
+                }
+              }
+            } catch {
+              /* skill write failure must never fail the goal */
+            }
+          }
+        }
+
         state.phase = 'report';
         state.status = 'done';
         state.error = '';

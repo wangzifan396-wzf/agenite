@@ -27,7 +27,7 @@ export function resolveExperienceDir(config, workspace) {
 
 // Lightweight, dependency-free tokenizer: latin/number runs + CJK bigrams.
 // Bigrams let us catch phrase similarity in Chinese without a dictionary.
-function tokenize(text) {
+export function tokenize(text) {
   if (!text) return [];
   const s = String(text).toLowerCase();
   const out = [];
@@ -42,7 +42,7 @@ function tokenize(text) {
 }
 
 // Cosine-ish overlap in [0,1]: count shared unique tokens over sqrt(|a|*|b|).
-function overlap(aTok, bTok) {
+export function overlap(aTok, bTok) {
   if (!aTok.length || !bTok.length) return 0;
   const setB = new Set(bTok);
   const seen = new Set();
