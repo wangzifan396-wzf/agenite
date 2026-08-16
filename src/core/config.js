@@ -406,6 +406,21 @@ export function defaultConfig() {
   // Where the skill library lives, relative to the workspace. Empty means
   // "memory/skills" under the workspace (see skillMemory.js defaultSkillsDir).
   skillsDir: '',
+  // --- Skill Curation & Pruning (v0.63) ---
+  // The v0.61 skill library only GROWS; left alone it becomes the "junk drawer"
+  // failure mode Hermes itself warns about (skill proliferation without
+  // curation). Curation runs after every goal: cap the library size, dedupe
+  // skills that target the same goal, and archive (never delete) skills with no
+  // recorded use past skillDecayDays. Archiving is a status flip in index.json;
+  // the .md body stays on disk for review, so history is never lost.
+  //   'on'   (default) curate the library automatically after each goal.
+  //   'off'  keep every skill forever — no pruning.
+  skillCuration: 'on',
+  // Hard ceiling on ACTIVE skills. Beyond this, the lowest-value entries are
+  // archived, keeping recall cheap and the injected prompt uncluttered.
+  maxSkills: 60,
+  // A skill with zero recorded uses AND older than this many days is archived.
+  skillDecayDays: 90,
 
   // --- Multi-Model Intelligent Routing (v0.62) ---
   // 2026 consensus: split a goal into a cheap "executor" loop (tool-calling,
@@ -494,6 +509,9 @@ export function normalizeConfig(input = {}) {
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
   cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
   cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';
+  cfg.skillCuration = cfg.skillCuration === 'off' ? 'off' : 'on';
+  cfg.maxSkills = Math.round(clampNum(cfg.maxSkills, 1, 1000, 60));
+  cfg.skillDecayDays = Math.round(clampNum(cfg.skillDecayDays, 0, 3650, 90));
   cfg.modelRouter = cfg.modelRouter === 'on' ? 'on' : 'off';
   cfg.reasoningModel = typeof cfg.reasoningModel === 'string' ? cfg.reasoningModel.trim().slice(0, 200) : '';
   cfg.executorModel = typeof cfg.executorModel === 'string' ? cfg.executorModel.trim().slice(0, 200) : '';

@@ -2262,6 +2262,10 @@ function fillSettings() {
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
   $('set-memoryEnabled').checked = config.memoryEnabled !== false;
   $('set-autoSkill').checked = config.autoSkill === true;
+  $('set-skillCrystallization').checked = config.skillCrystallization !== 'off';
+  $('set-skillCuration').checked = config.skillCuration !== 'off';
+  $('set-maxSkills').value = config.maxSkills || 60;
+  $('set-skillDecayDays').value = config.skillDecayDays || 90;
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -2453,6 +2457,10 @@ function saveSettings() {
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
+    skillCrystallization: $('set-skillCrystallization').checked ? 'on' : 'off',
+    skillCuration: $('set-skillCuration').checked ? 'on' : 'off',
+    maxSkills: clampNum($('set-maxSkills').value, 1, 1000, 60),
+    skillDecayDays: clampNum($('set-skillDecayDays').value, 0, 3650, 90),
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -3015,6 +3023,11 @@ function skillChips(g) {
   if (Array.isArray(sk.crystallized) && sk.crystallized.length) {
     parts.push(
       `<span class="gw-chip gw-skill" title="本次复杂目标已通过验证+复核，并蒸馏结晶为一个可复用技能">已结晶技能 ×${sk.crystallized.length}</span>`
+    );
+  }
+  if (Array.isArray(sk.pruned) && sk.pruned.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill gw-skill-pruned" title="跑完本次目标后，技能库自动策展归档了这些低价值/重复/久未用技能（.md 文件保留在磁盘，可找回）">策展归档 ×${sk.pruned.length}</span>`
     );
   }
   return parts.join(' ');

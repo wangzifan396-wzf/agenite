@@ -66,6 +66,8 @@ export function matchSkills({ dir, goal, k = 3, deps } = {}) {
   if (!qTok.length) return { skills: [], used: [] };
   const scored = [];
   for (const s of idx.skills) {
+    // v0.63 — archived skills are parked for review, never recalled into context.
+    if (s.status === 'archived') continue;
     const corpus = tokenize(
       [s.name, (s.tags || []).join(' '), s.summary].filter(Boolean).join(' ')
     );
@@ -108,12 +110,26 @@ export function recordSkill({ dir, skill, deps } = {}) {
   }
   const id = (skill && skill.id) || genId(c);
   const file = `${id}.md`;
+  // v0.63 — every skill carries lightweight bookkeeping metadata so the library
+  // can curate itself. A freshly crystallized skill is PROVEN (it passed the
+  // v0.58 verify + v0.59 outcome gates before reaching here), so it starts with
+  // high confidence; usage accrues over time via bumpUsage().
+  const nowDate = new Date().toISOString().slice(0, 10);
+  const confidence = Number.isFinite(Number(skill.confidence))
+    ? Math.min(1, Math.max(0, Number(skill.confidence)))
+    : 0.9;
   const rec = {
     id,
     name: skill.name,
     tags: Array.isArray(skill.tags) ? skill.tags.filter((x) => typeof x === 'string').slice(0, 12) : [],
     summary: String(skill.summary || '').slice(0, 240),
-    file
+    file,
+    used: Math.max(0, Number(skill.used) || 0),
+    confidence,
+    lastUsed: skill.lastUsed || '',
+    created: skill.created || nowDate,
+    goal: String(skill.goal || '').slice(0, 400),
+    status: skill.status === 'archived' ? 'archived' : 'active'
   };
   try {
     f.writeFileSync(p.join(dir, file), skill.body || '', 'utf8');
@@ -259,6 +275,143 @@ export function formatSkills(skills) {
     '优先套用其做法步骤，但需结合本次实际情况判断，不要盲从：\n\n' +
     blocks.join('\n\n')
   );
+}
+
+// ── v0.63 Skill Curation & Pruning ────────────────────────────────────
+// Hermes-style procedural memory has a documented failure mode: without
+// curation, the skill library grows into a noisy "junk drawer" (Hermes's own
+// operators must prune by hand). We close it with three cheap, deterministic
+// operations that run AFTER every crystallization:
+//   Cap    — if active skills exceed maxSkills, archive the lowest-value ones.
+//   Dedup  — skills targeting the same goal keep the best, archive the rest.
+//   Decay  — skills with no recorded use AND older than decayDays are archived.
+// Archiving is a status flip in index.json; the .md body stays on disk, so the
+// library is self-cleaning but never loses history. Every path is deps-injectable.
+
+export function resolveSkillCurationMode(config = {}) {
+  return config && config.skillCuration === 'off' ? 'off' : 'on';
+}
+
+// Normalize an index entry into typed metadata with safe defaults, so a skill
+// written before v0.63 (no meta fields) keeps working untouched.
+function withSkillMeta(s = {}) {
+  const used = Math.max(0, Number(s.used) || 0);
+  const conf = Number.isFinite(Number(s.confidence)) ? Math.min(1, Math.max(0, Number(s.confidence))) : 0.5;
+  return {
+    id: s.id || '',
+    name: s.name || '',
+    tags: Array.isArray(s.tags) ? s.tags : [],
+    summary: s.summary || '',
+    file: s.file || '',
+    used,
+    confidence: conf,
+    lastUsed: s.lastUsed || '',
+    created: s.created || '',
+    goal: s.goal || '',
+    status: s.status === 'archived' ? 'archived' : 'active'
+  };
+}
+
+// Usage-weighted value used to rank skills for capping/dedup. A proven-but-unused
+// skill still ranks above a stale, never-used one, so curation trims dead weight
+// before it trims fresh, high-confidence procedure.
+function skillValue(s) {
+  const used = Math.max(0, Number(s.used) || 0);
+  let conf = Number(s.confidence);
+  if (!Number.isFinite(conf)) conf = 0.5;
+  conf = Math.min(1, Math.max(0, conf));
+  return (used + 1) * (0.3 + 0.7 * conf);
+}
+
+function normGoalKey(g) {
+  return String(g || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9一-龥]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
+// Record that a skill was actually pulled/used. Pure bookkeeping that lets the
+// curation step tell "trusted, reused" from "dead weight".
+export function bumpUsage({ dir, id, deps } = {}) {
+  const f = (deps && deps.fs) || fs;
+  const p = (deps && deps.path) || path;
+  if (!dir || !id) return false;
+  const idx = loadIndex({ dir, deps });
+  const i = idx.skills.findIndex((s) => s.id === id);
+  if (i < 0) return false;
+  idx.skills[i].used = Math.max(0, Number(idx.skills[i].used) || 0) + 1;
+  idx.skills[i].lastUsed = new Date().toISOString().slice(0, 10);
+  if (idx.skills[i].status === 'archived') idx.skills[i].status = 'active';
+  try {
+    f.writeFileSync(p.join(dir, 'index.json'), JSON.stringify(idx, null, 2), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Curate the library. Returns { skipped, archived:[ids], active, total }.
+export function curateSkills({ dir, config = {}, deps } = {}) {
+  const f = (deps && deps.fs) || fs;
+  const p = (deps && deps.path) || path;
+  if (resolveSkillCurationMode(config) === 'off') return { skipped: true, archived: [], active: 0, total: 0 };
+  if (!dir) return { skipped: false, archived: [], active: 0, total: 0 };
+  const maxSkills = Math.max(1, Math.round(Number(config.maxSkills) || 60));
+  const decayDays = Math.max(0, Math.round(Number(config.skillDecayDays) || 90));
+  const idx = loadIndex({ dir, deps });
+  const skills = (idx.skills || []).map(withSkillMeta);
+  const now = Date.now();
+  const decayMs = decayDays * 86400000;
+  const archived = [];
+  const archive = (s) => {
+    if (s.status === 'archived') return;
+    s.status = 'archived';
+    archived.push(s.id);
+  };
+
+  // 1) Dedup by goal — keep the highest-value, archive the rest. Only skills with
+  // a real goal key are deduplicated, so distinct named skills are never merged.
+  const groups = new Map();
+  for (const s of skills) {
+    if (s.status === 'archived' || !s.goal) continue;
+    const key = normGoalKey(s.goal);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue;
+    group.sort((a, b) => skillValue(b) - skillValue(a));
+    for (let i = 1; i < group.length; i++) archive(group[i]);
+  }
+
+  // 2) Decay — never-used skills older than decayDays are archived. A skill that
+  // has proven useful at least once is kept regardless of age.
+  if (decayDays > 0) {
+    for (const s of skills) {
+      if (s.status === 'archived' || Number(s.used) > 0) continue;
+      const created = s.created ? Date.parse(s.created) : 0;
+      if (created && now - created > decayMs) archive(s);
+    }
+  }
+
+  // 3) Cap — archive lowest-value actives until within maxSkills.
+  const active = skills.filter((s) => s.status !== 'archived');
+  active.sort((a, b) => skillValue(b) - skillValue(a));
+  for (let i = maxSkills; i < active.length; i++) archive(active[i]);
+
+  if (archived.length) {
+    idx.skills = skills;
+    try {
+      f.writeFileSync(p.join(dir, 'index.json'), JSON.stringify(idx, null, 2), 'utf8');
+    } catch {
+      /* write failure must never throw out of curation */
+    }
+  }
+  const finalActive = skills.filter((s) => s.status !== 'archived').length;
+  return { skipped: false, archived, active: finalActive, total: skills.length };
 }
 
 function genId(c) {

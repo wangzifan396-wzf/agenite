@@ -1589,6 +1589,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .router-fields { border: 1px dashed color-mix(in srgb, #14b8a6 40%, var(--border)); border-radius: 10px; padding: 12px 14px; margin: 4px 0 10px; background: color-mix(in srgb, #14b8a6 5%, transparent); }
 .router-fields .field-row { margin-top: 0; }
 .gw-skill { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8b5cf6; border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
+.gw-skill-pruned { background: color-mix(in srgb, #f59e0b 14%, transparent); color: #b45309; border-color: color-mix(in srgb, #f59e0b 32%, transparent); }
 .goal-pre {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
@@ -3250,6 +3251,21 @@ select.text-input { appearance: auto; padding-right: 8px; }
             <input id="set-autoSkill" type="checkbox" />
           </label>
           <label class="switch-row">
+            <span><b>技能程序化结晶</b><em>复杂目标通过验证+复核后，蒸馏成结构化可复用技能，越用越聪明（v0.61）</em></span>
+            <input id="set-skillCrystallization" type="checkbox" checked />
+          </label>
+          <label class="switch-row">
+            <span><b>技能库自动策展</b><em>目标跑完自动裁剪：超上限归档垫底技能、同目标去重、久未用归档（v0.63，绝不删除文件）</em></span>
+            <input id="set-skillCuration" type="checkbox" checked />
+          </label>
+          <div class="field">
+            <span class="field-title">技能库上限 / 衰减天数<em class="muted small">活跃技能超过上限时归档垫底者；零使用且超过衰减天数的技能归档</em></span>
+            <div class="btn-row">
+              <input id="set-maxSkills" type="number" min="1" max="1000" value="60" style="width:96px" title="活跃技能上限" />
+              <input id="set-skillDecayDays" type="number" min="0" max="3650" value="90" style="width:96px" title="零使用技能衰减天数" />
+            </div>
+          </div>
+          <label class="switch-row">
             <span><b>记忆图谱注入推理</b><em>每次对话把本地知识图谱压成摘要注入系统提示词，让 agent 主动引用已知的人物 / 项目 / 关系（关闭则图谱只作可视化，不参与推理）</em></span>
             <input id="set-atlasInject" type="checkbox" checked />
           </label>
@@ -4190,6 +4206,21 @@ function defaultConfig() {
   // Where the skill library lives, relative to the workspace. Empty means
   // "memory/skills" under the workspace (see skillMemory.js defaultSkillsDir).
   skillsDir: '',
+  // --- Skill Curation & Pruning (v0.63) ---
+  // The v0.61 skill library only GROWS; left alone it becomes the "junk drawer"
+  // failure mode Hermes itself warns about (skill proliferation without
+  // curation). Curation runs after every goal: cap the library size, dedupe
+  // skills that target the same goal, and archive (never delete) skills with no
+  // recorded use past skillDecayDays. Archiving is a status flip in index.json;
+  // the .md body stays on disk for review, so history is never lost.
+  //   'on'   (default) curate the library automatically after each goal.
+  //   'off'  keep every skill forever — no pruning.
+  skillCuration: 'on',
+  // Hard ceiling on ACTIVE skills. Beyond this, the lowest-value entries are
+  // archived, keeping recall cheap and the injected prompt uncluttered.
+  maxSkills: 60,
+  // A skill with zero recorded uses AND older than this many days is archived.
+  skillDecayDays: 90,
 
   // --- Multi-Model Intelligent Routing (v0.62) ---
   // 2026 consensus: split a goal into a cheap "executor" loop (tool-calling,
@@ -4278,6 +4309,9 @@ function normalizeConfig(input = {}) {
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
   cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
   cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';
+  cfg.skillCuration = cfg.skillCuration === 'off' ? 'off' : 'on';
+  cfg.maxSkills = Math.round(clampNum(cfg.maxSkills, 1, 1000, 60));
+  cfg.skillDecayDays = Math.round(clampNum(cfg.skillDecayDays, 0, 3650, 90));
   cfg.modelRouter = cfg.modelRouter === 'on' ? 'on' : 'off';
   cfg.reasoningModel = typeof cfg.reasoningModel === 'string' ? cfg.reasoningModel.trim().slice(0, 200) : '';
   cfg.executorModel = typeof cfg.executorModel === 'string' ? cfg.executorModel.trim().slice(0, 200) : '';
@@ -7529,6 +7563,10 @@ function fillSettings() {
   $('set-mcpReadonly').checked = config.mcpAutoApproveReadonly !== false;
   $('set-memoryEnabled').checked = config.memoryEnabled !== false;
   $('set-autoSkill').checked = config.autoSkill === true;
+  $('set-skillCrystallization').checked = config.skillCrystallization !== 'off';
+  $('set-skillCuration').checked = config.skillCuration !== 'off';
+  $('set-maxSkills').value = config.maxSkills || 60;
+  $('set-skillDecayDays').value = config.skillDecayDays || 90;
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -7720,6 +7758,10 @@ function saveSettings() {
     autoCompact: $('set-autoCompact').checked,
     smartCompact: $('set-smartCompact').checked,
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
+    skillCrystallization: $('set-skillCrystallization').checked ? 'on' : 'off',
+    skillCuration: $('set-skillCuration').checked ? 'on' : 'off',
+    maxSkills: clampNum($('set-maxSkills').value, 1, 1000, 60),
+    skillDecayDays: clampNum($('set-skillDecayDays').value, 0, 3650, 90),
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -8282,6 +8324,11 @@ function skillChips(g) {
   if (Array.isArray(sk.crystallized) && sk.crystallized.length) {
     parts.push(
       `<span class="gw-chip gw-skill" title="本次复杂目标已通过验证+复核，并蒸馏结晶为一个可复用技能">已结晶技能 ×${sk.crystallized.length}</span>`
+    );
+  }
+  if (Array.isArray(sk.pruned) && sk.pruned.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill gw-skill-pruned" title="跑完本次目标后，技能库自动策展归档了这些低价值/重复/久未用技能（.md 文件保留在磁盘，可找回）">策展归档 ×${sk.pruned.length}</span>`
     );
   }
   return parts.join(' ');

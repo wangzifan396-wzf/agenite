@@ -88,7 +88,11 @@ function fakeDeps(opts = {}) {
     // v0.62 — routeModel is deps-injectable so the routing tier split is
     // unit-testable without a network. When omitted, goals.js uses its real
     // routeModel wrapper (which forwards to callModel with the resolved model).
-    routeModel: opts.routeModel || undefined
+    routeModel: opts.routeModel || undefined,
+    // v0.63 — Skill Curation & Pruning deps. Injected so the curation wiring can
+    // be asserted without touching real disk.
+    curateSkills: opts.curateSkills || undefined,
+    bumpSkillUsage: opts.bumpSkillUsage || undefined
   };
 }
 
@@ -588,7 +592,7 @@ test('v0.61 skill off: no distillation and no record (even if complex)', async (
     assert.equal(done.status, 'done');
     assert.equal(distillCalls, 0, 'distillSkill must not be called when skill mode is off');
     assert.equal(recordCalls, 0, 'recordSkill must not be called when skill mode is off');
-    assert.deepEqual(done.skills, { used: [], crystallized: [] }, 'skill mode off must not touch skills');
+    assert.deepEqual(done.skills, { used: [], crystallized: [], pruned: [] }, 'skill mode off must not touch skills');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -763,6 +767,67 @@ test('v0.62 router off: single model, no tier split', async () => {
       routedCalls.every((c) => c.model === 'only-model'),
       'router off must route everything to the single model'
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.63 skill curation is wired into the goal lifecycle', async () => {
+  const dir = tmpDir();
+  try {
+    let curateCalls = 0;
+    let curateArg = null;
+    const r = await createGoal(
+      {
+        goal: '复杂目标，跑完后应触发技能库策展',
+        config: { provider: 'openai', model: 'x', apiKey: 'k', skillCrystallization: 'on', skillCuration: 'on', maxSkills: 60, skillDecayDays: 90 }
+      },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/f.js'], deletedTestFiles: [], diff: '+ done' }),
+        // Curate away the real disk module: just record the call.
+        curateSkills: async (arg) => { curateCalls++; curateArg = arg; return { skipped: false, archived: ['old1'], active: 1, total: 2 }; },
+        // matchSkills returns nothing so no real skill body is loaded/bumped.
+        matchSkills: async () => ({ skills: [], used: [] })
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(curateCalls, 1, 'curateSkills must be called exactly once after the goal settles');
+    assert.ok(curateArg && curateArg.dir, 'curateSkills receives the skills dir');
+    assert.equal(curateArg.config.skillCuration, 'on', 'curation config is forwarded');
+    assert.ok(Array.isArray(done.skills.pruned), 'state.skills.pruned is initialized as an array');
+    assert.deepEqual(done.skills.pruned, ['old1'], 'curate result is surfaced on the goal');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.63 skill curation is skipped when skillCuration is off', async () => {
+  const dir = tmpDir();
+  try {
+    let curateCalls = 0;
+    const r = await createGoal(
+      {
+        goal: '关闭策展时不应裁剪',
+        config: { provider: 'openai', model: 'x', apiKey: 'k', skillCuration: 'off' }
+      },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/f.js'], deletedTestFiles: [], diff: '+ done' }),
+        curateSkills: async () => { curateCalls++; return { skipped: true, archived: [], active: 0, total: 0 }; },
+        matchSkills: async () => ({ skills: [], used: [] })
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(curateCalls, 0, 'curateSkills must NOT be called when skillCuration=off');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

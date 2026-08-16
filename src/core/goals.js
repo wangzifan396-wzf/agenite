@@ -38,7 +38,10 @@ import {
   recordSkill,
   updateSkill,
   distillSkill,
-  formatSkills
+  formatSkills,
+  bumpUsage,
+  curateSkills,
+  resolveSkillCurationMode
 } from './skillMemory.js';
 import {
   resolveRouterMode,
@@ -691,6 +694,8 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     const skillMode = resolveSkillCrystallizationMode(config);
     const skMatch = deps && deps.matchSkills ? deps.matchSkills : matchSkills;
     const skLoadBody = deps && deps.loadSkillBody ? deps.loadSkillBody : loadSkillBody;
+    const skBump = deps && deps.bumpSkillUsage ? deps.bumpSkillUsage : bumpUsage;
+    const skCurate = deps && deps.curateSkills ? deps.curateSkills : curateSkills;
     let skillsDir = '';
     let skillMetas = [];
     let skillBodies = [];
@@ -705,6 +710,8 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
             try {
               const body = await skLoadBody({ dir: skillsDir, id: meta.id });
               if (body) skillBodies.push(body);
+              // v0.63 — a pulled skill is a used skill; accrues value for curation.
+              try { await skBump({ dir: skillsDir, id: meta.id, deps }); } catch {}
             } catch {
               /* ignore one failed load */
             }
@@ -717,7 +724,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
         skillBlock = '';
       }
     }
-    state.skills = { used: skillMetas.map((s) => s.id), crystallized: [] };
+    state.skills = { used: skillMetas.map((s) => s.id), crystallized: [], pruned: [] };
 
     const realCallModel = (msgs, o = {}) =>
       callModelStream({
@@ -1066,6 +1073,22 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       );
       messages.push({ role: 'system', content: feedback.join('\n') });
       append('system', '验证/复核未通过，准备复盘重试');
+    }
+
+    // ── v0.63 Skill Curation & Pruning ──
+    // The self-improving loop (v0.60 memory + v0.61 skill crystallization) must
+    // not accumulate a "junk drawer". After the goal settles, curate the library:
+    // cap size, dedupe by goal, decay unused — archiving (never deleting) losers.
+    if (skillMode === 'on' && skillsDir && resolveSkillCurationMode(config) !== 'off') {
+      try {
+        const cresult = await skCurate({ dir: skillsDir, config, deps });
+        if (cresult && cresult.archived && cresult.archived.length) {
+          state.skills.pruned = cresult.archived;
+          append('system', '技能库策展：归档 ' + cresult.archived.length + ' 个低价值/重复/久未用技能（活跃 ' + cresult.active + '/' + cresult.total + '）');
+        }
+      } catch {
+        /* curation must never fail the goal */
+      }
     }
 
     flush();
