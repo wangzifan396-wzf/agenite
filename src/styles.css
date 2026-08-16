@@ -1575,6 +1575,10 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .gw-pass { background: color-mix(in srgb, #16a34a 16%, transparent); color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
 .gw-fail { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .gw-exp { background: color-mix(in srgb, #0ea5e9 16%, transparent); color: #0ea5e9; border-color: color-mix(in srgb, #0ea5e9 35%, transparent); }
+.gw-route { background: color-mix(in srgb, #14b8a6 16%, transparent); color: #14b8a6; border-color: color-mix(in srgb, #14b8a6 35%, transparent); }
+.gw-route-tag { background: color-mix(in srgb, #14b8a6 18%, transparent); color: #14b8a6; border: 1px solid color-mix(in srgb, #14b8a6 35%, transparent); font-size: 10px; padding: 0 5px; border-radius: 6px; vertical-align: middle; }
+.router-fields { border: 1px dashed color-mix(in srgb, #14b8a6 40%, var(--border)); border-radius: 10px; padding: 12px 14px; margin: 4px 0 10px; background: color-mix(in srgb, #14b8a6 5%, transparent); }
+.router-fields .field-row { margin-top: 0; }
 .gw-skill { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8b5cf6; border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
 .goal-pre {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);

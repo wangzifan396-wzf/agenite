@@ -40,6 +40,11 @@ import {
   distillSkill,
   formatSkills
 } from './skillMemory.js';
+import {
+  resolveRouterMode,
+  pickModel,
+  routeModel
+} from './modelRouter.js';
 
 export const GOALS_DIR = join(defaultMemoryDir(), 'goals');
 const MAX_CONCURRENT = 3;
@@ -716,7 +721,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
 
     const realCallModel = (msgs, o = {}) =>
       callModelStream({
-        config: { ...config, dangerTools: true, approvalMode: 'auto' },
+        config: { ...config, model: (o && o.model) || config.model, dangerTools: true, approvalMode: 'auto' },
         messages: msgs,
         tools,
         onDelta: o && o.onDelta,
@@ -733,26 +738,48 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
 
     const cm = deps && deps.callModel ? deps.callModel : realCallModel;
     const ex = deps && deps.executeTool ? deps.executeTool : realExecute;
-    const summarize = makeSummarize(cm);
+
+    // ── v0.62 Multi-Model Intelligent Routing ──
+    // Build a reasoning-tier wrapper (plan / verify / outcome / distill) and an
+    // executor-tier wrapper (the autonomous tool loop + final summary). Each is
+    // a thin shim over cm that injects the right model string; everything else
+    // (tool access, gates, self-heal) is identical. When modelRouter is off both
+    // wrappers resolve to config.model, so behaviour is unchanged. routeModel is
+    // deps-injectable so goals.js stays unit-testable without a network.
+    const routerMode = resolveRouterMode(config);
+    const routeModelImpl = deps && deps.routeModel ? deps.routeModel : routeModel;
+    const cmR = routeModelImpl({ config, routerMode, cm, tier: 'reasoning' });
+    const cmE = routeModelImpl({ config, routerMode, cm, tier: 'executor' });
+    state.models = {
+      mode: routerMode,
+      default: config.model || '',
+      reasoning: pickModel({ config, routerMode, tier: 'reasoning' }),
+      executor: pickModel({ config, routerMode, tier: 'executor' })
+    };
+
+    const summarize = makeSummarize(cmR);
 
     // v0.61 skill distillation uses a TOOL-FREE model call so the distiller
-    // emits a clean procedure, not tool invocations. Tests inject fakes so the
-    // whole lifecycle runs without a network.
-    const distillModel = deps && deps.callModel
-      ? deps.callModel
-      : (msgs) =>
-          callModelStream({
-            config: { ...config, dangerTools: true, approvalMode: 'auto' },
-            messages: msgs,
-            signal: ac.signal
-          });
+    // emits a clean procedure, not tool invocations. v0.62 routes it onto the
+    // REASONING tier (it is a compression/reasoning task); when the router is
+    // off this is simply config.model. Tests inject fakes so the whole
+    // lifecycle runs without a network.
+    const distillModel = (msgs, o = {}) => {
+      const m = pickModel({ config, routerMode, tier: 'reasoning' }) || config.model;
+      if (deps && deps.callModel) return deps.callModel(msgs, { ...(o || {}), model: m });
+      return callModelStream({
+        config: { ...config, model: m, dangerTools: true, approvalMode: 'auto' },
+        messages: msgs,
+        signal: ac.signal
+      });
+    };
     const skDistill = deps && deps.distillSkill ? deps.distillSkill : distillSkill;
     const skRecord = deps && deps.recordSkill ? deps.recordSkill : recordSkill;
     const skUpdate = deps && deps.updateSkill ? deps.updateSkill : updateSkill;
 
     const onSubEvent = (sid, sname, type) => append('subagent', `[${sname}] ${type}`);
     const realRunSub = createSubAgentRunner({
-      callModel: cm,
+      callModel: cmE,
       executeTool: ex,
       baseConfig: { ...config, dangerTools: true, approvalMode: 'auto' },
       tools,
@@ -804,7 +831,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     state.phase = 'plan';
     append('system', '阶段 1/3 · 制定计划');
     flush();
-    const planText = await makePlan(cm, state.goal, workspace);
+    const planText = await makePlan(cmR, state.goal, workspace);
     state.plan = planText;
     append('plan', planText);
     flush();
@@ -832,7 +859,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       flush();
       const result = await ra({
         messages,
-        callModel: cm,
+        callModel: cmE,
         executeTool: ex,
         onEvent,
         config: {
@@ -875,7 +902,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       append('system', '阶段 3/3 · 验证门控');
       flush();
       const gate = await verifyGate({
-        cm,
+        cm: cmR,
         goal: state.goal,
         state,
         workspace,
@@ -905,7 +932,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       let outcome = null;
       if (gate.done && resolveGoalCriticMode(config) === 'on') {
         try {
-          outcome = await outcomeGate({ cm, goal: state.goal, state, workspace, config, baselineRef, getDiffFn });
+          outcome = await outcomeGate({ cm: cmR, goal: state.goal, state, workspace, config, baselineRef, getDiffFn });
         } catch {
           outcome = null;
         }

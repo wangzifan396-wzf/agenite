@@ -1584,6 +1584,10 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .gw-pass { background: color-mix(in srgb, #16a34a 16%, transparent); color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
 .gw-fail { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .gw-exp { background: color-mix(in srgb, #0ea5e9 16%, transparent); color: #0ea5e9; border-color: color-mix(in srgb, #0ea5e9 35%, transparent); }
+.gw-route { background: color-mix(in srgb, #14b8a6 16%, transparent); color: #14b8a6; border-color: color-mix(in srgb, #14b8a6 35%, transparent); }
+.gw-route-tag { background: color-mix(in srgb, #14b8a6 18%, transparent); color: #14b8a6; border: 1px solid color-mix(in srgb, #14b8a6 35%, transparent); font-size: 10px; padding: 0 5px; border-radius: 6px; vertical-align: middle; }
+.router-fields { border: 1px dashed color-mix(in srgb, #14b8a6 40%, var(--border)); border-radius: 10px; padding: 12px 14px; margin: 4px 0 10px; background: color-mix(in srgb, #14b8a6 5%, transparent); }
+.router-fields .field-row { margin-top: 0; }
 .gw-skill { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8b5cf6; border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
 .goal-pre {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
@@ -3160,6 +3164,21 @@ select.text-input { appearance: auto; padding-right: 8px; }
             <datalist id="model-list"></datalist>
             <p class="muted small">切换「供应商」后会自动列出该服务商的常用模型（一键选择）。也可直接填写任意模型 ID。上下文窗口用于预算估算与压缩触发。</p>
           </label>
+          <label class="switch-row">
+            <span><b>多模型智能路由 <span class="tag gw-route-tag">v0.62</span></b><em>规划/验证/复核走强模型、自治执行循环走便宜模型，成本显著下降且受双闸门护栏保护</em></span>
+            <input id="set-modelRouter" type="checkbox" />
+          </label>
+          <div id="router-fields" class="router-fields hidden">
+            <div class="field-row">
+              <label class="field">推理模型（强）
+                <input id="set-reasoningModel" type="text" placeholder="同默认或更强的模型 ID，如 gpt-5 / claude-opus" spellcheck="false" />
+              </label>
+              <label class="field">执行模型（便宜）
+                <input id="set-executorModel" type="text" placeholder="便宜且工具调用稳定：*-mini / haiku / flash" spellcheck="false" />
+              </label>
+            </div>
+            <p class="muted small">推理层负责<strong>规划、验证门控、成果复核、技能蒸馏</strong>（关键判断不省钱）；执行层负责<strong>自治工具循环与最终总结</strong>。两档均留空时回退到上方「模型名称」。执行模型务必选工具调用 JSON 稳定、延迟低的型号——便宜模型若漏参数，会在验证门控处被拦下而非静默通过。</p>
+          </div>
           <div id="ollama-box" class="hidden">
             <div class="btn-row">
               <button id="ollama-refresh" class="btn-ghost" type="button">🔄 刷新本地模型</button>
@@ -4172,6 +4191,22 @@ function defaultConfig() {
   // "memory/skills" under the workspace (see skillMemory.js defaultSkillsDir).
   skillsDir: '',
 
+  // --- Multi-Model Intelligent Routing (v0.62) ---
+  // 2026 consensus: split a goal into a cheap "executor" loop (tool-calling,
+  // formatting) and an expensive "reasoning" tier (planning, verification,
+  // outcome review, skill distillation) so frontier-model cost stays bounded.
+  // Routing is ALWAYS wrapped by the v0.58 verify gate + v0.59 outcome gate,
+  // which is precisely the defense against the known failure mode "silent
+  // degradation" (a cheap model emits text that LOOKS right but is worse).
+  //   'off'  (default) everything uses config.model — single model, no routing.
+  //   'on'   route reasoning tasks to reasoningModel and execution to
+  //           executorModel; an empty tier model falls back to config.model.
+  modelRouter: 'off',
+  // Strong/frontier model for the reasoning tier (plan, verify, outcome, distill).
+  reasoningModel: '',
+  // Cheap/fast model for the executor tier (tool-calling loop + final summary).
+  executorModel: '',
+
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
     // content-aware (JSON → schema, logs → folded, code → outline) and always
@@ -4243,6 +4278,9 @@ function normalizeConfig(input = {}) {
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
   cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
   cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';
+  cfg.modelRouter = cfg.modelRouter === 'on' ? 'on' : 'off';
+  cfg.reasoningModel = typeof cfg.reasoningModel === 'string' ? cfg.reasoningModel.trim().slice(0, 200) : '';
+  cfg.executorModel = typeof cfg.executorModel === 'string' ? cfg.executorModel.trim().slice(0, 200) : '';
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
@@ -7414,7 +7452,8 @@ function renderModelChip() {
   $('model-chip').classList.toggle('ready', ready);
   const p = PROVIDER_PRESETS.find((x) => x.id === config.provider);
   const icon = p ? (p.icon || '') : '';
-  $('model-label').textContent = config.model ? `${icon} ${config.model}` : '未配置模型';
+  const routerNote = config.modelRouter === 'on' ? ' · 路由' : '';
+  $('model-label').textContent = config.model ? `${icon} ${config.model}${routerNote}` : '未配置模型';
 }
 
 // Fill the model <datalist> from the active provider's curated catalog and
@@ -7433,6 +7472,11 @@ function updateModelCtxBadge() {
   if (!el) return;
   const m = modelsForProvider($('set-provider').value).find((x) => x.id === ($('set-model').value || '').trim());
   el.textContent = m ? `上下文 ${Math.round(m.ctx / 1000)}K` : '';
+}
+function syncRouterFields() {
+  const on = $('set-modelRouter') && $('set-modelRouter').checked;
+  const box = $('router-fields');
+  if (box) box.classList.toggle('hidden', !on);
 }
 
 function populateProviders() {
@@ -7467,6 +7511,10 @@ function fillSettings() {
   $('set-baseURL').value = config.baseURL || '';
   $('set-apiKey').value = config.apiKey || '';
   $('set-model').value = config.model || '';
+  $('set-modelRouter').checked = config.modelRouter === 'on';
+  $('set-reasoningModel').value = config.reasoningModel || '';
+  $('set-executorModel').value = config.executorModel || '';
+  syncRouterFields();
   $('set-temperature').value = config.temperature;
   $('temp-val').textContent = config.temperature;
   $('set-maxTokens').value = config.maxTokens;
@@ -7649,6 +7697,9 @@ function saveSettings() {
     baseURL: $('set-baseURL').value.trim(),
     apiKey: $('set-apiKey').value.trim(),
     model: $('set-model').value.trim(),
+    modelRouter: $('set-modelRouter').checked ? 'on' : 'off',
+    reasoningModel: ($('set-reasoningModel').value || '').trim().slice(0, 200),
+    executorModel: ($('set-executorModel').value || '').trim().slice(0, 200),
     temperature: Number($('set-temperature').value),
     maxTokens: Number($('set-maxTokens').value),
     agentEnabled: $('set-agentEnabled').checked,
@@ -8236,6 +8287,22 @@ function skillChips(g) {
   return parts.join(' ');
 }
 
+// v0.62 — Multi-Model Intelligent Routing indicator. Surfaces whether this goal
+// used a single model or split reasoning/executor across two cost tiers.
+function routeChips(g) {
+  const m = g.models;
+  if (!m) return '';
+  if (m.mode !== 'on') {
+    const def = m.default || '';
+    if (!def) return '';
+    return `<span class="gw-chip gw-route" title="本目标使用单一模型，未启用多模型智能路由">单模型 · ${escapeHtml(def)}</span>`;
+  }
+  const r = m.reasoning || m.default || '';
+  const e = m.executor || m.default || '';
+  if (!r && !e) return '';
+  return `<span class="gw-chip gw-route" title="本目标启用 v0.62 多模型智能路由：规划/验证/复核走强模型（推理层），自治工具循环走便宜模型（执行层），成本显著下降且受验证+复核双闸门护栏保护">多模型路由 · 推理 ${escapeHtml(r)} / 执行 ${escapeHtml(e)}</span>`;
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -8280,7 +8347,7 @@ function goalCard(g) {
       <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
     g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
   } · ${new Date(g.updatedAt).toLocaleString()}</div>
-      ${expChips(g) || skillChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g)].filter(Boolean).join(' ')}</div>` : ''}
+      ${expChips(g) || skillChips(g) || routeChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g), routeChips(g)].filter(Boolean).join(' ')}</div>` : ''}
       ${detail}
     </div>`;
 }
@@ -10583,6 +10650,7 @@ function wire() {
 
   $('set-provider').onchange = onProviderChange;
   $('set-model').addEventListener('input', updateModelCtxBadge);
+  if ($('set-modelRouter')) $('set-modelRouter').addEventListener('change', syncRouterFields);
   $('ollama-refresh').onclick = refreshOllamaModels;
   $('set-temperature').oninput = (e) => { $('temp-val').textContent = e.target.value; };
   $('theme-toggle').onclick = toggleTheme;

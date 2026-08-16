@@ -721,6 +721,21 @@
             <datalist id="model-list"></datalist>
             <p class="muted small">切换「供应商」后会自动列出该服务商的常用模型（一键选择）。也可直接填写任意模型 ID。上下文窗口用于预算估算与压缩触发。</p>
           </label>
+          <label class="switch-row">
+            <span><b>多模型智能路由 <span class="tag gw-route-tag">v0.62</span></b><em>规划/验证/复核走强模型、自治执行循环走便宜模型，成本显著下降且受双闸门护栏保护</em></span>
+            <input id="set-modelRouter" type="checkbox" />
+          </label>
+          <div id="router-fields" class="router-fields hidden">
+            <div class="field-row">
+              <label class="field">推理模型（强）
+                <input id="set-reasoningModel" type="text" placeholder="同默认或更强的模型 ID，如 gpt-5 / claude-opus" spellcheck="false" />
+              </label>
+              <label class="field">执行模型（便宜）
+                <input id="set-executorModel" type="text" placeholder="便宜且工具调用稳定：*-mini / haiku / flash" spellcheck="false" />
+              </label>
+            </div>
+            <p class="muted small">推理层负责<strong>规划、验证门控、成果复核、技能蒸馏</strong>（关键判断不省钱）；执行层负责<strong>自治工具循环与最终总结</strong>。两档均留空时回退到上方「模型名称」。执行模型务必选工具调用 JSON 稳定、延迟低的型号——便宜模型若漏参数，会在验证门控处被拦下而非静默通过。</p>
+          </div>
           <div id="ollama-box" class="hidden">
             <div class="btn-row">
               <button id="ollama-refresh" class="btn-ghost" type="button">🔄 刷新本地模型</button>

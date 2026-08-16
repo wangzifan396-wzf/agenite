@@ -407,6 +407,22 @@ export function defaultConfig() {
   // "memory/skills" under the workspace (see skillMemory.js defaultSkillsDir).
   skillsDir: '',
 
+  // --- Multi-Model Intelligent Routing (v0.62) ---
+  // 2026 consensus: split a goal into a cheap "executor" loop (tool-calling,
+  // formatting) and an expensive "reasoning" tier (planning, verification,
+  // outcome review, skill distillation) so frontier-model cost stays bounded.
+  // Routing is ALWAYS wrapped by the v0.58 verify gate + v0.59 outcome gate,
+  // which is precisely the defense against the known failure mode "silent
+  // degradation" (a cheap model emits text that LOOKS right but is worse).
+  //   'off'  (default) everything uses config.model — single model, no routing.
+  //   'on'   route reasoning tasks to reasoningModel and execution to
+  //           executorModel; an empty tier model falls back to config.model.
+  modelRouter: 'off',
+  // Strong/frontier model for the reasoning tier (plan, verify, outcome, distill).
+  reasoningModel: '',
+  // Cheap/fast model for the executor tier (tool-calling loop + final summary).
+  executorModel: '',
+
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
     // content-aware (JSON → schema, logs → folded, code → outline) and always
@@ -478,6 +494,9 @@ export function normalizeConfig(input = {}) {
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
   cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
   cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';
+  cfg.modelRouter = cfg.modelRouter === 'on' ? 'on' : 'off';
+  cfg.reasoningModel = typeof cfg.reasoningModel === 'string' ? cfg.reasoningModel.trim().slice(0, 200) : '';
+  cfg.executorModel = typeof cfg.executorModel === 'string' ? cfg.executorModel.trim().slice(0, 200) : '';
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));

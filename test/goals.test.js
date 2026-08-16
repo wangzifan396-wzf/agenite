@@ -12,6 +12,7 @@ import {
   deleteGoal,
   initGoals
 } from '../src/core/goals.js';
+import { pickModel } from '../src/core/modelRouter.js';
 
 function tmpDir() {
   return mkdtempSync(join(tmpdir(), 'agenite-goal-'));
@@ -70,15 +71,24 @@ function fakeDeps(opts = {}) {
     recordSkill: opts.recordSkill || undefined,
     updateSkill: opts.updateSkill || undefined,
     createSubAgentRunner: () => async () => ({ ok: true, content: 'sub' }),
-    runAgent: async ({ onEvent, messages }) => {
-      if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
-      onEvent('tool_start', { id: '1', name: 'run_code', args: { language: 'node', code: '1+1' } });
-      onEvent('tool', { id: '1', name: 'run_code', args: {}, result: '2', ok: true, ms: 5 });
-      onEvent('usage', { turn: 1, total: 120, cost });
-      onEvent('done', { turns: turns, stopped: opts.stopped || 'done' });
-      messages.push({ role: 'assistant', content: 'TEST REPORT: implemented and verified.' });
-      return { stopped: opts.stopped || 'done', turns, usage: { total: 120 }, cost };
-    }
+    // Default runAgent: emits a couple of tool events then finishes. Tests may
+    // override it via opts.runAgent (e.g. v0.62 routes execution through the
+    // injected callModel so the executor tier is truly exercised).
+    runAgent:
+      opts.runAgent ||
+      (async ({ onEvent, messages }) => {
+        if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
+        onEvent('tool_start', { id: '1', name: 'run_code', args: { language: 'node', code: '1+1' } });
+        onEvent('tool', { id: '1', name: 'run_code', args: {}, result: '2', ok: true, ms: 5 });
+        onEvent('usage', { turn: 1, total: 120, cost });
+        onEvent('done', { turns: turns, stopped: opts.stopped || 'done' });
+        messages.push({ role: 'assistant', content: 'TEST REPORT: implemented and verified.' });
+        return { stopped: opts.stopped || 'done', turns, usage: { total: 120 }, cost };
+      }),
+    // v0.62 — routeModel is deps-injectable so the routing tier split is
+    // unit-testable without a network. When omitted, goals.js uses its real
+    // routeModel wrapper (which forwards to callModel with the resolved model).
+    routeModel: opts.routeModel || undefined
   };
 }
 
@@ -610,6 +620,149 @@ test('v0.61 skill on + simple: no distillation (guarded by complexity)', async (
     assert.equal(distillCalls, 0, 'distillSkill must not run for a simple (non-complex) goal');
     assert.ok(done.skills, 'skills state should exist');
     assert.deepEqual(done.skills.crystallized, [], 'no skill crystallized for a simple goal');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// v0.62 — routeModel spy that records each tier + the concrete model it routed
+// to, then forwards to the underlying fake cm. Lets a test assert that the
+// executor tier actually drives the tool loop and the reasoning tier drives
+// plan/verify/outcome/distill.
+function routeModelSpy(routedCalls) {
+  return ({ config, routerMode, cm, tier }) => {
+    const model = pickModel({ config, routerMode, tier });
+    return (msgs, o = {}) => {
+      routedCalls.push({ tier, model });
+      return cm(msgs, { ...(o || {}), model });
+    };
+  };
+}
+
+// A runAgent fake that actually exercises its injected callModel (so the
+// executor tier is truly invoked, not merely wired) and produces a report from
+// whatever model it was handed.
+function routedRunAgent({ messages, callModel, onEvent }) {
+  onEvent('tool_start', { id: '1', name: 'run_code', args: { language: 'node', code: '1+1' } });
+  onEvent('tool', { id: '1', name: 'run_code', args: {}, result: '2', ok: true, ms: 5 });
+  onEvent('usage', { turn: 1, total: 120, cost: 0.001 });
+  onEvent('done', { turns: 1, stopped: 'done' });
+  return callModel(messages, {}).then((rep) => {
+    messages.push({ role: 'assistant', content: 'REPORT: ' + (rep && rep.content) });
+    return { stopped: 'done', turns: 1, usage: { total: 120 }, cost: 0.001 };
+  });
+}
+
+test('v0.62 router on: routes reasoning/executor tiers to separate models', async () => {
+  const dir = tmpDir();
+  try {
+    const routedCalls = [];
+    const r = await createGoal(
+      {
+        goal: '用强模型规划、弱模型执行',
+        config: {
+          provider: 'openai',
+          model: 'default-model',
+          modelRouter: 'on',
+          reasoningModel: 'gpt-5',
+          executorModel: 'gpt-5-mini'
+        }
+      },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/e.js'], deletedTestFiles: [], diff: '+ done' }),
+        routeModel: routeModelSpy(routedCalls),
+        runAgent: routedRunAgent
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.models.mode, 'on', 'state.models.mode should be on');
+    assert.equal(done.models.reasoning, 'gpt-5', 'reasoning tier should resolve to reasoningModel');
+    assert.equal(done.models.executor, 'gpt-5-mini', 'executor tier should resolve to executorModel');
+    // Executor tier actually drove the tool loop with the cheap model.
+    assert.ok(
+      routedCalls.some((c) => c.tier === 'executor' && c.model === 'gpt-5-mini'),
+      'executor tier should route execution to executorModel'
+    );
+    // Reasoning tier actually drove plan/verify/outcome/distill with the strong model.
+    assert.ok(
+      routedCalls.some((c) => c.tier === 'reasoning' && c.model === 'gpt-5'),
+      'reasoning tier should route reasoning work to reasoningModel'
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.62 router on: empty executorModel falls back to default model (no crash)', async () => {
+  const dir = tmpDir();
+  try {
+    const routedCalls = [];
+    const r = await createGoal(
+      {
+        goal: '只指定推理模型的路由',
+        config: {
+          provider: 'openai',
+          model: 'fallback-model',
+          modelRouter: 'on',
+          reasoningModel: 'gpt-5',
+          executorModel: '' // empty ⇒ executor falls back to config.model
+        }
+      },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/g.js'], deletedTestFiles: [], diff: '+ done' }),
+        routeModel: routeModelSpy(routedCalls),
+        runAgent: routedRunAgent
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.models.mode, 'on');
+    assert.equal(done.models.reasoning, 'gpt-5');
+    assert.equal(done.models.executor, 'fallback-model', 'empty executorModel falls back to config.model');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.62 router off: single model, no tier split', async () => {
+  const dir = tmpDir();
+  try {
+    const routedCalls = [];
+    const r = await createGoal(
+      {
+        goal: '单模型跑一次',
+        config: { provider: 'openai', model: 'only-model', modelRouter: 'off' }
+      },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/f.js'], deletedTestFiles: [], diff: '+ done' }),
+        routeModel: routeModelSpy(routedCalls),
+        runAgent: routedRunAgent
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.models.mode, 'off', 'state.models.mode should be off');
+    assert.equal(done.models.reasoning, 'only-model');
+    assert.equal(done.models.executor, 'only-model');
+    // Router off must route BOTH tiers to the single configured model.
+    assert.ok(routedCalls.length > 0, 'routeModel should still be invoked');
+    assert.ok(
+      routedCalls.every((c) => c.model === 'only-model'),
+      'router off must route everything to the single model'
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

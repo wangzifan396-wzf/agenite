@@ -2185,7 +2185,8 @@ function renderModelChip() {
   $('model-chip').classList.toggle('ready', ready);
   const p = PROVIDER_PRESETS.find((x) => x.id === config.provider);
   const icon = p ? (p.icon || '') : '';
-  $('model-label').textContent = config.model ? `${icon} ${config.model}` : '未配置模型';
+  const routerNote = config.modelRouter === 'on' ? ' · 路由' : '';
+  $('model-label').textContent = config.model ? `${icon} ${config.model}${routerNote}` : '未配置模型';
 }
 
 // Fill the model <datalist> from the active provider's curated catalog and
@@ -2204,6 +2205,11 @@ function updateModelCtxBadge() {
   if (!el) return;
   const m = modelsForProvider($('set-provider').value).find((x) => x.id === ($('set-model').value || '').trim());
   el.textContent = m ? `上下文 ${Math.round(m.ctx / 1000)}K` : '';
+}
+function syncRouterFields() {
+  const on = $('set-modelRouter') && $('set-modelRouter').checked;
+  const box = $('router-fields');
+  if (box) box.classList.toggle('hidden', !on);
 }
 
 function populateProviders() {
@@ -2238,6 +2244,10 @@ function fillSettings() {
   $('set-baseURL').value = config.baseURL || '';
   $('set-apiKey').value = config.apiKey || '';
   $('set-model').value = config.model || '';
+  $('set-modelRouter').checked = config.modelRouter === 'on';
+  $('set-reasoningModel').value = config.reasoningModel || '';
+  $('set-executorModel').value = config.executorModel || '';
+  syncRouterFields();
   $('set-temperature').value = config.temperature;
   $('temp-val').textContent = config.temperature;
   $('set-maxTokens').value = config.maxTokens;
@@ -2420,6 +2430,9 @@ function saveSettings() {
     baseURL: $('set-baseURL').value.trim(),
     apiKey: $('set-apiKey').value.trim(),
     model: $('set-model').value.trim(),
+    modelRouter: $('set-modelRouter').checked ? 'on' : 'off',
+    reasoningModel: ($('set-reasoningModel').value || '').trim().slice(0, 200),
+    executorModel: ($('set-executorModel').value || '').trim().slice(0, 200),
     temperature: Number($('set-temperature').value),
     maxTokens: Number($('set-maxTokens').value),
     agentEnabled: $('set-agentEnabled').checked,
@@ -3007,6 +3020,22 @@ function skillChips(g) {
   return parts.join(' ');
 }
 
+// v0.62 — Multi-Model Intelligent Routing indicator. Surfaces whether this goal
+// used a single model or split reasoning/executor across two cost tiers.
+function routeChips(g) {
+  const m = g.models;
+  if (!m) return '';
+  if (m.mode !== 'on') {
+    const def = m.default || '';
+    if (!def) return '';
+    return `<span class="gw-chip gw-route" title="本目标使用单一模型，未启用多模型智能路由">单模型 · ${escapeHtml(def)}</span>`;
+  }
+  const r = m.reasoning || m.default || '';
+  const e = m.executor || m.default || '';
+  if (!r && !e) return '';
+  return `<span class="gw-chip gw-route" title="本目标启用 v0.62 多模型智能路由：规划/验证/复核走强模型（推理层），自治工具循环走便宜模型（执行层），成本显著下降且受验证+复核双闸门护栏保护">多模型路由 · 推理 ${escapeHtml(r)} / 执行 ${escapeHtml(e)}</span>`;
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -3051,7 +3080,7 @@ function goalCard(g) {
       <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
     g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
   } · ${new Date(g.updatedAt).toLocaleString()}</div>
-      ${expChips(g) || skillChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g)].filter(Boolean).join(' ')}</div>` : ''}
+      ${expChips(g) || skillChips(g) || routeChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g), routeChips(g)].filter(Boolean).join(' ')}</div>` : ''}
       ${detail}
     </div>`;
 }
@@ -5351,6 +5380,7 @@ function wire() {
 
   $('set-provider').onchange = onProviderChange;
   $('set-model').addEventListener('input', updateModelCtxBadge);
+  if ($('set-modelRouter')) $('set-modelRouter').addEventListener('change', syncRouterFields);
   $('ollama-refresh').onclick = refreshOllamaModels;
   $('set-temperature').oninput = (e) => { $('temp-val').textContent = e.target.value; };
   $('theme-toggle').onclick = toggleTheme;
