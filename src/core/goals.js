@@ -25,6 +25,12 @@ import { createSubAgentRunner, createFanoutRunner } from './subagent.js';
 import { normalizeConfig } from './config.js';
 import { defaultMemoryDir } from './memory.js';
 import { verifyWorkspace, detectVerify } from './verify.js';
+import {
+  resolveExperienceDir,
+  retrieveExperiences,
+  recordExperience,
+  formatExperiences
+} from './experience.js';
 
 export const GOALS_DIR = join(defaultMemoryDir(), 'goals');
 const MAX_CONCURRENT = 3;
@@ -413,6 +419,11 @@ function resolveGoalCriticMode(config) {
   return m === 'off' ? 'off' : 'on';
 }
 
+function resolveGoalMemoryMode(config) {
+  const m = (config && config.goalMemory) || 'on';
+  return m === 'off' ? 'off' : 'on';
+}
+
 // Run a git command in the workspace; resolve to stdout or null on any failure
 // (not a repo, git missing, timeout). Never throws — the outcome gate must
 // degrade gracefully to "skip" when git isn't usable.
@@ -629,6 +640,30 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     const baselineRef = await gitRev(workspace).catch(() => null);
     const tools = activeTools({ ...config, dangerTools: true, approvalMode: 'auto' });
 
+    // ── v0.60 Verified Experience Memory ──
+    // Recall past verified approaches (only goals that passed BOTH the v0.58
+    // verify gate and the v0.59 outcome gate ever reach this pool). Injected
+    // into the system prompt below. All I/O is deps-injectable for tests.
+    const expMode = resolveGoalMemoryMode(config);
+    const expRetrieve = deps && deps.retrieveExperiences ? deps.retrieveExperiences : retrieveExperiences;
+    const expRecord = deps && deps.recordExperience ? deps.recordExperience : recordExperience;
+    let expDir = '';
+    let expEntries = [];
+    let expBlock = '';
+    if (expMode === 'on') {
+      expDir = resolveExperienceDir(config, workspace);
+      try {
+        const rp = await expRetrieve({ dir: expDir, goal: state.goal, k: 3 });
+        expEntries = rp.entries || [];
+        if (expEntries.length) expBlock = formatExperiences(expEntries);
+      } catch {
+        expEntries = [];
+        expBlock = '';
+      }
+    }
+    // Surface reused-experience ids on the goal for the UI; filled in on success.
+    state.experience = { used: expEntries.map((e) => e.id), recorded: [] };
+
     const realCallModel = (msgs, o = {}) =>
       callModelStream({
         config: { ...config, dangerTools: true, approvalMode: 'auto' },
@@ -714,7 +749,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     // own verdict and let it re-run a tighter attempt — bounded by budget.retries
     // and the cumulative turn/cost ceiling. This is the "agent fixes its own
     // failures" loop that makes delegated goals feel reliable.
-    const systemPrompt = buildGoalSystemPrompt(state.goal, planText, workspace);
+    const systemPrompt = buildGoalSystemPrompt(state.goal, planText, workspace) + (expBlock ? '\n\n' + expBlock : '');
     const messages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `目标：${state.goal}\n\n请开始执行上面的计划。完成后给出最终总结。` }
@@ -823,6 +858,40 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       // verify gate: loop back into self-heal with concrete evidence.
       const effectiveDone = gate.done && (!outcome || outcome.done);
       if (effectiveDone) {
+        // ── v0.60 crystallize: ONLY goals with real proof (verify gate ran,
+        // i.e. source !== 'none', AND outcome gate passed if it ran) are written
+        // to the experience pool. This is what keeps the memory trustworthy.
+        if (expMode === 'on' && expDir && gate.source !== 'none') {
+          try {
+            const goalKey = String(state.goal || '').trim().toLowerCase();
+            const exactMatch = expEntries.find(
+              (e) => String(e.goal || '').trim().toLowerCase() === goalKey
+            );
+            if (exactMatch) {
+              // Already crystallized for this exact goal — reuse, don't duplicate.
+              state.experience.recorded = [exactMatch.id];
+              append('system', '经验已存在，复用而非重复沉淀：' + exactMatch.id);
+            } else {
+              const id = await expRecord({
+                dir: expDir,
+                entry: {
+                  goal: state.goal,
+                  approach: state.plan || '',
+                  diff: state.outcome ? state.outcome.detail : state.verdict || '',
+                  verification: state.verdict || '',
+                  outcome: state.outcome ? state.outcome.detail : '',
+                  model: config.model || ''
+                }
+              });
+              if (id) {
+                state.experience.recorded = [id];
+                append('system', '已沉淀经验（通过验证+复核）：' + id);
+              }
+            }
+          } catch {
+            /* memory write failure must never fail the goal */
+          }
+        }
         state.phase = 'report';
         state.status = 'done';
         state.error = '';

@@ -58,6 +58,10 @@ function fakeDeps(opts = {}) {
     // deterministic in tests. Default fakes mean "no baseline" ⇒ gate skipped.
     gitRevParseHead: opts.gitRevParseHead || (async () => null),
     getDiff: opts.getDiff || (async () => null),
+    // v0.60 — Verified Experience Memory fakes. When provided, they override the
+    // real fs-backed experience module so tests stay deterministic and offline.
+    retrieveExperiences: opts.retrieveExperiences || undefined,
+    recordExperience: opts.recordExperience || undefined,
     createSubAgentRunner: () => async () => ({ ok: true, content: 'sub' }),
     runAgent: async ({ onEvent, messages }) => {
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
@@ -393,6 +397,89 @@ test('v0.59 outcome gate: anti-exploit rejects empty diff / no-op (loops to retr
     assert.equal(done.outcome.done, false);
     assert.match(done.error, /成果复核未达标（antiexploit）/);
     assert.equal(done.attempt, 2, 'should exhaust retries');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// In-memory experience store shared between retrieve/record so a test can seed a
+// "past verified" experience and assert it is both recalled and (a new goal
+// being crystallized) appended.
+function memoryExperience() {
+  const store = [];
+  return {
+    retrieve: async ({ k = 3 } = {}) => ({ entries: store.slice(0, k), used: store.slice(0, k).map((e) => e.id) }),
+    record: async ({ entry }) => {
+      const id = 'exp_new_' + store.length;
+      store.push({ id, ...entry });
+      return id;
+    },
+    store
+  };
+}
+
+test('v0.60 memory on: recalls a seeded verified experience and crystallizes a new one', async () => {
+  const dir = tmpDir();
+  try {
+    const mem = memoryExperience();
+    // Seed a DIFFERENT but related goal so it is recalled (token overlap) yet not
+    // an exact-match duplicate of the current goal (which would skip recording).
+    mem.store.push({
+      id: 'exp_seed_1',
+      goal: '为登录模块添加单元测试覆盖',
+      approach: '用 node --test 覆盖边界条件',
+      verification: '测试全部通过',
+      outcome: '达标',
+      model: 'x',
+      ts: Date.now()
+    });
+    const r = await createGoal(
+      { goal: '为注册模块添加单元测试', config: { provider: 'openai', model: 'x', goalMemory: 'on' } },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/b.js', 'test/b.test.js'], deletedTestFiles: [], diff: '+ add tests' }),
+        retrieveExperiences: mem.retrieve,
+        recordExperience: mem.record
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    // Recalled the seeded experience (used carries its id).
+    assert.ok(done.experience && Array.isArray(done.experience.used), 'experience.used should be an array');
+    assert.ok(done.experience.used.includes('exp_seed_1'), 'should have recalled the seeded experience');
+    // Crystallized exactly one new experience (recorded length 1).
+    assert.ok(done.experience.recorded && done.experience.recorded.length === 1, 'should crystallize one new experience');
+    assert.notEqual(done.experience.recorded[0], 'exp_seed_1', 'new experience should get a fresh id');
+    assert.equal(mem.store.length, 2, 'store should now hold the seeded + new experience');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.60 memory off: neither recalls nor crystallizes', async () => {
+  const dir = tmpDir();
+  try {
+    const mem = memoryExperience();
+    const r = await createGoal(
+      { goal: '关掉经验记忆跑一次', config: { provider: 'openai', model: 'x', goalMemory: 'off' } },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/c.js'], deletedTestFiles: [], diff: '+ done' }),
+        // Even if fakes exist, goalMemory=off must keep them uncalled.
+        retrieveExperiences: mem.retrieve,
+        recordExperience: mem.record
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.deepEqual(done.experience, { used: [], recorded: [] }, 'memory off must not read or write');
+    assert.equal(mem.store.length, 0, 'recordExperience must not be called when memory is off');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

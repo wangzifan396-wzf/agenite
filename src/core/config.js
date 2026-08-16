@@ -373,6 +373,22 @@ export function defaultConfig() {
   //   'off'  skip it — only the v0.58 verification gate applies.
   goalCritic: 'on',
 
+  // --- Verified Experience Memory (v0.60) ---
+  // Hermes-style "the agent that grows with you", but fused with the v0.58/v0.59
+  // gates so the memory can NEVER be silently polluted by a failed run. Only
+  // goals that pass BOTH the verification gate (v0.58) AND the outcome gate
+  // (v0.59) are crystallized into the experience pool. Recalled experiences are
+  // injected into the system prompt as "things that worked before"; new passing
+  // goals are appended atomically. This is the trustworthy version of "learning
+  // agents" — the 2026 consensus failure mode is memory that remembers its own
+  // mistakes, which we structurally cannot do.
+  //   'on'   (default) recall past verified experiences + crystallize new ones.
+  //   'off'  pure pass-through — no memory read, no memory write.
+  goalMemory: 'on',
+  // Where the experience JSONL lives, relative to the workspace. Empty means
+  // "memory/experiences" under the workspace (see experience.js defaultExperienceDir).
+  experienceDir: '',
+
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
     // content-aware (JSON → schema, logs → folded, code → outline) and always
@@ -440,6 +456,8 @@ export function normalizeConfig(input = {}) {
   cfg.instructionFiles = cfg.instructionFiles !== false;
   cfg.goalVerify = ['auto', 'full', 'judge', 'off'].includes(cfg.goalVerify) ? cfg.goalVerify : 'auto';
   cfg.goalCritic = cfg.goalCritic === 'off' ? 'off' : 'on';
+  cfg.goalMemory = cfg.goalMemory === 'off' ? 'off' : 'on';
+  cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));

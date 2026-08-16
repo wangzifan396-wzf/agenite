@@ -2969,6 +2969,25 @@ function outcomeChip(m) {
   return `<span class="gw-chip ${srcCls}">${escapeHtml(label)}</span>${result} `;
 }
 
+// v0.60 — Verified Experience Memory indicator. Surfaces whether this goal leaned
+// on a past verified experience and/or crystallized a new one.
+function expChips(g) {
+  const exp = g.experience;
+  if (!exp) return '';
+  const parts = [];
+  if (Array.isArray(exp.used) && exp.used.length) {
+    parts.push(
+      `<span class="gw-chip gw-exp" title="本次参考了过去已通过验证+复核的经验">经验复用 ×${exp.used.length}</span>`
+    );
+  }
+  if (Array.isArray(exp.recorded) && exp.recorded.length) {
+    parts.push(
+      `<span class="gw-chip gw-exp" title="本次成果已通过验证+复核并沉淀为可复用经验">已沉淀经验</span>`
+    );
+  }
+  return parts.join(' ');
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -3013,6 +3032,7 @@ function goalCard(g) {
       <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
     g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
   } · ${new Date(g.updatedAt).toLocaleString()}</div>
+      ${expChips(g) ? `<div class="goal-foot">${expChips(g)}</div>` : ''}
       ${detail}
     </div>`;
 }

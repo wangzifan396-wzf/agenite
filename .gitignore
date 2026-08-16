@@ -10,3 +10,6 @@ agenite.config.json
 # Local tooling / temp verification scripts
 .workbuddy/
 .mcp-test-ws/
+
+# Runtime memory pool (Verified Experience Memory JSONL + other local state)
+memory/

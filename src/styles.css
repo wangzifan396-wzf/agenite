@@ -1574,6 +1574,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .gw-antiexploit { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .gw-pass { background: color-mix(in srgb, #16a34a 16%, transparent); color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
 .gw-fail { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+.gw-exp { background: color-mix(in srgb, #0ea5e9 16%, transparent); color: #0ea5e9; border-color: color-mix(in srgb, #0ea5e9 35%, transparent); }
 .goal-pre {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
