@@ -16,6 +16,7 @@
 import { mkdir, writeFile, readFile, readdir, unlink, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 
 import { runAgent } from './agent.js';
 import { activeTools, executeTool } from './tools.js';
@@ -391,6 +392,188 @@ async function verifyGate({ cm, goal, state, workspace, config, vw, dv }) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.59 — Outcome Gate (成果复核门控)
+// A quality layer ON TOP of the v0.58 verification gate, fused into the SAME
+// VERIFY→self-heal loop (not a separate agent rewrite — per the 2026 mini-SWE-
+// agent conclusion, ACI matters more than agent architecture). It only runs
+// AFTER the deterministic verify gate already proved the goal functionally
+// done, and only when a git baseline exists to diff against.
+//
+//   1) Deterministic anti-exploit checks (free, always on inside the gate):
+//      empty diff / no-op, and deleted test files. Exact analogues of the
+//      Berkeley RDI "cheat scanner" patterns — we never trust, we check.
+//   2) Fresh-context Critic: reviews the ACTUAL git diff + verification result,
+//      not the agent's self-report. Returns structured criticism that loops
+//      back into self-heal. This is Anthropic "Outcomes" for a single agent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function resolveGoalCriticMode(config) {
+  const m = (config && config.goalCritic) || 'on';
+  return m === 'off' ? 'off' : 'on';
+}
+
+// Run a git command in the workspace; resolve to stdout or null on any failure
+// (not a repo, git missing, timeout). Never throws — the outcome gate must
+// degrade gracefully to "skip" when git isn't usable.
+function gitExec(workspace, args, { timeout = 20000, maxBuffer = 8 * 1024 * 1024 } = {}) {
+  return new Promise((resolve) => {
+    execFile('git', ['-C', workspace, ...args], { timeout, maxBuffer }, (err, stdout) => {
+      resolve(err ? null : String(stdout || ''));
+    });
+  });
+}
+
+async function gitRevParseHead(workspace) {
+  const out = await gitExec(workspace, ['rev-parse', 'HEAD'], { timeout: 15000 });
+  return out ? out.trim() || null : null;
+}
+
+function isTestFile(p) {
+  if (!p) return false;
+  return (
+    /\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs|py|go|rs|rb|java)$/.test(p) ||
+    /(^|[/\\])(tests?|spec|__tests__|__mocks__)([/\\])/.test(p)
+  );
+}
+
+// Compute the actual diff the agent produced vs the captured baseline. Returns
+// null when git is unavailable / not a repo (caller skips the outcome gate).
+async function getDiff(workspace, baselineRef) {
+  if (!baselineRef) return null;
+  const [nameStatus, diff, untracked] = await Promise.all([
+    gitExec(workspace, ['diff', '--name-status', baselineRef]),
+    gitExec(workspace, ['diff', baselineRef, '--']),
+    gitExec(workspace, ['ls-files', '--others', '--exclude-standard'])
+  ]);
+  if (nameStatus == null) return null; // git failed entirely
+
+  const changed = (nameStatus.split('\n'))
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const tab = l.indexOf('\t');
+      const status = tab > 0 ? l.slice(0, tab) : l[0];
+      const path = tab > 0 ? l.slice(tab + 1) : l.slice(1);
+      return { status: status.replace(/\d.*$/, ''), path };
+    });
+  const untrackedFiles = (untracked || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const allPaths = changed.map((c) => c.path).concat(untrackedFiles);
+  const deletedTestFiles = changed
+    .filter((c) => c.status === 'D' && isTestFile(c.path))
+    .map((c) => c.path);
+
+  return {
+    // `git diff baselineRef` compares the working tree to the baseline commit,
+    // so committed-since-baseline changes are included too — empty only when
+    // truly nothing changed.
+    empty: allPaths.length === 0,
+    files: allPaths,
+    deletedTestFiles,
+    // Bound so we never blow up the critic's context. New (untracked) files are
+    // listed by name only — deterministic and side-effect-free (we never `add`).
+    diff: (diff || '').slice(0, 9000),
+    untracked: untrackedFiles
+  };
+}
+
+// Deterministic anti-exploit check. Returns { ok, code, detail }. Only the two
+// unambiguous cheating patterns are hard-rejected; "test-files-only" is NOT a
+// hard reject because a legitimate goal ("add tests for X") changes only tests
+// — that smell is left for the fresh-context Critic to judge from the real diff.
+function antiExploitCheck(d) {
+  if (!d || d.empty) {
+    return {
+      ok: false,
+      code: 'no-change',
+      detail:
+        '防作弊检查未通过：本次执行未产生任何代码改动（空 diff / no-op）。目标显然未完成，或改动被意外回滚。'
+    };
+  }
+  if (d.deletedTestFiles && d.deletedTestFiles.length) {
+    return {
+      ok: false,
+      code: 'deleted-tests',
+      detail:
+        '防作弊检查未通过：检测到删除了测试文件（' +
+        d.deletedTestFiles.join('、') +
+        '）。删除测试以使验证通过属于作弊式改动，不予通过。'
+    };
+  }
+  return { ok: true, code: 'clean' };
+}
+
+const CRITIC_SYSTEM =
+  '你是质量评审员（Code Reviewer）。你被要求独立评审一个自治智能体为达成目标所做的【实际代码改动】，以及它的验证结果。' +
+  '你未参与执行过程，不要被任何自报结论影响——只看下方的 diff 与验证事实。\n' +
+  '请判断：\n' +
+  '1) 是否真正解决了目标，还是仅靠改测试、绕过/弱化验证、占位或空改动蒙混过关；\n' +
+  '2) 改动是否最小且针对性，有无明显回归风险或破坏其他功能；\n' +
+  '3) 是否仅为“让测试通过”而修改测试断言却不修复真正实现。\n' +
+  '给出一行结论，以“达标：”或“未达标：”开头，随后附具体修改建议（若未达标）。';
+
+async function critiqueResult(callModel, goal, d, verificationDetail) {
+  const r = await callModel(
+    [
+      { role: 'system', content: CRITIC_SYSTEM },
+      {
+        role: 'user',
+        content:
+          `目标：${goal}\n\n验证结果：\n${String(verificationDetail || '').slice(0, 1500)}\n\n` +
+          `实际代码改动（git diff，已截断）：\n${d && d.diff ? d.diff : '(无 diff)'}\n\n` +
+          `改动文件清单：${(d && d.files && d.files.length ? d.files.join(', ') : '(空)')}\n` +
+          `未纳入 diff 的新文件（仅列名）：${(d && d.untracked && d.untracked.length ? d.untracked.join(', ') : '无')}`
+      }
+    ],
+    {}
+  );
+  return r && r.content ? r.content.trim() : '(评审未返回结论)';
+}
+
+// Critic is a SECONDARY, *quality* signal — functional correctness is already
+// proven by the test gate. So we only block on an explicit "未达标"; ambiguity
+// (or a model failure) is accepted rather than re-introducing brittleness.
+function parseCritique(s) {
+  const t = String(s || '');
+  if (t.includes('未达标')) return false;
+  return true;
+}
+
+// The outcome gate. Pure-ish (runs git + one model call); runGoal does the
+// logging / report merge. Returns null when it should be skipped (disabled, no
+// baseline, or git unavailable) so the v0.58 verify gate remains authoritative.
+async function outcomeGate({ cm, goal, state, workspace, config, baselineRef, getDiffFn }) {
+  if (resolveGoalCriticMode(config) === 'off') return null;
+  const d = await getDiffFn(workspace, baselineRef);
+  if (!d) return null; // no baseline / not a git repo → degrade, skip
+
+  const ax = antiExploitCheck(d);
+  if (!ax.ok) {
+    return { source: 'outcome', stage: 'antiexploit', done: false, confidence: 1, detail: ax.detail };
+  }
+
+  let critique;
+  try {
+    critique = await critiqueResult(cm, goal, d, state.verdict);
+  } catch {
+    return null; // critic failed → degrade gracefully, don't block on a model error
+  }
+  const ok = parseCritique(critique);
+  return {
+    source: 'outcome',
+    stage: 'critic',
+    done: ok,
+    confidence: ok ? 0.9 : 0.85,
+    detail: ok
+      ? '成果复核通过：改动真实、非仅改测试、无明显回归。\n' + critique.slice(0, 800)
+      : '成果复核未达标，需修正：\n' + critique.slice(0, 1500)
+  };
+}
+
 function buildGoalSystemPrompt(goal, plan, workspace) {
   return [
     '你是 Agenite 的「自治执行智能体」。你被委派了一个明确的目标，需要独立规划、执行并验证，无需逐步征求许可。',
@@ -439,6 +622,11 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
   try {
     const config = state.config;
     const workspace = config.workspace || process.cwd();
+    // v0.59 — capture the git HEAD before any agent action so the Outcome Gate
+    // can diff the ACTUAL changes the agent made (deps-injectable for tests).
+    const gitRev = deps && deps.gitRevParseHead ? deps.gitRevParseHead : gitRevParseHead;
+    const getDiffFn = deps && deps.getDiff ? deps.getDiff : getDiff;
+    const baselineRef = await gitRev(workspace).catch(() => null);
     const tools = activeTools({ ...config, dangerTools: true, approvalMode: 'auto' });
 
     const realCallModel = (msgs, o = {}) =>
@@ -606,7 +794,35 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       // Make the final report carry proof, not just claims.
       state.report = (state.report ? state.report + '\n\n' : '') + '— 验证结论 —\n' + gate.detail;
 
-      if (gate.done) {
+      // ── Outcome Gate (v0.59: 成果复核门控) ──
+      // Runs ONLY after the deterministic verify gate already passed (we never
+      // judge quality before functional correctness is proven) and only when a
+      // git baseline exists to diff against. A failed outcome gate feeds its
+      // concrete criticism back into the SAME self-heal loop below.
+      let outcome = null;
+      if (gate.done && resolveGoalCriticMode(config) === 'on') {
+        try {
+          outcome = await outcomeGate({ cm, goal: state.goal, state, workspace, config, baselineRef, getDiffFn });
+        } catch {
+          outcome = null;
+        }
+        if (outcome) {
+          append('verify', `成果复核=${outcome.done} 阶段=${outcome.stage}\n${outcome.detail}`);
+          state.outcome = {
+            source: outcome.source,
+            stage: outcome.stage,
+            done: outcome.done,
+            detail: outcome.detail
+          };
+          state.report = (state.report ? state.report + '\n\n' : '') + '— 成果复核 —\n' + outcome.detail;
+        }
+      }
+
+      // Effective completion = verify gate passed AND (no outcome gate ran OR it
+      // also passed). A failed outcome gate is treated exactly like a failed
+      // verify gate: loop back into self-heal with concrete evidence.
+      const effectiveDone = gate.done && (!outcome || outcome.done);
+      if (effectiveDone) {
         state.phase = 'report';
         state.status = 'done';
         state.error = '';
@@ -615,19 +831,25 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
       if (attempt >= MAX_ATTEMPTS) {
         state.phase = 'report';
         state.status = 'failed';
-        state.error = '验证未通过，且已达自愈重试上限（' + budget.retries + ' 次）。';
+        const why = [];
+        if (!gate.done) why.push('验证未通过');
+        if (outcome && !outcome.done) why.push('成果复核未达标（' + outcome.stage + '）');
+        state.error = why.join('；') + '，且已达自愈重试上限（' + budget.retries + ' 次）。';
         append('error', state.error);
         break;
       }
-      // Not done — feed the real evidence back so the agent can fix it.
-      messages.push({
-        role: 'system',
-        content:
-          '上一轮验证未通过。验收证据：\n' +
-          trunc(gate.detail, 1500) +
-          '\n请复盘失败原因并修正，重新运行验证（测试/构建/lint 或对应命令）直到通过，再给出最终总结。'
-      });
-      append('system', '验证未通过，准备复盘重试');
+      // Not done — feed the real evidence + concrete criticism back so the agent can fix it.
+      const feedback = [
+        '上一轮验证未通过 / 成果复核未达标。验收证据：\n' + trunc(gate.detail, 1200)
+      ];
+      if (outcome && !outcome.done) {
+        feedback.push('成果复核意见（请据此具体修正）：\n' + trunc(outcome.detail, 1500));
+      }
+      feedback.push(
+        '请复盘失败原因并修正，重新运行验证（测试/构建/lint 或对应命令）直到通过，再给出最终总结。'
+      );
+      messages.push({ role: 'system', content: feedback.join('\n') });
+      append('system', '验证/复核未通过，准备复盘重试');
     }
 
     flush();

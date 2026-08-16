@@ -1570,6 +1570,8 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .gw-test { background: color-mix(in srgb, #16a34a 16%, transparent); color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
 .gw-judge { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 .gw-none { background: var(--panel-2); color: var(--muted); }
+.gw-critic { background: color-mix(in srgb, #7c3aed 16%, transparent); color: #7c3aed; border-color: color-mix(in srgb, #7c3aed 35%, transparent); }
+.gw-antiexploit { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .gw-pass { background: color-mix(in srgb, #16a34a 16%, transparent); color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
 .gw-fail { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .goal-pre {

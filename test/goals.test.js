@@ -27,6 +27,9 @@ function tmpDir() {
 function fakeDeps(opts = {}) {
   const verifySeq = opts.verify && opts.verify.length ? opts.verify : ['已完成'];
   let vi = 0;
+  // v0.59 — Critic (质量评审员) verdicts, consumed per outcome-gate call.
+  const criticSeq = opts.critique && opts.critique.length ? opts.critique : ['达标：改动合理。'];
+  let ci = 0;
   const cost = opts.costPerAttempt != null ? opts.costPerAttempt : 0.001;
   const turns = opts.turnsPerAttempt != null ? opts.turnsPerAttempt : 1;
   return {
@@ -39,6 +42,11 @@ function fakeDeps(opts = {}) {
       }
       if (sys.includes('高级技术规划师')) return { content: 'PLAN' };
       if (sys.includes('对话压缩器')) return { content: 'SUMMARY' };
+      if (sys.includes('质量评审员')) {
+        const c = ci < criticSeq.length ? criticSeq[ci] : criticSeq[criticSeq.length - 1];
+        ci++;
+        return { content: c };
+      }
       return { content: 'OK' };
     },
     executeTool: async () => ({ ok: true, content: 'fake tool result' }),
@@ -46,6 +54,10 @@ function fakeDeps(opts = {}) {
     // gate always falls through to the fresh-context judge.
     detectVerify: () => null,
     verifyWorkspace: async () => ({ ran: false, ok: true, level: 'full', reason: 'no tests' }),
+    // v0.59 — git baseline + diff are injectable so the outcome gate is fully
+    // deterministic in tests. Default fakes mean "no baseline" ⇒ gate skipped.
+    gitRevParseHead: opts.gitRevParseHead || (async () => null),
+    getDiff: opts.getDiff || (async () => null),
     createSubAgentRunner: () => async () => ({ ok: true, content: 'sub' }),
     runAgent: async ({ onEvent, messages }) => {
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
@@ -306,6 +318,81 @@ test('v0.58 gate: auto mode with no tests uses the fresh-context judge', async (
     const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
     assert.equal(done.status, 'done');
     assert.equal(done.verdictMeta && done.verdictMeta.source, 'judge');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.59 outcome gate: goalCritic=off skips the quality gate entirely (even if critic would reject)', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '关掉复核', config: { provider: 'openai', model: 'x', goalVerify: 'auto', goalCritic: 'off' } },
+      dir,
+      fakeDeps({ verify: ['已完成'], critique: ['未达标：只改了测试断言'] })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.attempt, 1, 'should not retry when the outcome gate is off');
+    assert.equal(done.outcome, undefined, 'outcome gate should not have run');
+    assert.equal(done.verdictMeta && done.verdictMeta.source, 'judge');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.59 outcome gate: critic 未达标 loops back into self-heal, then passes', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '实现功能 X', config: { provider: 'openai', model: 'x' } },
+      dir,
+      fakeDeps({
+        verify: ['已完成', '已完成'],
+        critique: [
+          '未达标：仅修改测试断言，未修复真正实现',
+          '达标：已修复真正实现，改动最小且针对性'
+        ],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({
+          empty: false,
+          files: ['src/a.js', 'test/a.test.js'],
+          deletedTestFiles: [],
+          diff: '+ fix implementation\n- bad assert'
+        })
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(done.attempt, 2, 'critic rejection should have triggered one self-heal retry');
+    assert.ok(done.outcome, 'outcome gate should have run');
+    assert.equal(done.outcome.stage, 'critic');
+    assert.equal(done.outcome.done, true, 'final critic should pass');
+    assert.match(done.report, /成果复核/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.59 outcome gate: anti-exploit rejects empty diff / no-op (loops to retry ceiling)', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '做点什么', config: { provider: 'openai', model: 'x', budget: { retries: 1 } } },
+      dir,
+      fakeDeps({
+        verify: ['已完成', '已完成'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: true, files: [], deletedTestFiles: [], diff: '' })
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'failed');
+    assert.ok(done.outcome, 'outcome gate should have run');
+    assert.equal(done.outcome.stage, 'antiexploit');
+    assert.equal(done.outcome.done, false);
+    assert.match(done.error, /成果复核未达标（antiexploit）/);
+    assert.equal(done.attempt, 2, 'should exhaust retries');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -357,8 +357,21 @@ export function defaultConfig() {
     //   'full'  always run the detected test/build command; if none exists the
     //           goal cannot be proven done and is marked failed (never silent).
     //   'judge' always use the fresh-context judge (no test execution).
-    //   'off'   trust-but-verify disabled — legacy behaviour, not recommended.
-    goalVerify: 'auto',
+  //   'off'   trust-but-verify disabled — legacy behaviour, not recommended.
+  goalVerify: 'auto',
+
+  // --- goal outcome gate (v0.59) ---
+  // A quality layer fused into the SAME VERIFY→self-heal loop, ON TOP of the
+  // v0.58 verification gate. After the deterministic test gate proves the goal
+  // functionally done, the outcome gate runs (1) deterministic anti-exploit
+  // checks (empty diff / no-op, deleted tests) and (2) a fresh-context Critic
+  // that reviews the ACTUAL git diff, not the agent's self-report, feeding
+  // concrete criticism back into self-heal. This is the 2026 consensus answer
+  // to "tests passing ≠ a good patch" (METR: ~50% of SWE-bench-verified patches
+  // were rejected by maintainers; Anthropic "Outcomes" cut silent failures ~6×).
+  //   'on'   (default) enable the outcome gate.
+  //   'off'  skip it — only the v0.58 verification gate applies.
+  goalCritic: 'on',
 
     // Context economy: shrink oversized tool results at the moment they are
     // produced, rather than waiting for the window to overflow. Compression is
@@ -426,6 +439,7 @@ export function normalizeConfig(input = {}) {
   cfg.reflectionGuard = ['off', 'warn', 'block'].includes(cfg.reflectionGuard) ? cfg.reflectionGuard : 'warn';
   cfg.instructionFiles = cfg.instructionFiles !== false;
   cfg.goalVerify = ['auto', 'full', 'judge', 'off'].includes(cfg.goalVerify) ? cfg.goalVerify : 'auto';
+  cfg.goalCritic = cfg.goalCritic === 'off' ? 'off' : 'on';
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
