@@ -1,10 +1,6 @@
 .git
-node_modules
-test
-docs
 .github
-.workbuddy
-.trash*
+node_modules
+docs/screenshots
 *.log
-.env
-agenite.config.json
+.DS_Store

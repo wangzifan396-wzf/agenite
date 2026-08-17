@@ -37,6 +37,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![Stars](https://img.shields.io/github/stars/wangzifan396-wzf/agenite?style=social)](https://github.com/wangzifan396-wzf/agenite/stargazers)
+[![Version](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/wangzifan396-wzf/agenite/master/docs/badges/version.json)](https://github.com/wangzifan396-wzf/agenite/releases)
 
 </div>
 
@@ -67,6 +68,8 @@ node server.js
 ```bash
 docker run -p 4173:4173 -v agenite-data:/root/.agenite ghcr.io/wangzifan396-wzf/agenite
 ```
+
+`ghcr.io/wangzifan396-wzf/agenite` 镜像由 CI（`.github/workflows/ghcr.yml`）在每次 push 到 `master` 以及每个版本 tag 时自动构建并推送——`latest`、完整语义版本（`0.67.0`）、`主版本.次版本`（`0.67`）、`sha` 四种标签全部发布，且同时覆盖 `linux/amd64` 与 `linux/arm64`。`GET /api/health` 与 `GET /api/version` 为容器编排提供存活探针与版本号。
 
 在设置里填入模型 API Key（OpenAI / Anthropic / Gemini / DeepSeek / Qwen / Ollama / …），打开 **Agent** 开关，开聊即可。
 
@@ -119,6 +122,8 @@ _实话实说：Agenite 还年轻——插件/主题生态和移动端比老牌�
 - **自进化 · 经验复利（v0.54.0）**：Agenite 已经会记录每次运行（轨迹）、度量每次运行（评估）、并分享调好的配置（预设）——但这三件仪器尚未**闭环**。新增侧栏 **🧬 自进化** 面板：给出真实运行的**健康度排行榜**（按错误数、成本、轮次、静默空转打分，列出最好/最差）、**从真实轨迹蒸馏最佳配置**（挑出健康度最高的厂商/模型，冻结成可一键套用的预设——永不导出你的 API Key 与工作目录）、并跑一个**漂移哨兵**——当前配置比某次历史运行用过的配置评分更低时自动告警，配合一键**回滚到任意经验快照**。这正是 2026 年「越用越聪明的 Agent」（Hermes、OpenJarvis）承诺、却只靠启发式糊弄的事，我们落在 verify + eval 的硬信号上：Agent 越用越准，且绝不静默变差。
 
 - **OpenTelemetry GenAI 导出 · 让你的轨迹进入任意后端（v0.66.0）**：Agenite 本就有一套本地优先的**飞行记录仪**，把每次运行记录成一棵带类型的步骤树。v0.66 补上**互操作层**：把一次已完成的轨迹，按 2026 年的 **OpenTelemetry GenAI 语义约定**映射成标准 **OTLP/HTTP JSON span**，于是任意 Collector / Jaeger / Tempo / Langfuse 都能开箱即用地接入一次 Agenite 运行——不绑定厂商、也不新增任何记录器。转换器（`src/core/otel.js`）是纯模块、且严格贴合规范：由 runId 经 FNV-1a 派生**确定性、非零**的 `traceId`/`spanId`；规范化的 span 命名（`invoke_agent {agent}` / `chat {model}` / `execute_tool {tool}`）与 `gen_ai.*` 属性——采用**2026 改名后的新名**（`gen_ai.provider.name` 而非已弃用的 `gen_ai.system`；`gen_ai.usage.input_tokens`/`output_tokens` 而非 `prompt_/completion_tokens`；规范里**没有** `gen_ai.latency.ms`，延迟就是 span 时长）；远程模型 / MCP 调用用 CLIENT、进程内调用用 INTERNAL 的 `SpanKind`；失败工具带 `error.type` + `STATUS_CODE_ERROR`；消息 / 工具输入输出的内容字段**默认关闭、仅 `captureContent` 开启**（对应 `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`）。接线方面：`server.js` 自动把**单回合 token 增量**（usage 事件是累计值）挂到每个 chat span；`GET /api/traces/:id/otel` 下载 OTLP 负载；`POST /api/otel/export` 推送到 Collector；`otelExport: 'on'` 时运行结束自动推送（best-effort，绝不会阻塞对话）。设置页「可观测性」里放端点 / 请求头 / 服务名 / 内容开关。零新增记录层——本地轨迹仍是唯一真相来源。
+
+- **容器化就绪发布 · 一条命令自托管，这次真的发布了（v0.67.0）**：v0.49 就写了 `docker run ... ghcr.io/wangzifan396-wzf/agenite`，却从没真正推过镜像。v0.67 把这件事补完：新增 `.github/workflows/ghcr.yml`，在每次 push 到 `master` 与每个版本 tag 时，构建零依赖镜像（覆盖 `linux/amd64` 与 `linux/arm64`）并推送到 GitHub Container Registry——同时带上 `latest`、完整语义版本（`0.67.0`）、`主版本.次版本`（`0.67`）与 `sha` 四种标签。另有一个实时版本徽章（`.github/workflows/badge.yml` 生成 `docs/badges/version.json`，经 shields.io endpoint 渲染），让 README 永远自动显示真实版本。同时为容器编排新增两个无需鉴权的探针：`GET /api/health`（此前已有，现注明用于存活检测）与新增的 `GET /api/version`（返回 `{ name: 'agenite', version }`，版本号在启动时从 `package.json` 读取）——k8s / Docker Compose 的健康检查或徽章都能拿到精确的运行版本，且无需重新构建。无 UI 重建、零新增依赖。
 
 - **元认知反思 · 经验手册（v0.56.0）**：自进化叙事里 *行为层* 的那一半，叠在 v0.54 *配置层* 自进化之上。每一次运行结束时都会跑一次反思：把这次运行的硬信号——自动验证是否通过、是否卡死循环、变更后是否缺验证、是否跑完——提炼成**带类型的经验**（原则 / 流程 / 警示 / 技能缺陷 / 执行失误），打分后持久化到 `~/.agenite/memory/lessons.json`。评分最高的经验会被**注入下一轮运行的系统提示**，于是 Agent 真的是"越用越会干活"；侧栏 **📖 经验手册** 面板可浏览、启停、删除、清空，切换注入开关，并选择是否让模型把模板经验细化成更具体的条目。这正是 2026 年元认知反思浪潮（MARS / EmbodiSkill）落在本机、且完全基于 Agenite 已有的硬信号——不猜、不上云、纯离线。
 - **可插拔运行时 · 前置经验护栏与项目指令文件（v0.57.0）**：从爆火的 DeepSeek Harness 借来的「引擎级」能力——它真正值钱的是**架构**而非模型。Agenite 现在多了一个轻量 **HookBus + 工具执行管线（前/后处理阶段）**（`src/core/hooks.js`），成为每次工具调用都会流经的唯一可插拔接缝。两个现成插件挂在上面：**① 前置经验护栏**把 v0.56 的「经验手册」从被动塞进系统提示的脚注，升级成**主动**安全闸门——在任何会改动世界的工具执行前，它先召回 Agent 自己用真金白银换来的经验（变更后未验证、验证失败、死循环空转），在 `warn` 模式（默认）下以**实时 UI 提示 + 折叠进工具结果**的方式让模型在上下文里看到这条经验；在 `block` 模式下，仅当存在强置信度的「死循环」经验时，才拦截风险最高的几个动词。**② 项目指令文件（兼容 AGENTS.md / CLAUDE.md）**会自动把仓库里的「本仓库怎么协作」文件载入系统提示，约定从此自动被遵守，不用每轮重复粘贴。**两者都是加法**：`agent.js` / `tools.js` 的热路径原封未动——零回归（489 项测试全绿）。

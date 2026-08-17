@@ -52,6 +52,12 @@ import { findBadCommit, chooseGoodRef, formatHuntReport } from './src/core/bisec
 import { toOtlpJson, exportOtlp, spanTimeline } from './src/core/otel.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Single source of truth for the running version — read once at boot so
+// /api/version can report it to container orchestration without a rebuild.
+let APP_VERSION = '0.0.0';
+try {
+  APP_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version || APP_VERSION;
+} catch { /* keep default if package.json is unreadable */ }
 const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
 // The machine root the agent is allowed to touch. Defaults to where you ran it.
@@ -349,6 +355,11 @@ const server = http.createServer((req, res) => {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
     });
+  }
+  // Liveness/readiness + version probe for container orchestration (k8s,
+  // compose healthcheck, or a shields.io badge). Never depends on a model key.
+  if (req.method === 'GET' && url === '/api/version') {
+    return sendJson(res, 200, { name: 'agenite', version: APP_VERSION });
   }
   // Real key validation: pings the provider with a 1-token completion so the
   // user learns "密钥无效" before they ever send a real message.

@@ -1,0 +1,44 @@
+name: Update version badge
+
+# Keeps a live shields.io "endpoint" badge in sync with package.json so the
+# README always shows the current Agenite version without manual edits.
+# The badge JSON is committed to docs/badges/version.json and served raw from
+# GitHub: https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/.../master/docs/badges/version.json
+on:
+  push:
+    branches: [master]
+    paths: ['package.json']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate badge JSON
+        run: |
+          mkdir -p docs/badges
+          VERSION="$(node -p "require('./package.json').version")"
+          cat > docs/badges/version.json <<EOF
+          {
+            "schemaVersion": 1,
+            "label": "agenite",
+            "message": "v${VERSION}",
+            "color": "blue"
+          }
+          EOF
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/badges/version.json
+          git diff --cached --quiet || git commit -m "chore: sync version badge to $(node -p "require('./package.json').version")"
+          git push
