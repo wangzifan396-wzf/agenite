@@ -342,6 +342,20 @@ export function defaultConfig() {
     //   'block' additionally refuse the highest-risk verbs when a strong
     //           runaway-loop lesson exists — conservative, opt-in
     reflectionGuard: 'warn',
+    // --- runtime resilience v2 (v0.65): stall detection + graceful degradation ---
+    // The exact-repeat loop breaker + cost guardrail already exist; this catches
+    // the *semantic* stall the others miss — an agent that throws nothing yet
+    // makes zero progress for a long stretch (re-reading files, retrying variants
+    // that all fail, thinking in circles). Detected deterministically (no model):
+    // N consecutive turns with no successful tool call and no todo advance.
+    //   stallGuard      master switch ('on' default / 'off')
+    //   stallTurns      soft threshold — emit one "you're stuck, reconsider" nudge
+    //   stallHardTurns  hard threshold — stop gracefully as 'blocked' (never
+    //                   crash, never burn the whole budget) and ask the user to
+    //                   clarify. Always honoured >= stallTurns.
+    stallGuard: 'on',
+    stallTurns: 6,
+    stallHardTurns: 12,
     // --- project instruction files (v0.57, AGENTS.md / CLAUDE.md compatible) ---
     // Auto-load the repo's "how to work here" file (AGENTS.md / CLAUDE.md / …)
     // and fold it into the system prompt so repo conventions are respected
@@ -520,6 +534,11 @@ export function normalizeConfig(input = {}) {
   cfg.goalVerify = ['auto', 'full', 'judge', 'off'].includes(cfg.goalVerify) ? cfg.goalVerify : 'auto';
   cfg.goalCritic = cfg.goalCritic === 'off' ? 'off' : 'on';
   cfg.goalMemory = cfg.goalMemory === 'off' ? 'off' : 'on';
+  // --- runtime resilience v2 (v0.65): stall detection + graceful degradation ---
+  cfg.stallGuard = cfg.stallGuard === 'off' ? 'off' : 'on';
+  cfg.stallTurns = Math.round(clampNum(cfg.stallTurns, 1, 100, 6));
+  cfg.stallHardTurns = Math.round(clampNum(cfg.stallHardTurns, 1, 1000, 12));
+  if (cfg.stallHardTurns < cfg.stallTurns) cfg.stallHardTurns = cfg.stallTurns;
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
   cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
   cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';

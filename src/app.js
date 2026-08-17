@@ -2268,6 +2268,9 @@ function fillSettings() {
   $('set-maxSkills').value = config.maxSkills || 60;
   $('set-skillDecayDays').value = config.skillDecayDays || 90;
   $('set-umbrellaMin').value = config.umbrellaMin || 3;
+  $('set-stallGuard').checked = config.stallGuard !== 'off';
+  $('set-stallTurns').value = config.stallTurns || 6;
+  $('set-stallHardTurns').value = config.stallHardTurns || 12;
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -2465,6 +2468,9 @@ function saveSettings() {
     maxSkills: clampNum($('set-maxSkills').value, 1, 1000, 60),
     skillDecayDays: clampNum($('set-skillDecayDays').value, 0, 3650, 90),
     umbrellaMin: clampNum($('set-umbrellaMin').value, 2, 50, 3),
+    stallGuard: $('set-stallGuard').checked ? 'on' : 'off',
+    stallTurns: clampNum($('set-stallTurns').value, 1, 100, 6),
+    stallHardTurns: clampNum($('set-stallHardTurns').value, 1, 1000, 12),
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -3058,6 +3064,14 @@ function routeChips(g) {
   return `<span class="gw-chip gw-route" title="本目标启用 v0.62 多模型智能路由：规划/验证/复核走强模型（推理层），自治工具循环走便宜模型（执行层），成本显著下降且受验证+复核双闸门护栏保护">多模型路由 · 推理 ${escapeHtml(r)} / 执行 ${escapeHtml(e)}</span>`;
 }
 
+// v0.65 — Stall guard badge. Shown only when a goal was gracefully stopped by
+// the runtime resilience layer (semantic stall); distinct from a hard failure.
+function stallChip(g) {
+  if (!g.stall) return '';
+  const n = g.stall.turns || 0;
+  return `<span class="gw-chip gw-skill gw-skill-stalled" title="停滞护栏触发：连续 ${n} 回合无实质进展，目标已优雅停下并标记为「阻塞 / 需澄清」（未崩溃、未空转烧钱）。请查看进度日志核对卡点，必要时向 agent 澄清需求后重跑。">⚠ 停滞阻塞 · ${n} 回合</span>`;
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -3102,7 +3116,7 @@ function goalCard(g) {
       <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
     g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
   } · ${new Date(g.updatedAt).toLocaleString()}</div>
-      ${expChips(g) || skillChips(g) || routeChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g), routeChips(g)].filter(Boolean).join(' ')}</div>` : ''}
+      ${expChips(g) || skillChips(g) || routeChips(g) || stallChip(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g), routeChips(g), stallChip(g)].filter(Boolean).join(' ')}</div>` : ''}
       ${detail}
     </div>`;
 }

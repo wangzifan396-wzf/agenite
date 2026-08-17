@@ -22,6 +22,7 @@ import { compressBudget, compressContent, retrieveHint } from './compress.js';
 import { compactMessages, contextWindowFor, historyBudget, toolsTokens, totalTokens } from './context.js';
 import { addUsage, costOf, emptyUsage, priceFor } from './pricing.js';
 import { todoProgress, todoReminder } from './todo.js';
+import { detectStall, turnMadeProgress } from './stallguard.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -141,6 +142,22 @@ export async function runAgent({
   // exact-repeat loops for display; this makes the agent *act* on them.
   let lastTurnSig = null;
   let loopStreak = 0;
+
+  // ── Runtime Resilience v2 (v0.65): stall detection + graceful degradation ──
+  // Complements the exact-repeat loop breaker above: that one catches *identical*
+  // consecutive turns; this catches the *semantic* stall — different actions,
+  // zero progress, for a long stretch. Deterministic (no model): we count
+  // consecutive turns that made no progress (no successful tool call, no todo
+  // advance). Config is pre-normalized by normalizeConfig, so a tiny inline
+  // guard is enough; we avoid importing clampNum into this hot module.
+  const stallGuardOn = config.stallGuard !== 'off';
+  const stallTurns = Number.isFinite(Number(config.stallTurns)) ? Math.floor(Number(config.stallTurns)) : 6;
+  const stallHardTurns = Math.max(
+    stallTurns,
+    Number.isFinite(Number(config.stallHardTurns)) ? Math.floor(Number(config.stallHardTurns)) : 12
+  );
+  let turnsSinceProgress = 0;
+  let stallSoftNoted = false;
 
   // ── Context economy ──
   // Shrink oversized tool output on the way into the history instead of waiting
@@ -499,6 +516,47 @@ export async function runAgent({
     }
 
     turnsSinceTodo = todoTouched ? 0 : turnsSinceTodo + 1;
+
+    // ── Runtime Resilience v2 (v0.65): stall detection + graceful degradation ──
+    // Update the no-progress counter, then act on it. This runs AFTER every tool
+    // turn and is independent of the exact-repeat loop breaker. The hard stop is
+    // a graceful degradation — "escalate rather than guess" (2026 playbook): the
+    // agent knows it's stuck, says so, and stops cleanly instead of burning the
+    // whole budget or crashing. It maps to a distinct 'blocked' goal status.
+    if (stallGuardOn) {
+      const madeProgress = turnMadeProgress({ toolResults, todoTouched });
+      if (madeProgress) turnsSinceProgress = 0;
+      else turnsSinceProgress++;
+      const lvl = detectStall({ turnsSinceProgress, stallTurns, stallHardTurns });
+      if (lvl === 'hard') {
+        onEvent('stall', { level: 'hard', turns: turnsSinceProgress });
+        // One final, bounded summary turn — never keep spending after this.
+        messages.push({
+          role: 'system',
+          content:
+            `⚠️ 停滞护栏触发：已连续 ${turnsSinceProgress} 回合没有任何实质进展（无成功的工具调用、待办也未推进）。` +
+            '请立即停止，并输出一份【卡点说明】而非继续空转：你已完成什么、卡在哪里、需要用户澄清或提供什么。'
+        });
+        const r = await callModel(messages, { onDelta: (t) => onEvent('delta', t), onReasoning: (t) => onEvent('reasoning', t) });
+        if (r.usage) { addUsage(usage, r.usage); onEvent('usage', { turn: turn + 1, ...usage, cost: costOf(usage, price) }); }
+        const finalMsg = { role: 'assistant', content: r.content || '' };
+        if (r.reasoning) finalMsg.reasoning = r.reasoning;
+        messages.push(finalMsg);
+        onEvent('assistant', finalMsg);
+        const payload = finish('stalled', turn + 1, usage, price, limit, shrinkStats);
+        onEvent('done', payload);
+        return { messages, ...payload };
+      } else if (lvl === 'soft' && !stallSoftNoted) {
+        stallSoftNoted = true;
+        onEvent('stall', { level: 'soft', turns: turnsSinceProgress });
+        messages.push({
+          role: 'user',
+          content:
+            `⚠️ 停滞提醒（已 ${turnsSinceProgress} 回合无进展）：你似乎在空转——没有成功的工具调用，待办也没推进。` +
+            '请换思路：换用不同工具或参数、重新确认任务要求，或先向用户澄清卡点，而不是继续重复无效动作。'
+        });
+      }
+    }
   }
 
   // Hit the ceiling with tools still pending. Say so out loud — silently

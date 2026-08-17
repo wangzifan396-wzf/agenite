@@ -827,6 +827,17 @@
             </div>
           </div>
           <label class="switch-row">
+            <span><b>停滞护栏（优雅降级）</b><em>连续多回合无任何成功工具调用 / 待办未推进即判定空转：先一次提醒换思路，超过硬阈值则优雅停下并标记为「阻塞 / 需澄清」，绝不崩溃或空转烧钱（v0.65）</em></span>
+            <input id="set-stallGuard" type="checkbox" checked />
+          </label>
+          <div class="field">
+            <span class="field-title">软阈值（提醒）/ 硬阈值（停下）<em class="muted small">连续 N 回合无进展先提醒换思路；达到 M 回合则优雅停下（硬阈值 ≥ 软阈值）</em></span>
+            <div class="btn-row">
+              <input id="set-stallTurns" type="number" min="1" max="100" value="6" style="width:96px" title="软阈值：无进展回合数，达到即提醒" />
+              <input id="set-stallHardTurns" type="number" min="1" max="1000" value="12" style="width:96px" title="硬阈值：无进展回合数，达到即优雅停下" />
+            </div>
+          </div>
+          <label class="switch-row">
             <span><b>记忆图谱注入推理</b><em>每次对话把本地知识图谱压成摘要注入系统提示词，让 agent 主动引用已知的人物 / 项目 / 关系（关闭则图谱只作可视化，不参与推理）</em></span>
             <input id="set-atlasInject" type="checkbox" checked />
           </label>

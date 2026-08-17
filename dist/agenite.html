@@ -1591,6 +1591,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .gw-skill { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8b5cf6; border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
 .gw-skill-pruned { background: color-mix(in srgb, #f59e0b 14%, transparent); color: #b45309; border-color: color-mix(in srgb, #f59e0b 32%, transparent); }
 .gw-skill-merged { background: color-mix(in srgb, #0ea5e9 14%, transparent); color: #0369a1; border-color: color-mix(in srgb, #0ea5e9 32%, transparent); }
+.gw-skill-stalled { background: color-mix(in srgb, #ef4444 14%, transparent); color: #b91c1c; border-color: color-mix(in srgb, #ef4444 36%, transparent); }
 .goal-pre {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
@@ -3272,6 +3273,17 @@ select.text-input { appearance: auto; padding-right: 8px; }
             </div>
           </div>
           <label class="switch-row">
+            <span><b>停滞护栏（优雅降级）</b><em>连续多回合无任何成功工具调用 / 待办未推进即判定空转：先一次提醒换思路，超过硬阈值则优雅停下并标记为「阻塞 / 需澄清」，绝不崩溃或空转烧钱（v0.65）</em></span>
+            <input id="set-stallGuard" type="checkbox" checked />
+          </label>
+          <div class="field">
+            <span class="field-title">软阈值（提醒）/ 硬阈值（停下）<em class="muted small">连续 N 回合无进展先提醒换思路；达到 M 回合则优雅停下（硬阈值 ≥ 软阈值）</em></span>
+            <div class="btn-row">
+              <input id="set-stallTurns" type="number" min="1" max="100" value="6" style="width:96px" title="软阈值：无进展回合数，达到即提醒" />
+              <input id="set-stallHardTurns" type="number" min="1" max="1000" value="12" style="width:96px" title="硬阈值：无进展回合数，达到即优雅停下" />
+            </div>
+          </div>
+          <label class="switch-row">
             <span><b>记忆图谱注入推理</b><em>每次对话把本地知识图谱压成摘要注入系统提示词，让 agent 主动引用已知的人物 / 项目 / 关系（关闭则图谱只作可视化，不参与推理）</em></span>
             <input id="set-atlasInject" type="checkbox" checked />
           </label>
@@ -4148,6 +4160,20 @@ function defaultConfig() {
     //   'block' additionally refuse the highest-risk verbs when a strong
     //           runaway-loop lesson exists — conservative, opt-in
     reflectionGuard: 'warn',
+    // --- runtime resilience v2 (v0.65): stall detection + graceful degradation ---
+    // The exact-repeat loop breaker + cost guardrail already exist; this catches
+    // the *semantic* stall the others miss — an agent that throws nothing yet
+    // makes zero progress for a long stretch (re-reading files, retrying variants
+    // that all fail, thinking in circles). Detected deterministically (no model):
+    // N consecutive turns with no successful tool call and no todo advance.
+    //   stallGuard      master switch ('on' default / 'off')
+    //   stallTurns      soft threshold — emit one "you're stuck, reconsider" nudge
+    //   stallHardTurns  hard threshold — stop gracefully as 'blocked' (never
+    //                   crash, never burn the whole budget) and ask the user to
+    //                   clarify. Always honoured >= stallTurns.
+    stallGuard: 'on',
+    stallTurns: 6,
+    stallHardTurns: 12,
     // --- project instruction files (v0.57, AGENTS.md / CLAUDE.md compatible) ---
     // Auto-load the repo's "how to work here" file (AGENTS.md / CLAUDE.md / …)
     // and fold it into the system prompt so repo conventions are respected
@@ -4326,6 +4352,11 @@ function normalizeConfig(input = {}) {
   cfg.goalVerify = ['auto', 'full', 'judge', 'off'].includes(cfg.goalVerify) ? cfg.goalVerify : 'auto';
   cfg.goalCritic = cfg.goalCritic === 'off' ? 'off' : 'on';
   cfg.goalMemory = cfg.goalMemory === 'off' ? 'off' : 'on';
+  // --- runtime resilience v2 (v0.65): stall detection + graceful degradation ---
+  cfg.stallGuard = cfg.stallGuard === 'off' ? 'off' : 'on';
+  cfg.stallTurns = Math.round(clampNum(cfg.stallTurns, 1, 100, 6));
+  cfg.stallHardTurns = Math.round(clampNum(cfg.stallHardTurns, 1, 1000, 12));
+  if (cfg.stallHardTurns < cfg.stallTurns) cfg.stallHardTurns = cfg.stallTurns;
   cfg.experienceDir = typeof cfg.experienceDir === 'string' ? cfg.experienceDir.trim().slice(0, 200) : '';
   cfg.skillCrystallization = cfg.skillCrystallization === 'off' ? 'off' : 'on';
   cfg.skillsDir = typeof cfg.skillsDir === 'string' ? cfg.skillsDir.trim().slice(0, 200) : '';
@@ -7591,6 +7622,9 @@ function fillSettings() {
   $('set-maxSkills').value = config.maxSkills || 60;
   $('set-skillDecayDays').value = config.skillDecayDays || 90;
   $('set-umbrellaMin').value = config.umbrellaMin || 3;
+  $('set-stallGuard').checked = config.stallGuard !== 'off';
+  $('set-stallTurns').value = config.stallTurns || 6;
+  $('set-stallHardTurns').value = config.stallHardTurns || 12;
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -7788,6 +7822,9 @@ function saveSettings() {
     maxSkills: clampNum($('set-maxSkills').value, 1, 1000, 60),
     skillDecayDays: clampNum($('set-skillDecayDays').value, 0, 3650, 90),
     umbrellaMin: clampNum($('set-umbrellaMin').value, 2, 50, 3),
+    stallGuard: $('set-stallGuard').checked ? 'on' : 'off',
+    stallTurns: clampNum($('set-stallTurns').value, 1, 100, 6),
+    stallHardTurns: clampNum($('set-stallHardTurns').value, 1, 1000, 12),
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -8381,6 +8418,14 @@ function routeChips(g) {
   return `<span class="gw-chip gw-route" title="本目标启用 v0.62 多模型智能路由：规划/验证/复核走强模型（推理层），自治工具循环走便宜模型（执行层），成本显著下降且受验证+复核双闸门护栏保护">多模型路由 · 推理 ${escapeHtml(r)} / 执行 ${escapeHtml(e)}</span>`;
 }
 
+// v0.65 — Stall guard badge. Shown only when a goal was gracefully stopped by
+// the runtime resilience layer (semantic stall); distinct from a hard failure.
+function stallChip(g) {
+  if (!g.stall) return '';
+  const n = g.stall.turns || 0;
+  return `<span class="gw-chip gw-skill gw-skill-stalled" title="停滞护栏触发：连续 ${n} 回合无实质进展，目标已优雅停下并标记为「阻塞 / 需澄清」（未崩溃、未空转烧钱）。请查看进度日志核对卡点，必要时向 agent 澄清需求后重跑。">⚠ 停滞阻塞 · ${n} 回合</span>`;
+}
+
 function goalCard(g) {
   const badge = `<span class="goal-badge ${g.status}">${statusLabel(g.status)}</span>`;
   const stopBtn =
@@ -8425,7 +8470,7 @@ function goalCard(g) {
       <div class="goal-foot muted small">步数 ${g.turns || 0} · 花费 ¥${(g.cost || 0).toFixed(4)}${
     g.attempt > 1 ? ' · 尝试 ' + g.attempt : ''
   } · ${new Date(g.updatedAt).toLocaleString()}</div>
-      ${expChips(g) || skillChips(g) || routeChips(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g), routeChips(g)].filter(Boolean).join(' ')}</div>` : ''}
+      ${expChips(g) || skillChips(g) || routeChips(g) || stallChip(g) ? `<div class="goal-foot">${[expChips(g), skillChips(g), routeChips(g), stallChip(g)].filter(Boolean).join(' ')}</div>` : ''}
       ${detail}
     </div>`;
 }

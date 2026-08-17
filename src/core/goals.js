@@ -224,7 +224,8 @@ export async function createGoal({ goal, title, config }, dir = GOALS_DIR, deps 
     report: '',
     error: '',
     usage: { total: 0, cost: 0 },
-    turns: 0
+    turns: 0,
+    stall: null
   };
   await writeGoal(state, dir);
   // Fire and forget — never block the HTTP response on a long autonomous run.
@@ -892,6 +893,22 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
         total: (state.usage.total || 0) + ((result.usage && result.usage.total) || 0),
         cost: (state.usage.cost || 0) + (result.cost || 0)
       };
+      // ── Stall guard (v0.65): graceful degradation ──
+      // A 'stalled' result means the runtime resilience layer stopped the agent
+      // early because it made zero progress for stallHardTurns turns. Treat this
+      // as a distinct, recoverable 'blocked' outcome — NOT a verification
+      // failure and NOT a crash. We skip the verify/crystallize gates (the agent
+      // never finished) and break straight out of the retry loop, so a stuck
+      // agent can't be "helped" by more blind retries.
+      if (result && result.stopped === 'stalled') {
+        state.phase = 'report';
+        state.status = 'blocked';
+        state.stall = { level: 'hard', turns: result.turns || 0 };
+        state.error = '停滞护栏：连续 ' + (result.turns || 0) + ' 回合无实质进展，已优雅停下并请求澄清（未崩溃、未空转烧钱）。';
+        append('system', '⚠️ 停滞护栏触发：连续 ' + (result.turns || 0) + ' 回合无进展，目标标记为「阻塞 / 需澄清」而非「失败」。');
+        flush();
+        break;
+      }
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && m.content);
       state.report = lastAssistant ? lastAssistant.content : state.report;
 

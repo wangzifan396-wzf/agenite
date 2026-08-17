@@ -866,3 +866,57 @@ test('v0.64 skill umbrella consolidation is surfaced on the goal', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('v0.65 stall guard: a stalled agent stops gracefully as blocked, not failed', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '深入调试一个死循环', title: 'STALL', config: { provider: 'openai', model: 'x', apiKey: 'k' } },
+      dir,
+      fakeDeps({
+        runAgent: async ({ onEvent, messages }) => {
+          onEvent('stall', { level: 'hard', turns: 12 });
+          onEvent('done', { turns: 12, stopped: 'stalled' });
+          messages.push({ role: 'assistant', content: '卡点说明：无法定位根因，需要用户澄清日志格式。' });
+          return { stopped: 'stalled', turns: 12, usage: { total: 150 }, cost: { amount: 0.001, currency: 'CNY' }, limit: 20, canContinue: false };
+        }
+      })
+    );
+    assert.equal(r.ok, true);
+    const done = await waitFor(r.id, dir, (g) => g.status === 'blocked' || g.status === 'failed' || g.status === 'done');
+    assert.equal(done.status, 'blocked', 'a stalled run must be marked blocked, not failed');
+    assert.ok(done.stall, 'state.stall should be set');
+    assert.equal(done.stall.level, 'hard');
+    assert.equal(done.stall.turns, 12);
+    assert.ok(
+      !(done.log || []).some((l) => l.type === 'verify'),
+      'a stalled (never-finished) run must skip the verify gate'
+    );
+    assert.deepEqual(done.skills.crystallized, [], 'no skill is crystallized from a stalled run');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.65 stall guard: can be disabled (stalled result still surfaced but not special-cased)', async () => {
+  const dir = tmpDir();
+  try {
+    const r = await createGoal(
+      { goal: '关闭护栏后的停滞', title: 'NOSTALL', config: { provider: 'openai', model: 'x', apiKey: 'k', stallGuard: 'off' } },
+      dir,
+      fakeDeps({
+        runAgent: async ({ onEvent, messages }) => {
+          onEvent('done', { turns: 12, stopped: 'stalled' });
+          messages.push({ role: 'assistant', content: 'stopped' });
+          return { stopped: 'stalled', turns: 12, usage: { total: 150 }, cost: { amount: 0.001, currency: 'CNY' }, limit: 20, canContinue: false };
+        }
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'blocked' || g.status === 'failed' || g.status === 'done');
+    // With stallGuard off at the goal level, goals.js still honors the agent's
+    // 'stalled' stop reason as blocked (the runtime layer already decided it).
+    assert.equal(done.status, 'blocked');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
