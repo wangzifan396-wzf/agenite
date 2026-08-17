@@ -1590,6 +1590,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .router-fields .field-row { margin-top: 0; }
 .gw-skill { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8b5cf6; border-color: color-mix(in srgb, #8b5cf6 35%, transparent); }
 .gw-skill-pruned { background: color-mix(in srgb, #f59e0b 14%, transparent); color: #b45309; border-color: color-mix(in srgb, #f59e0b 32%, transparent); }
+.gw-skill-merged { background: color-mix(in srgb, #0ea5e9 14%, transparent); color: #0369a1; border-color: color-mix(in srgb, #0ea5e9 32%, transparent); }
 .goal-pre {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
@@ -3258,11 +3259,16 @@ select.text-input { appearance: auto; padding-right: 8px; }
             <span><b>技能库自动策展</b><em>目标跑完自动裁剪：超上限归档垫底技能、同目标去重、久未用归档（v0.63，绝不删除文件）</em></span>
             <input id="set-skillCuration" type="checkbox" checked />
           </label>
+          <label class="switch-row">
+            <span><b>技能雨伞式合并</b><em>共享同一概念的多个狭窄技能自动合并为一个可发现的总览技能，狭窄者归档为子章节（v0.64，知识不丢、可恢复）</em></span>
+            <input id="set-skillUmbrella" type="checkbox" checked />
+          </label>
           <div class="field">
-            <span class="field-title">技能库上限 / 衰减天数<em class="muted small">活跃技能超过上限时归档垫底者；零使用且超过衰减天数的技能归档</em></span>
+            <span class="field-title">技能库上限 / 衰减天数 / 合并阈值<em class="muted small">活跃技能超过上限时归档垫底者；零使用且超过衰减天数的技能归档；同概念技能数达到阈值即雨伞式合并</em></span>
             <div class="btn-row">
               <input id="set-maxSkills" type="number" min="1" max="1000" value="60" style="width:96px" title="活跃技能上限" />
               <input id="set-skillDecayDays" type="number" min="0" max="3650" value="90" style="width:96px" title="零使用技能衰减天数" />
+              <input id="set-umbrellaMin" type="number" min="2" max="50" value="3" style="width:96px" title="雨伞式合并所需的最小同概念技能数" />
             </div>
           </div>
           <label class="switch-row">
@@ -4221,6 +4227,20 @@ function defaultConfig() {
   maxSkills: 60,
   // A skill with zero recorded uses AND older than this many days is archived.
   skillDecayDays: 90,
+  // --- Skill Umbrella Consolidation (v0.64) ---
+  // v0.63's dedup only removes EXACT duplicates. Umbrella consolidation is the
+  // higher-value Curator operation: narrow sibling skills that serve ONE larger
+  // concept are merged into a single concept-level skill (so the library stays
+  // FINDABLE, not just bounded). The merged siblings are archived (bodies kept)
+  // and their procedures live on as `##` sections inside the umbrella. Grouping
+  // is deterministic — the shared concept is the token with the highest document
+  // frequency across active skills — so no LLM call and no surprise merges.
+  //   'on'   (default) merge concept-clusters of >= umbrellaMin skills.
+  //   'off'  keep every skill as-is — no consolidation.
+  skillUmbrella: 'on',
+  // Minimum number of distinct active skills sharing a concept before they are
+  // folded into one umbrella. Lower = more aggressive merging.
+  umbrellaMin: 3,
 
   // --- Multi-Model Intelligent Routing (v0.62) ---
   // 2026 consensus: split a goal into a cheap "executor" loop (tool-calling,
@@ -4312,6 +4332,8 @@ function normalizeConfig(input = {}) {
   cfg.skillCuration = cfg.skillCuration === 'off' ? 'off' : 'on';
   cfg.maxSkills = Math.round(clampNum(cfg.maxSkills, 1, 1000, 60));
   cfg.skillDecayDays = Math.round(clampNum(cfg.skillDecayDays, 0, 3650, 90));
+  cfg.skillUmbrella = cfg.skillUmbrella === 'off' ? 'off' : 'on';
+  cfg.umbrellaMin = Math.round(clampNum(cfg.umbrellaMin, 2, 50, 3));
   cfg.modelRouter = cfg.modelRouter === 'on' ? 'on' : 'off';
   cfg.reasoningModel = typeof cfg.reasoningModel === 'string' ? cfg.reasoningModel.trim().slice(0, 200) : '';
   cfg.executorModel = typeof cfg.executorModel === 'string' ? cfg.executorModel.trim().slice(0, 200) : '';
@@ -7565,8 +7587,10 @@ function fillSettings() {
   $('set-autoSkill').checked = config.autoSkill === true;
   $('set-skillCrystallization').checked = config.skillCrystallization !== 'off';
   $('set-skillCuration').checked = config.skillCuration !== 'off';
+  $('set-skillUmbrella').checked = config.skillUmbrella !== 'off';
   $('set-maxSkills').value = config.maxSkills || 60;
   $('set-skillDecayDays').value = config.skillDecayDays || 90;
+  $('set-umbrellaMin').value = config.umbrellaMin || 3;
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -7760,8 +7784,10 @@ function saveSettings() {
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
     skillCrystallization: $('set-skillCrystallization').checked ? 'on' : 'off',
     skillCuration: $('set-skillCuration').checked ? 'on' : 'off',
+    skillUmbrella: $('set-skillUmbrella').checked ? 'on' : 'off',
     maxSkills: clampNum($('set-maxSkills').value, 1, 1000, 60),
     skillDecayDays: clampNum($('set-skillDecayDays').value, 0, 3650, 90),
+    umbrellaMin: clampNum($('set-umbrellaMin').value, 2, 50, 3),
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -8329,6 +8355,11 @@ function skillChips(g) {
   if (Array.isArray(sk.pruned) && sk.pruned.length) {
     parts.push(
       `<span class="gw-chip gw-skill gw-skill-pruned" title="跑完本次目标后，技能库自动策展归档了这些低价值/重复/久未用技能（.md 文件保留在磁盘，可找回）">策展归档 ×${sk.pruned.length}</span>`
+    );
+  }
+  if (Array.isArray(sk.consolidated) && sk.consolidated.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill gw-skill-merged" title="跑完本次目标后，多个共享同一概念的狭窄技能被雨伞式合并为可发现的总览技能，原技能归档为子章节（知识不丢失，可恢复）">已合并 ×${sk.consolidated.length}</span>`
     );
   }
   return parts.join(' ');

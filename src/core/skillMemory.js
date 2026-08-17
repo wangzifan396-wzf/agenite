@@ -129,7 +129,11 @@ export function recordSkill({ dir, skill, deps } = {}) {
     lastUsed: skill.lastUsed || '',
     created: skill.created || nowDate,
     goal: String(skill.goal || '').slice(0, 400),
-    status: skill.status === 'archived' ? 'archived' : 'active'
+    status: skill.status === 'archived' ? 'archived' : 'active',
+    // v0.64 — umbrella consolidation bookkeeping (absent on normal skills).
+    umbrella: !!skill.umbrella,
+    mergedIds: Array.isArray(skill.mergedIds) ? skill.mergedIds.filter((x) => typeof x === 'string').slice(0, 64) : [],
+    consolidatedInto: typeof skill.consolidatedInto === 'string' && skill.consolidatedInto ? skill.consolidatedInto : ''
   };
   try {
     f.writeFileSync(p.join(dir, file), skill.body || '', 'utf8');
@@ -308,7 +312,10 @@ function withSkillMeta(s = {}) {
     lastUsed: s.lastUsed || '',
     created: s.created || '',
     goal: s.goal || '',
-    status: s.status === 'archived' ? 'archived' : 'active'
+    status: s.status === 'archived' ? 'archived' : 'active',
+    umbrella: !!s.umbrella,
+    mergedIds: Array.isArray(s.mergedIds) ? s.mergedIds.filter((x) => typeof x === 'string').slice(0, 64) : [],
+    consolidatedInto: typeof s.consolidatedInto === 'string' && s.consolidatedInto ? s.consolidatedInto : ''
   };
 }
 
@@ -410,8 +417,21 @@ export function curateSkills({ dir, config = {}, deps } = {}) {
       /* write failure must never throw out of curation */
     }
   }
-  const finalActive = skills.filter((s) => s.status !== 'archived').length;
-  return { skipped: false, archived, active: finalActive, total: skills.length };
+
+  // 4) Umbrella Consolidation (v0.64) — group narrow siblings that share a
+  // concept into one findable skill, archiving the siblings (bodies preserved,
+  // so the merge is fully reversible). Deterministic; no LLM call.
+  let consolidated = [];
+  if (resolveSkillUmbrellaMode(config) === 'on') {
+    try {
+      consolidated = runConsolidate({ dir, idx, config, deps });
+    } catch {
+      consolidated = [];
+    }
+  }
+
+  const finalActive = idx.skills.filter((s) => s.status !== 'archived').length;
+  return { skipped: false, archived, consolidated, active: finalActive, total: idx.skills.length };
 }
 
 function genId(c) {
@@ -420,4 +440,174 @@ function genId(c) {
   } catch {
     return 'skl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
+}
+
+// ── v0.64 Skill Umbrella Consolidation (雨伞式合并) ──────────────────────
+// v0.63's dedup only removes EXACT duplicates ("do these two target the same
+// goal?"). Hermes' Curator exposes a higher-value operation it calls "Umbrella
+// Consolidation": narrow sibling skills that serve ONE larger concept get
+// merged into a single concept-level skill with sub-sections. The point is
+// FINDABILITY, not disk savings — a library of 50 narrow `pr-*` skills is a
+// junk drawer even if none are duplicates; one `PR 技能集` entry you can find
+// is not. This is the documented differentiator of Hermes over naive dedup.
+//
+// Design choices (kept deterministic + deps-injectable, no LLM call):
+//   - The "shared concept" is the token with the highest DOCUMENT FREQUENCY
+//     across active skills (computed via the existing tokenizer). A token that
+//     appears in every skill is universal, not a concept, so it is excluded.
+//   - Only clusters of >= umbrellaMin DISTINCT skills are merged, so we never
+//     collapse near-duplicates (dedup already handled those) or singletons.
+//   - The umbrella is a NEW active skill whose body concatenates each sibling's
+//     procedure under a `## <sibling name>` heading; siblings are ARCHIVED
+//     (status flip + consolidatedInto pointer) — their .md bodies stay on disk,
+//     so knowledge is never lost and the merge is fully reversible (restore the
+//     siblings, drop the umbrella). The umbrella itself is recalled normally.
+//   - Generic stopwords (function words) never become a namespace.
+
+const SKILL_STOPWORDS = new Set([
+  'the', 'and', 'for', 'you', 'this', 'that', 'with', 'how', 'what', 'when',
+  'need', 'use', 'run', 'can', 'are',
+  '可以', '我们', '这个', '一个', '如何', '什么', '时候', '需要', '应该', '因为',
+  '如果', '这样', '那样', '他们', '这些', '那些'
+]);
+
+export function resolveSkillUmbrellaMode(config = {}) {
+  return config && config.skillUmbrella === 'off' ? 'off' : 'on';
+}
+
+function umbrellaNameFor(ns) {
+  if (/^[a-z0-9_]+$/.test(ns)) return ns.toUpperCase() + ' 技能集';
+  return '技能集·' + ns;
+}
+
+// Pick the best namespace token for one skill, given the global doc-frequency
+// map of active skills. Returns '' when the skill has no consolidatable concept.
+function skillNamespace(skill, docFreq, totalActive, umbrellaMin) {
+  const corpus = [skill.goal, skill.summary, skill.name].filter(Boolean).join(' ');
+  const toks = new Set(tokenize(corpus));
+  let best = '';
+  let bestDf = 0;
+  for (const t of toks) {
+    if (SKILL_STOPWORDS.has(t) || t.length < 2) continue;
+    const df = docFreq.get(t) || 0;
+    if (df < umbrellaMin) continue; // concept must be shared by enough skills
+    // A token appearing in EVERY active skill is "universal" only when the
+    // library is larger than a single cluster — otherwise the whole library IS
+    // the cluster and the shared token legitimately IS its concept.
+    if (df >= totalActive && totalActive > umbrellaMin) continue;
+    if (df > bestDf || (df === bestDf && t < best)) {
+      best = t;
+      bestDf = df;
+    }
+  }
+  return best;
+}
+
+// Build the document-frequency map of tokens over the active skill set.
+function buildDocFreq(activeSkills) {
+  const docFreq = new Map();
+  for (const s of activeSkills) {
+    const toks = new Set(tokenize([s.goal, s.summary, s.name].filter(Boolean).join(' ')));
+    for (const t of toks) {
+      if (SKILL_STOPWORDS.has(t) || t.length < 2) continue;
+      docFreq.set(t, (docFreq.get(t) || 0) + 1);
+    }
+  }
+  return docFreq;
+}
+
+// Mutates `idx.skills` in place: appends umbrella entries and archives the
+// merged siblings. Writes index.json once if anything changed. Returns the
+// list of consolidation reports (one per umbrella created).
+function runConsolidate({ dir, idx, config = {}, deps } = {}) {
+  if (resolveSkillUmbrellaMode(config) === 'off') return [];
+  const f = (deps && deps.fs) || fs;
+  const p = (deps && deps.path) || path;
+  const c = (deps && deps.crypto) || crypto;
+  const umbrellaMin = Math.max(2, Math.round(Number(config.umbrellaMin) || 3));
+  const skills = (idx.skills || []).map(withSkillMeta);
+  const active = skills.filter((s) => s.status !== 'archived');
+  if (active.length < umbrellaMin) return [];
+  const today = new Date().toISOString().slice(0, 10);
+  const docFreq = buildDocFreq(active);
+  const groups = new Map();
+  for (const s of active) {
+    const ns = skillNamespace(s, docFreq, active.length, umbrellaMin);
+    if (!ns) continue;
+    if (!groups.has(ns)) groups.set(ns, []);
+    groups.get(ns).push(s);
+  }
+  const reports = [];
+  for (const [ns, group] of groups) {
+    if (group.length < umbrellaMin) continue;
+    const names = new Set(group.map((g) => g.name));
+    if (names.size < group.length) continue; // dedup owns duplicates; don't merge them
+    const sections = [];
+    for (const g of group) {
+      const bodyObj = loadSkillBody({ dir, id: g.id, deps });
+      const bodyText = bodyObj ? bodyObj.body : '';
+      sections.push(`## ${g.name}\n${bodyText}`.trim());
+    }
+    const umbrellaId = genId(c);
+    const umbrellaName = umbrellaNameFor(ns);
+    const mergedIds = group.map((g) => g.id);
+    const umbrellaSummary = `合并 ${group.length} 个「${ns}」相关技能：${group.map((g) => g.name).join('、')}`;
+    const umbrellaBody = [
+      `# ${umbrellaName}`,
+      '',
+      '> 由技能策展自动合并（v0.64 雨伞式合并）。以下子技能已被归档，知识不会丢失，可随时恢复。',
+      '',
+      sections.join('\n\n')
+    ].join('\n');
+    try {
+      f.writeFileSync(p.join(dir, `${umbrellaId}.md`), umbrellaBody, 'utf8');
+    } catch {
+      continue; // never break curation on a write failure
+    }
+    idx.skills.push({
+      id: umbrellaId,
+      name: umbrellaName,
+      tags: [ns].slice(0, 12),
+      summary: umbrellaSummary.slice(0, 240),
+      file: `${umbrellaId}.md`,
+      used: 0,
+      confidence: 0.9,
+      lastUsed: '',
+      created: today,
+      goal: '',
+      status: 'active',
+      umbrella: true,
+      mergedIds,
+      consolidatedInto: ''
+    });
+    for (const g of group) {
+      const e = idx.skills.find((x) => x.id === g.id);
+      if (e) {
+        e.status = 'archived';
+        e.consolidatedInto = umbrellaId;
+      }
+    }
+    reports.push({ namespace: ns, umbrellaId, umbrellaName, merged: mergedIds });
+  }
+  if (reports.length) {
+    try {
+      f.writeFileSync(p.join(dir, 'index.json'), JSON.stringify(idx, null, 2), 'utf8');
+    } catch {
+      /* write failure must never throw out of consolidation */
+    }
+  }
+  return reports;
+}
+
+// Standalone entry point (also used by tests). Returns
+// { skipped, consolidated:[{namespace,umbrellaId,umbrellaName,merged}], active, total }.
+export function consolidateSkills({ dir, config = {}, deps } = {}) {
+  if (resolveSkillUmbrellaMode(config) === 'off') {
+    return { skipped: true, consolidated: [], active: 0, total: 0 };
+  }
+  if (!dir) return { skipped: false, consolidated: [], active: 0, total: 0 };
+  const idx = loadIndex({ dir, deps });
+  const consolidated = runConsolidate({ dir, idx, config, deps });
+  const finalActive = idx.skills.filter((s) => s.status !== 'archived').length;
+  return { skipped: false, consolidated, active: finalActive, total: idx.skills.length };
 }

@@ -814,11 +814,16 @@
             <span><b>技能库自动策展</b><em>目标跑完自动裁剪：超上限归档垫底技能、同目标去重、久未用归档（v0.63，绝不删除文件）</em></span>
             <input id="set-skillCuration" type="checkbox" checked />
           </label>
+          <label class="switch-row">
+            <span><b>技能雨伞式合并</b><em>共享同一概念的多个狭窄技能自动合并为一个可发现的总览技能，狭窄者归档为子章节（v0.64，知识不丢、可恢复）</em></span>
+            <input id="set-skillUmbrella" type="checkbox" checked />
+          </label>
           <div class="field">
-            <span class="field-title">技能库上限 / 衰减天数<em class="muted small">活跃技能超过上限时归档垫底者；零使用且超过衰减天数的技能归档</em></span>
+            <span class="field-title">技能库上限 / 衰减天数 / 合并阈值<em class="muted small">活跃技能超过上限时归档垫底者；零使用且超过衰减天数的技能归档；同概念技能数达到阈值即雨伞式合并</em></span>
             <div class="btn-row">
               <input id="set-maxSkills" type="number" min="1" max="1000" value="60" style="width:96px" title="活跃技能上限" />
               <input id="set-skillDecayDays" type="number" min="0" max="3650" value="90" style="width:96px" title="零使用技能衰减天数" />
+              <input id="set-umbrellaMin" type="number" min="2" max="50" value="3" style="width:96px" title="雨伞式合并所需的最小同概念技能数" />
             </div>
           </div>
           <label class="switch-row">

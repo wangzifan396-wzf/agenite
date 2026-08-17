@@ -421,6 +421,20 @@ export function defaultConfig() {
   maxSkills: 60,
   // A skill with zero recorded uses AND older than this many days is archived.
   skillDecayDays: 90,
+  // --- Skill Umbrella Consolidation (v0.64) ---
+  // v0.63's dedup only removes EXACT duplicates. Umbrella consolidation is the
+  // higher-value Curator operation: narrow sibling skills that serve ONE larger
+  // concept are merged into a single concept-level skill (so the library stays
+  // FINDABLE, not just bounded). The merged siblings are archived (bodies kept)
+  // and their procedures live on as `##` sections inside the umbrella. Grouping
+  // is deterministic — the shared concept is the token with the highest document
+  // frequency across active skills — so no LLM call and no surprise merges.
+  //   'on'   (default) merge concept-clusters of >= umbrellaMin skills.
+  //   'off'  keep every skill as-is — no consolidation.
+  skillUmbrella: 'on',
+  // Minimum number of distinct active skills sharing a concept before they are
+  // folded into one umbrella. Lower = more aggressive merging.
+  umbrellaMin: 3,
 
   // --- Multi-Model Intelligent Routing (v0.62) ---
   // 2026 consensus: split a goal into a cheap "executor" loop (tool-calling,
@@ -512,6 +526,8 @@ export function normalizeConfig(input = {}) {
   cfg.skillCuration = cfg.skillCuration === 'off' ? 'off' : 'on';
   cfg.maxSkills = Math.round(clampNum(cfg.maxSkills, 1, 1000, 60));
   cfg.skillDecayDays = Math.round(clampNum(cfg.skillDecayDays, 0, 3650, 90));
+  cfg.skillUmbrella = cfg.skillUmbrella === 'off' ? 'off' : 'on';
+  cfg.umbrellaMin = Math.round(clampNum(cfg.umbrellaMin, 2, 50, 3));
   cfg.modelRouter = cfg.modelRouter === 'on' ? 'on' : 'off';
   cfg.reasoningModel = typeof cfg.reasoningModel === 'string' ? cfg.reasoningModel.trim().slice(0, 200) : '';
   cfg.executorModel = typeof cfg.executorModel === 'string' ? cfg.executorModel.trim().slice(0, 200) : '';

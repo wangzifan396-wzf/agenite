@@ -592,7 +592,7 @@ test('v0.61 skill off: no distillation and no record (even if complex)', async (
     assert.equal(done.status, 'done');
     assert.equal(distillCalls, 0, 'distillSkill must not be called when skill mode is off');
     assert.equal(recordCalls, 0, 'recordSkill must not be called when skill mode is off');
-    assert.deepEqual(done.skills, { used: [], crystallized: [], pruned: [] }, 'skill mode off must not touch skills');
+    assert.deepEqual(done.skills, { used: [], crystallized: [], pruned: [], consolidated: [] }, 'skill mode off must not touch skills');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -828,6 +828,40 @@ test('v0.63 skill curation is skipped when skillCuration is off', async () => {
     const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
     assert.equal(done.status, 'done');
     assert.equal(curateCalls, 0, 'curateSkills must NOT be called when skillCuration=off');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.64 skill umbrella consolidation is surfaced on the goal', async () => {
+  const dir = tmpDir();
+  try {
+    let curateCalls = 0;
+    let curateArg = null;
+    const r = await createGoal(
+      {
+        goal: '跑完后应触发技能雨伞式合并',
+        config: { provider: 'openai', model: 'x', apiKey: 'k', skillCrystallization: 'on', skillCuration: 'on', skillUmbrella: 'on', umbrellaMin: 3 }
+      },
+      dir,
+      fakeDeps({
+        verify: ['已完成'],
+        critique: ['达标：改动合理'],
+        gitRevParseHead: async () => 'BASESHA',
+        getDiff: async () => ({ empty: false, files: ['src/f.js'], deletedTestFiles: [], diff: '+ done' }),
+        curateSkills: async (arg) => {
+          curateCalls++;
+          curateArg = arg;
+          return { skipped: false, archived: [], active: 5, total: 5, consolidated: [{ namespace: 'pr', umbrellaId: 'skl_umb', umbrellaName: 'PR 技能集', merged: ['a', 'b', 'c'] }] };
+        },
+        matchSkills: async () => ({ skills: [], used: [] })
+      })
+    );
+    const done = await waitFor(r.id, dir, (g) => g.status === 'done' || g.status === 'failed');
+    assert.equal(done.status, 'done');
+    assert.equal(curateArg.config.skillUmbrella, 'on', 'umbrella config is forwarded to curateSkills');
+    assert.ok(Array.isArray(done.skills.consolidated), 'state.skills.consolidated is initialized as an array');
+    assert.deepEqual(done.skills.consolidated, ['skl_umb'], 'consolidation result is surfaced on the goal');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

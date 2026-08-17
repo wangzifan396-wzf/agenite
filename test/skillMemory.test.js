@@ -4,7 +4,7 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { curateSkills, bumpUsage, resolveSkillCurationMode, loadIndex } from '../src/core/skillMemory.js';
+import { curateSkills, bumpUsage, consolidateSkills, resolveSkillCurationMode, resolveSkillUmbrellaMode, loadIndex, matchSkills } from '../src/core/skillMemory.js';
 
 // Minimal in-memory fs implementing the subset skillMemory.js uses.
 function memFs() {
@@ -129,5 +129,116 @@ describe('skillMemory curation (v0.63)', () => {
     assert.equal(s.used, 1);
     assert.ok(s.lastUsed && s.lastUsed.length >= 10);
     assert.equal(s.status, 'active', 'a pulled archived skill is reactivated');
+  });
+});
+
+// ── v0.64 Skill Umbrella Consolidation ───────────────────────────────────
+describe('skillMemory umbrella consolidation (v0.64)', () => {
+  it('resolveSkillUmbrellaMode defaults on, off when set', () => {
+    assert.equal(resolveSkillUmbrellaMode({}), 'on');
+    assert.equal(resolveSkillUmbrellaMode({ skillUmbrella: 'off' }), 'off');
+  });
+
+  // helper: write index entries + their .md bodies so consolidation can inline them.
+  function seed(fs, dir, skills) {
+    for (const s of skills) {
+      if (s.body != null) fs.writeFileSync(dir + '/' + (s.file || s.id + '.md'), s.body);
+    }
+    writeIndex(fs, dir, skills.map(({ body, ...rest }) => rest));
+  }
+
+  it('merges narrow siblings sharing a latin concept into one umbrella', () => {
+    const fs = memFs();
+    seed(fs, '/sk', [
+      { id: 's1', name: 'Review PR', goal: 'review pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's1.md', body: '## 做法步骤\nreview the diff' },
+      { id: 's2', name: 'Merge PR', goal: 'merge pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's2.md', body: '## 做法步骤\nmerge after green' },
+      { id: 's3', name: 'Label PR', goal: 'label pull request', used: 2, confidence: 0.9, created: today, status: 'active', file: 's3.md', body: '## 做法步骤\napply labels' }
+    ]);
+    const r = consolidateSkills({ dir: '/sk', config: { umbrellaMin: 3 }, deps: { fs } });
+    assert.equal(r.skipped, false);
+    assert.equal(r.consolidated.length, 1, 'one umbrella created');
+    const rep = r.consolidated[0];
+    // The shared concept is whichever token dominates (names all contain "PR",
+    // goals all contain "pull"/"request") — accept any of them; the key is that
+    // a single umbrella merges the three siblings.
+    assert.ok(['pr', 'pull', 'request'].includes(rep.namespace), 'namespace is a shared token');
+    assert.ok(rep.umbrellaName.endsWith('技能集'), 'umbrella name is rendered');
+    assert.deepEqual(rep.merged.sort(), ['s1', 's2', 's3']);
+    // siblings archived (bodies preserved) and umbrella active.
+    const idx = loadIndex({ dir: '/sk', deps: { fs } }).skills;
+    const archived = idx.filter((s) => s.status === 'archived');
+    const active = idx.filter((s) => s.status === 'active');
+    assert.equal(archived.length, 3, 'all three siblings archived');
+    assert.equal(active.length, 1, 'exactly one umbrella remains active');
+    const umb = active[0];
+    assert.equal(umb.umbrella, true);
+    assert.equal(umb.consolidatedInto, '');
+    for (const s of archived) {
+      assert.equal(s.consolidatedInto, umb.id, 'sibling points at the umbrella');
+      assert.ok(fs.existsSync('/sk/' + (s.file || s.id + '.md')), 'sibling .md body kept on disk');
+    }
+  });
+
+  it('merges narrow siblings sharing a CJK concept into one umbrella', () => {
+    const fs = memFs();
+    seed(fs, '/sk', [
+      { id: 'c1', name: '代码审查', goal: '代码审查流程', used: 1, confidence: 0.9, created: today, status: 'active', file: 'c1.md', body: 'review' },
+      { id: 'c2', name: '代码合并', goal: '代码合并流程', used: 1, confidence: 0.9, created: today, status: 'active', file: 'c2.md', body: 'merge' },
+      { id: 'c3', name: '代码格式化', goal: '代码格式化流程', used: 1, confidence: 0.9, created: today, status: 'active', file: 'c3.md', body: 'format' }
+    ]);
+    const r = consolidateSkills({ dir: '/sk', config: { umbrellaMin: 3 }, deps: { fs } });
+    assert.equal(r.consolidated.length, 1);
+    assert.equal(r.consolidated[0].namespace, '代码');
+    assert.equal(r.consolidated[0].umbrellaName, '技能集·代码');
+  });
+
+  it('does NOT consolidate when the cluster is below umbrellaMin', () => {
+    const fs = memFs();
+    seed(fs, '/sk', [
+      { id: 'a', name: 'Review PR', goal: 'review pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 'a.md', body: 'x' },
+      { id: 'b', name: 'Merge PR', goal: 'merge pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 'b.md', body: 'y' }
+    ]);
+    const r = consolidateSkills({ dir: '/sk', config: { umbrellaMin: 3 }, deps: { fs } });
+    assert.deepEqual(r.consolidated, []);
+    const idx = loadIndex({ dir: '/sk', deps: { fs } }).skills;
+    assert.equal(idx.filter((s) => s.status === 'active').length, 2, 'both stay active');
+  });
+
+  it('skips consolidation when skillUmbrella is off', () => {
+    const fs = memFs();
+    seed(fs, '/sk', [
+      { id: 'a', name: 'Review PR', goal: 'review pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 'a.md', body: 'x' },
+      { id: 'b', name: 'Merge PR', goal: 'merge pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 'b.md', body: 'y' },
+      { id: 'c', name: 'Label PR', goal: 'label pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 'c.md', body: 'z' }
+    ]);
+    const r = consolidateSkills({ dir: '/sk', config: { skillUmbrella: 'off', umbrellaMin: 3 }, deps: { fs } });
+    assert.equal(r.skipped, true);
+    assert.deepEqual(r.consolidated, []);
+  });
+
+  it('the umbrella is recalled as a normal skill on a related goal', () => {
+    const fs = memFs();
+    seed(fs, '/sk', [
+      { id: 's1', name: 'Review PR', goal: 'review pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's1.md', body: 'review' },
+      { id: 's2', name: 'Merge PR', goal: 'merge pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's2.md', body: 'merge' },
+      { id: 's3', name: 'Label PR', goal: 'label pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's3.md', body: 'label' }
+    ]);
+    consolidateSkills({ dir: '/sk', config: { umbrellaMin: 3 }, deps: { fs } });
+    const hit = matchSkills({ dir: '/sk', goal: 'review pull request', k: 3, deps: { fs } });
+    assert.ok(hit.skills.length >= 1, 'umbrella should be recalled');
+    assert.equal(hit.skills[0].umbrella, true, 'the recalled skill is the umbrella');
+  });
+
+  it('curateSkills runs umbrella consolidation as its 4th op', () => {
+    const fs = memFs();
+    seed(fs, '/sk', [
+      { id: 's1', name: 'Review PR', goal: 'review pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's1.md', body: 'review' },
+      { id: 's2', name: 'Merge PR', goal: 'merge pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's2.md', body: 'merge' },
+      { id: 's3', name: 'Label PR', goal: 'label pull request', used: 1, confidence: 0.9, created: today, status: 'active', file: 's3.md', body: 'label' }
+    ]);
+    // Caps/decay/dedup stay out of the way; only the umbrella op should fire.
+    const r = curateSkills({ dir: '/sk', config: { maxSkills: 60, skillDecayDays: 0, umbrellaMin: 3 }, deps: { fs } });
+    assert.equal(r.archived.length, 0, 'no cap/decay/dedup archiving');
+    assert.equal(r.consolidated.length, 1, 'curateSkills consolidated the cluster');
   });
 });

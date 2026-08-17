@@ -2264,8 +2264,10 @@ function fillSettings() {
   $('set-autoSkill').checked = config.autoSkill === true;
   $('set-skillCrystallization').checked = config.skillCrystallization !== 'off';
   $('set-skillCuration').checked = config.skillCuration !== 'off';
+  $('set-skillUmbrella').checked = config.skillUmbrella !== 'off';
   $('set-maxSkills').value = config.maxSkills || 60;
   $('set-skillDecayDays').value = config.skillDecayDays || 90;
+  $('set-umbrellaMin').value = config.umbrellaMin || 3;
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -2459,8 +2461,10 @@ function saveSettings() {
     maxTurns: clampNum($('set-maxTurns').value, 1, 100, 20),
     skillCrystallization: $('set-skillCrystallization').checked ? 'on' : 'off',
     skillCuration: $('set-skillCuration').checked ? 'on' : 'off',
+    skillUmbrella: $('set-skillUmbrella').checked ? 'on' : 'off',
     maxSkills: clampNum($('set-maxSkills').value, 1, 1000, 60),
     skillDecayDays: clampNum($('set-skillDecayDays').value, 0, 3650, 90),
+    umbrellaMin: clampNum($('set-umbrellaMin').value, 2, 50, 3),
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -3028,6 +3032,11 @@ function skillChips(g) {
   if (Array.isArray(sk.pruned) && sk.pruned.length) {
     parts.push(
       `<span class="gw-chip gw-skill gw-skill-pruned" title="跑完本次目标后，技能库自动策展归档了这些低价值/重复/久未用技能（.md 文件保留在磁盘，可找回）">策展归档 ×${sk.pruned.length}</span>`
+    );
+  }
+  if (Array.isArray(sk.consolidated) && sk.consolidated.length) {
+    parts.push(
+      `<span class="gw-chip gw-skill gw-skill-merged" title="跑完本次目标后，多个共享同一概念的狭窄技能被雨伞式合并为可发现的总览技能，原技能归档为子章节（知识不丢失，可恢复）">已合并 ×${sk.consolidated.length}</span>`
     );
   }
   return parts.join(' ');

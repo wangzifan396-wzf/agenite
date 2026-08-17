@@ -724,7 +724,7 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
         skillBlock = '';
       }
     }
-    state.skills = { used: skillMetas.map((s) => s.id), crystallized: [], pruned: [] };
+    state.skills = { used: skillMetas.map((s) => s.id), crystallized: [], pruned: [], consolidated: [] };
 
     const realCallModel = (msgs, o = {}) =>
       callModelStream({
@@ -1078,13 +1078,19 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
     // ── v0.63 Skill Curation & Pruning ──
     // The self-improving loop (v0.60 memory + v0.61 skill crystallization) must
     // not accumulate a "junk drawer". After the goal settles, curate the library:
-    // cap size, dedupe by goal, decay unused — archiving (never deleting) losers.
+    // cap size, dedupe by goal, decay unused, umbrella-merge — archiving
+    // (never deleting) losers. v0.64 adds the umbrella-merge report.
     if (skillMode === 'on' && skillsDir && resolveSkillCurationMode(config) !== 'off') {
       try {
         const cresult = await skCurate({ dir: skillsDir, config, deps });
         if (cresult && cresult.archived && cresult.archived.length) {
           state.skills.pruned = cresult.archived;
           append('system', '技能库策展：归档 ' + cresult.archived.length + ' 个低价值/重复/久未用技能（活跃 ' + cresult.active + '/' + cresult.total + '）');
+        }
+        if (cresult && cresult.consolidated && cresult.consolidated.length) {
+          state.skills.consolidated = cresult.consolidated.map((c) => c.umbrellaId);
+          const totalMerged = cresult.consolidated.reduce((n, c) => n + (c.merged ? c.merged.length : 0), 0);
+          append('system', '技能雨伞式合并：' + cresult.consolidated.length + ' 个概念聚合（' + totalMerged + ' 个狭窄技能归档为可发现的总览技能）');
         }
       } catch {
         /* curation must never fail the goal */
