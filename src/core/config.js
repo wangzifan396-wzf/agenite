@@ -474,7 +474,24 @@ export function defaultConfig() {
     // compress at all, so "compressed" always implies "retrievable".
     contextCompress: 'smart',
     compressThreshold: 2000,
-    retrieveTtlMs: 1800000
+    retrieveTtlMs: 1800000,
+
+    // --- OpenTelemetry export (v0.66) ---
+    // Interoperability layer: the existing local flight-recorder trace can be
+    // exported as standard OTLP/HTTP JSON spans following the OTel GenAI
+    // semantic conventions, so any Collector / Jaeger / Tempo / Langfuse can
+    // ingest an Agenite run. This is EXPORT ONLY — Agenite keeps its own
+    // private recorder as the source of truth; we never add a second recorder.
+    //   otelExport        master switch ('off' default / 'on' auto-push on done)
+    //   otelEndpoint      OTLP/HTTP traces endpoint (default local otelcol)
+    //   otelHeaders       extra headers "k=v,k2=v2" (auth / tenant) — string
+    //   otelServiceName   resource service.name (and gen_ai.agent.name)
+    //   otelCaptureContent 'on' to include message/tool I/O (opt-in, may be PII)
+    otelExport: 'off',
+    otelEndpoint: 'http://localhost:4318/v1/traces',
+    otelHeaders: '',
+    otelServiceName: 'agenite',
+    otelCaptureContent: 'off'
   };
 }
 
@@ -553,6 +570,16 @@ export function normalizeConfig(input = {}) {
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
+  // --- OpenTelemetry export (v0.66) ---
+  cfg.otelExport = cfg.otelExport === 'on' ? 'on' : 'off';
+  cfg.otelEndpoint = typeof cfg.otelEndpoint === 'string' && /^https?:\/\//.test(cfg.otelEndpoint.trim())
+    ? cfg.otelEndpoint.trim()
+    : 'http://localhost:4318/v1/traces';
+  cfg.otelHeaders = typeof cfg.otelHeaders === 'string' ? cfg.otelHeaders.trim().slice(0, 2000) : '';
+  cfg.otelServiceName = typeof cfg.otelServiceName === 'string' && cfg.otelServiceName.trim()
+    ? cfg.otelServiceName.trim().slice(0, 100)
+    : 'agenite';
+  cfg.otelCaptureContent = cfg.otelCaptureContent === 'on' ? 'on' : 'off';
   return cfg;
 }
 

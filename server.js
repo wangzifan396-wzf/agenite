@@ -49,6 +49,7 @@ import { emptyTodoState } from './src/core/todo.js';
 import { isGitRepo, isClean, gitCommit, gitHeadInfo } from './src/core/git.js';
 import { verifyWorkspace, detectVerify } from './src/core/verify.js';
 import { findBadCommit, chooseGoodRef, formatHuntReport } from './src/core/bisect.js';
+import { toOtlpJson, exportOtlp, spanTimeline } from './src/core/otel.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4173;
@@ -323,8 +324,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/atlas/markdown') return handleAtlasMarkdownPost(req, res);
   if (req.method === 'GET' && url.startsWith('/api/atlas/recall')) return handleAtlasRecall(req, res, req.url);
   if (req.method === 'GET' && url === '/api/traces') return handleTracesList(req, res);
+  if (req.method === 'GET' && url.endsWith('/otel')) return handleTraceOtel(req, res, req.url);
   if (req.method === 'GET' && url.startsWith('/api/traces/')) return handleTraceGet(req, res, req.url);
   if (req.method === 'DELETE' && url.startsWith('/api/traces/')) return handleTraceDelete(req, res, req.url);
+  if (req.method === 'POST' && url === '/api/otel/export') return handleOtelExport(req, res);
 
   // ---- Agenite Eval: local-first, trace-driven regression suite ----
   if (req.method === 'POST' && url === '/api/eval') return handleEvalCreate(req, res);
@@ -795,6 +798,62 @@ async function handleTraceDelete(req, res, reqUrl) {
   if (!id) return sendJson(res, 400, { ok: false, error: '缺少 runId' });
   const ok = await deleteTrace(TRACES_DIR, id);
   return sendJson(res, ok ? 200 : 404, { ok, deleted: id });
+}
+
+// ---------- OpenTelemetry (v0.66) export handlers ----------
+// Agenite keeps its own private flight-recorder as the source of truth; this
+// layer only maps a finished trace onto standard OTLP/HTTP JSON spans following
+// the OTel GenAI semantic conventions for export to any Collector / Jaeger /
+// Tempo / Langfuse. No new recording layer is added.
+
+// GET /api/traces/:id/otel  -> download the OTLP/JSON payload for one run.
+// Query: ?serviceName=&captureContent=on  (client holds the live config and
+// forwards it; we never keep a module-level config of our own).
+async function handleTraceOtel(req, res, reqUrl) {
+  const u = new URL(reqUrl || '/', 'http://localhost');
+  const id = decodeURIComponent(u.pathname.replace(/^\/api\/traces\/?/, '').replace(/\/otel$/, '').trim());
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少 runId' });
+  try {
+    const t = await loadTrace(TRACES_DIR, id);
+    const otlp = toOtlpJson(t, {
+      serviceName: (u.searchParams.get('serviceName') || 'agenite').trim() || 'agenite',
+      captureContent: u.searchParams.get('captureContent') === 'on'
+    });
+    return sendJson(res, 200, { ok: true, runId: id, otlp });
+  } catch {
+    return sendJson(res, 404, { ok: false, error: '未找到该轨迹（可能已被清理）' });
+  }
+}
+
+// POST /api/otel/export  -> push a run to an OTLP Collector.
+// Body: { runId, endpoint?, headers?, serviceName?, captureContent?, timeoutMs? }
+// The client passes its live config (endpoint/headers/serviceName) since the
+// server keeps config per-request and has no module-level settings store.
+async function handleOtelExport(req, res) {
+  let body = {};
+  try {
+    const raw = await readBody(req, 64 * 1024);
+    if (raw) body = JSON.parse(raw);
+  } catch {
+    return sendJson(res, 400, { ok: false, error: '请求体无效' });
+  }
+  const runId = body.runId || '';
+  if (!runId) return sendJson(res, 400, { ok: false, error: '缺少 runId' });
+  try {
+    const t = await loadTrace(TRACES_DIR, runId);
+    const serviceName = (body.serviceName || 'agenite').trim() || 'agenite';
+    const capture = body.captureContent === 'on';
+    const otlp = toOtlpJson(t, { serviceName, captureContent: capture });
+    const out = await exportOtlp(otlp, {
+      endpoint: body.endpoint || 'http://localhost:4318/v1/traces',
+      headers: body.headers || '',
+      fetch: globalThis.fetch,
+      timeoutMs: Number(body.timeoutMs) || 10000
+    });
+    return sendJson(res, out.ok ? 200 : 502, { ok: out.ok, status: out.status, error: out.error || null, runId });
+  } catch (e) {
+    return sendJson(res, 404, { ok: false, error: e && e.message ? e.message : '未找到该轨迹' });
+  }
 }
 
 // ---------- Regression Hunter handlers ----------
@@ -1576,6 +1635,12 @@ async function handleChat(req, res) {
   trace.gitStart = await gitHeadInfo(WORKSPACE).catch(() => null);
   let traceTurnId = null; // current model-turn step (parent for its tools)
   let traceSubId = null;  // current sub-agent step (parent for its tools)
+  // Per-turn token delta: the 'usage' event carries CUMULATIVE tokens, but the
+  // OTel GenAI convention wants per-call gen_ai.usage.input_tokens/output_tokens.
+  // Track the running cumulative and stash the delta onto the assistant step
+  // that immediately follows (usage is always emitted right before assistant).
+  let usagePrev = { prompt: 0, completion: 0 };
+  let usageDelta = null;
 
   // ── objective evidence collected during this run (v0.46 skill gate) ──
   // These are the facts the skill distiller is allowed to trust: did the real
@@ -1626,10 +1691,13 @@ async function handleChat(req, res) {
           parentId: traceSubId || null,
           data: {
             content: cap(typeof payload?.content === 'string' ? payload.content : '', 4000),
-            toolCalls: (payload?.tool_calls || []).length
+            toolCalls: (payload?.tool_calls || []).length,
+            // per-turn token delta for the OTel chat span (null when unknown)
+            usage: usageDelta
           }
         });
         traceTurnId = step.id;
+        usageDelta = null; // consumed by this turn
       } else if (type === 'tool') {
         addStep(trace, {
           kind: 'tool',
@@ -1680,6 +1748,14 @@ async function handleChat(req, res) {
           trace.cost = (payload.cost && typeof payload.cost.amount === 'number')
             ? payload.cost.amount : (Number(payload.cost) || 0);
         }
+        // Buffer the per-turn token delta for the next assistant (chat) span.
+        const p = Number(payload?.prompt) || 0;
+        const c = Number(payload?.completion) || 0;
+        usageDelta = {
+          in: Math.max(0, p - usagePrev.prompt),
+          out: Math.max(0, c - usagePrev.completion)
+        };
+        usagePrev = { prompt: p, completion: c };
       } else if (type === 'guardrail') {
         addStep(trace, { kind: 'guardrail', name: '预算护栏触发', status: 'error', data: payload || {} });
       } else if (type === 'done') {
@@ -1689,6 +1765,22 @@ async function handleChat(req, res) {
         // Capture the post-run checkout too (the git safety net may have
         // committed since the run started), so the anchor shows the net span.
         gitHeadInfo(WORKSPACE).then((g) => { trace.gitEnd = g; }).catch(() => {});
+        // v0.66: best-effort OTLP auto-export of the finished run. Never blocks
+        // the chat stream and never breaks it on transport failure.
+        if (config.otelExport === 'on') {
+          try {
+            const otelPayload = toOtlpJson(trace, {
+              serviceName: config.otelServiceName,
+              captureContent: config.otelCaptureContent === 'on'
+            });
+            exportOtlp(otelPayload, {
+              endpoint: config.otelEndpoint,
+              headers: config.otelHeaders,
+              fetch: globalThis.fetch,
+              timeoutMs: 10000
+            }).catch(() => {});
+          } catch { /* export is strictly best-effort */ }
+        }
       }
     } catch { /* trace capture is strictly best-effort */ }
   };

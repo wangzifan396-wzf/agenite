@@ -301,6 +301,8 @@
           <span id="trace-title" class="trace-title">实时轨迹</span>
           <div class="grow"></div>
           <button id="trace-export" class="mini-btn" title="把当前运行导出为可分享的单文件 HTML">📤 导出运行报告</button>
+          <button id="trace-export-otel" class="mini-btn" title="按 OTel GenAI 语义约定导出 OTLP/JSON">📡 导出 OTLP</button>
+          <button id="trace-send-collector" class="mini-btn" title="把该次运行推送到已配置的 OTLP Collector">🚀 发送 Collector</button>
           <button id="trace-refresh" class="mini-btn" title="刷新历史运行列表">刷新历史</button>
         </div>
         <div class="trace-cols">
@@ -699,6 +701,7 @@
         <button class="tab" data-tab="power" role="tab">电脑权限</button>
         <button class="tab" data-tab="mcp" role="tab">MCP 工具</button>
         <button class="tab" data-tab="advanced" role="tab">高级</button>
+        <button class="tab" data-tab="otel" role="tab">可观测性</button>
       </div>
 
       <div class="drawer-body">
@@ -1034,6 +1037,35 @@
             <div id="sessions-info" class="muted small"></div>
             <input id="import-file" type="file" accept="application/json" class="hidden" />
           </div>
+        </section>
+
+        <section class="tab-panel" data-panel="otel">
+          <p class="muted small">Agenite 自己已有一套本地执行轨迹（飞行记录仪）。本页只是<b>互操作导出层</b>：把一次运行按 OpenTelemetry 的 GenAI 语义约定，转成标准 OTLP/HTTP JSON span，推送到任意 Collector / Jaeger / Tempo / Langfuse。<b>不新增任何记录层</b>——本地轨迹仍是唯一真相来源。默认关闭，按需开启。</p>
+
+          <label class="switch-row">
+            <span><b>运行结束自动导出 OTLP</b><em>每次对话跑完，自动把该次运行 POST 到下方 Collector 端点（best-effort，失败不影响对话）</em></span>
+            <input id="set-otelExport" type="checkbox" />
+          </label>
+          <label class="field">OTLP 端点 (HTTP/JSON)
+            <input id="set-otelEndpoint" type="text" placeholder="http://localhost:4318/v1/traces" spellcheck="false" />
+            <p class="muted small">OpenTelemetry Collector 的 OTLP/HTTP traces 接收地址。本机用 otelcol 时通常是 <code>http://localhost:4318/v1/traces</code>。</p>
+          </label>
+          <label class="field">附加请求头（可选）
+            <input id="set-otelHeaders" type="text" placeholder="Authorization=Bearer xxx, X-Tenant=abc" spellcheck="false" />
+            <p class="muted small">形如 <code>k=v,k2=v2</code>，用于鉴权或租户标识。会原样作为 HTTP 头发送（含密钥，请仅用于可信 Collector）。</p>
+          </label>
+          <label class="field">服务名 (service.name)
+            <input id="set-otelServiceName" type="text" placeholder="agenite" spellcheck="false" />
+            <p class="muted small">出现在资源属性 <code>service.name</code> 与根 span 的 <code>gen_ai.agent.name</code> 上，便于在后端按服务区分来源。</p>
+          </label>
+          <label class="switch-row">
+            <span><b>导出消息与工具输入输出内容</b><em>开启后会写入 gen_ai.input/output.messages 与 gen_ai.tool.call.arguments/result（可能含 PII / 密钥，请确认 Collector 可信）</em></span>
+            <input id="set-otelCaptureContent" type="checkbox" />
+          </label>
+          <div class="btn-row">
+            <button id="otel-test" class="btn-ghost">发送一次测试运行</button>
+          </div>
+          <div id="otel-msg" class="muted small"></div>
         </section>
       </div>
 

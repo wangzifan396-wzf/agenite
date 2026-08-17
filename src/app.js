@@ -2271,6 +2271,12 @@ function fillSettings() {
   $('set-stallGuard').checked = config.stallGuard !== 'off';
   $('set-stallTurns').value = config.stallTurns || 6;
   $('set-stallHardTurns').value = config.stallHardTurns || 12;
+  // --- OpenTelemetry export (v0.66) ---
+  $('set-otelExport').checked = config.otelExport === 'on';
+  $('set-otelEndpoint').value = config.otelEndpoint || 'http://localhost:4318/v1/traces';
+  $('set-otelHeaders').value = config.otelHeaders || '';
+  $('set-otelServiceName').value = config.otelServiceName || 'agenite';
+  $('set-otelCaptureContent').checked = config.otelCaptureContent === 'on';
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -2471,6 +2477,12 @@ function saveSettings() {
     stallGuard: $('set-stallGuard').checked ? 'on' : 'off',
     stallTurns: clampNum($('set-stallTurns').value, 1, 100, 6),
     stallHardTurns: clampNum($('set-stallHardTurns').value, 1, 1000, 12),
+    // --- OpenTelemetry export (v0.66) ---
+    otelExport: $('set-otelExport').checked ? 'on' : 'off',
+    otelEndpoint: ($('set-otelEndpoint').value || '').trim() || 'http://localhost:4318/v1/traces',
+    otelHeaders: ($('set-otelHeaders').value || '').trim(),
+    otelServiceName: ($('set-otelServiceName').value || '').trim() || 'agenite',
+    otelCaptureContent: $('set-otelCaptureContent').checked ? 'on' : 'off',
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -3927,6 +3939,78 @@ function openTrace() {
   loadTraceHistory();
 }
 
+// v0.66 — OpenTelemetry export helpers for the flight-recorder view.
+function currentTraceRunId() {
+  const t = historyTrace || liveTrace;
+  return t && t.runId ? t.runId : null;
+}
+
+// Download the current run as standard OTLP/HTTP JSON (OTel GenAI conventions).
+async function exportTraceOtel() {
+  const runId = currentTraceRunId();
+  if (!runId) return toast('当前没有可导出的运行记录');
+  try {
+    const capture = config.otelCaptureContent === 'on' ? 'on' : 'off';
+    const r = await fetch('/api/traces/' + encodeURIComponent(runId) + '/otel?captureContent=' + capture);
+    const j = await r.json();
+    if (!j.ok) return toast('导出失败：' + (j.error || ''));
+    const blob = new Blob([JSON.stringify(j.otlp, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'agenite-otel-' + runId + '.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('已导出 OTLP/JSON');
+  } catch (e) { toast('导出失败：' + e.message); }
+}
+
+// Push the current run to the configured OTLP Collector via the server.
+async function sendTraceToCollector() {
+  const runId = currentTraceRunId();
+  if (!runId) return toast('当前没有可发送的运行记录');
+  try {
+    const r = await fetch('/api/otel/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        endpoint: config.otelEndpoint,
+        headers: config.otelHeaders,
+        serviceName: config.otelServiceName,
+        captureContent: config.otelCaptureContent
+      })
+    });
+    const j = await r.json();
+    if (j.ok) toast('已推送到 Collector（HTTP ' + j.status + '）');
+    else toast('推送失败：' + (j.error || ('HTTP ' + j.status)));
+  } catch (e) { toast('推送失败：' + e.message); }
+}
+
+// From the settings panel: push the currently viewed run as a smoke test.
+async function otelSendTest() {
+  const msg = $('otel-msg');
+  if (msg) msg.textContent = '正在发送…';
+  const runId = currentTraceRunId();
+  if (!runId) { if (msg) msg.textContent = '当前没有可发送的运行记录（先跑一次或回放一条历史）。'; return; }
+  try {
+    const r = await fetch('/api/otel/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        endpoint: config.otelEndpoint,
+        headers: config.otelHeaders,
+        serviceName: config.otelServiceName,
+        captureContent: config.otelCaptureContent
+      })
+    });
+    const j = await r.json();
+    if (msg) msg.textContent = j.ok
+      ? ('✅ 已推送（HTTP ' + j.status + '）')
+      : ('❌ 推送失败：' + (j.error || ('HTTP ' + j.status)));
+  } catch (e) { if (msg) msg.textContent = '❌ ' + e.message; }
+}
+
 function closeTrace() {
   $('trace-modal').classList.add('hidden');
 }
@@ -5277,6 +5361,8 @@ function wire() {
   $('close-atlas').onclick = closeAtlas;
   $('open-trace').onclick = openTrace;
   const te = $('trace-export'); if (te) te.onclick = exportTraceHtml;
+  const teo = $('trace-export-otel'); if (teo) teo.onclick = exportTraceOtel;
+  const tsc = $('trace-send-collector'); if (tsc) tsc.onclick = sendTraceToCollector;
   $('close-trace').onclick = closeTrace;
   $('trace-refresh').onclick = refreshTrace;
   $('open-usage').onclick = openUsage;
@@ -5348,6 +5434,7 @@ function wire() {
   $('save-settings').onclick = saveSettings;
   $('persona-save').onclick = saveNewPersona;
   $('test-conn').onclick = testConnection;
+  const ot = $('otel-test'); if (ot) ot.onclick = otelSendTest;
   // Sidebar conversation search: filter by title + message content live.
   $('conv-search').addEventListener('input', (e) => { convQuery = e.target.value; renderConvList(); });
   // Command palette: input behaviour + backdrop-to-close.

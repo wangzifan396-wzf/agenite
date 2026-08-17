@@ -2747,6 +2747,8 @@ select.text-input { appearance: auto; padding-right: 8px; }
           <span id="trace-title" class="trace-title">实时轨迹</span>
           <div class="grow"></div>
           <button id="trace-export" class="mini-btn" title="把当前运行导出为可分享的单文件 HTML">📤 导出运行报告</button>
+          <button id="trace-export-otel" class="mini-btn" title="按 OTel GenAI 语义约定导出 OTLP/JSON">📡 导出 OTLP</button>
+          <button id="trace-send-collector" class="mini-btn" title="把该次运行推送到已配置的 OTLP Collector">🚀 发送 Collector</button>
           <button id="trace-refresh" class="mini-btn" title="刷新历史运行列表">刷新历史</button>
         </div>
         <div class="trace-cols">
@@ -3145,6 +3147,7 @@ select.text-input { appearance: auto; padding-right: 8px; }
         <button class="tab" data-tab="power" role="tab">电脑权限</button>
         <button class="tab" data-tab="mcp" role="tab">MCP 工具</button>
         <button class="tab" data-tab="advanced" role="tab">高级</button>
+        <button class="tab" data-tab="otel" role="tab">可观测性</button>
       </div>
 
       <div class="drawer-body">
@@ -3480,6 +3483,35 @@ select.text-input { appearance: auto; padding-right: 8px; }
             <div id="sessions-info" class="muted small"></div>
             <input id="import-file" type="file" accept="application/json" class="hidden" />
           </div>
+        </section>
+
+        <section class="tab-panel" data-panel="otel">
+          <p class="muted small">Agenite 自己已有一套本地执行轨迹（飞行记录仪）。本页只是<b>互操作导出层</b>：把一次运行按 OpenTelemetry 的 GenAI 语义约定，转成标准 OTLP/HTTP JSON span，推送到任意 Collector / Jaeger / Tempo / Langfuse。<b>不新增任何记录层</b>——本地轨迹仍是唯一真相来源。默认关闭，按需开启。</p>
+
+          <label class="switch-row">
+            <span><b>运行结束自动导出 OTLP</b><em>每次对话跑完，自动把该次运行 POST 到下方 Collector 端点（best-effort，失败不影响对话）</em></span>
+            <input id="set-otelExport" type="checkbox" />
+          </label>
+          <label class="field">OTLP 端点 (HTTP/JSON)
+            <input id="set-otelEndpoint" type="text" placeholder="http://localhost:4318/v1/traces" spellcheck="false" />
+            <p class="muted small">OpenTelemetry Collector 的 OTLP/HTTP traces 接收地址。本机用 otelcol 时通常是 <code>http://localhost:4318/v1/traces</code>。</p>
+          </label>
+          <label class="field">附加请求头（可选）
+            <input id="set-otelHeaders" type="text" placeholder="Authorization=Bearer xxx, X-Tenant=abc" spellcheck="false" />
+            <p class="muted small">形如 <code>k=v,k2=v2</code>，用于鉴权或租户标识。会原样作为 HTTP 头发送（含密钥，请仅用于可信 Collector）。</p>
+          </label>
+          <label class="field">服务名 (service.name)
+            <input id="set-otelServiceName" type="text" placeholder="agenite" spellcheck="false" />
+            <p class="muted small">出现在资源属性 <code>service.name</code> 与根 span 的 <code>gen_ai.agent.name</code> 上，便于在后端按服务区分来源。</p>
+          </label>
+          <label class="switch-row">
+            <span><b>导出消息与工具输入输出内容</b><em>开启后会写入 gen_ai.input/output.messages 与 gen_ai.tool.call.arguments/result（可能含 PII / 密钥，请确认 Collector 可信）</em></span>
+            <input id="set-otelCaptureContent" type="checkbox" />
+          </label>
+          <div class="btn-row">
+            <button id="otel-test" class="btn-ghost">发送一次测试运行</button>
+          </div>
+          <div id="otel-msg" class="muted small"></div>
         </section>
       </div>
 
@@ -4292,7 +4324,24 @@ function defaultConfig() {
     // compress at all, so "compressed" always implies "retrievable".
     contextCompress: 'smart',
     compressThreshold: 2000,
-    retrieveTtlMs: 1800000
+    retrieveTtlMs: 1800000,
+
+    // --- OpenTelemetry export (v0.66) ---
+    // Interoperability layer: the existing local flight-recorder trace can be
+    // exported as standard OTLP/HTTP JSON spans following the OTel GenAI
+    // semantic conventions, so any Collector / Jaeger / Tempo / Langfuse can
+    // ingest an Agenite run. This is EXPORT ONLY — Agenite keeps its own
+    // private recorder as the source of truth; we never add a second recorder.
+    //   otelExport        master switch ('off' default / 'on' auto-push on done)
+    //   otelEndpoint      OTLP/HTTP traces endpoint (default local otelcol)
+    //   otelHeaders       extra headers "k=v,k2=v2" (auth / tenant) — string
+    //   otelServiceName   resource service.name (and gen_ai.agent.name)
+    //   otelCaptureContent 'on' to include message/tool I/O (opt-in, may be PII)
+    otelExport: 'off',
+    otelEndpoint: 'http://localhost:4318/v1/traces',
+    otelHeaders: '',
+    otelServiceName: 'agenite',
+    otelCaptureContent: 'off'
   };
 }
 
@@ -4371,6 +4420,16 @@ function normalizeConfig(input = {}) {
   cfg.contextCompress = COMPRESS_MODES.includes(cfg.contextCompress) ? cfg.contextCompress : 'smart';
   cfg.compressThreshold = Math.round(clampNum(cfg.compressThreshold, 400, 200000, 2000));
   cfg.retrieveTtlMs = Math.round(clampNum(cfg.retrieveTtlMs, 60000, 86400000, 1800000));
+  // --- OpenTelemetry export (v0.66) ---
+  cfg.otelExport = cfg.otelExport === 'on' ? 'on' : 'off';
+  cfg.otelEndpoint = typeof cfg.otelEndpoint === 'string' && /^https?:\/\//.test(cfg.otelEndpoint.trim())
+    ? cfg.otelEndpoint.trim()
+    : 'http://localhost:4318/v1/traces';
+  cfg.otelHeaders = typeof cfg.otelHeaders === 'string' ? cfg.otelHeaders.trim().slice(0, 2000) : '';
+  cfg.otelServiceName = typeof cfg.otelServiceName === 'string' && cfg.otelServiceName.trim()
+    ? cfg.otelServiceName.trim().slice(0, 100)
+    : 'agenite';
+  cfg.otelCaptureContent = cfg.otelCaptureContent === 'on' ? 'on' : 'off';
   return cfg;
 }
 
@@ -7625,6 +7684,12 @@ function fillSettings() {
   $('set-stallGuard').checked = config.stallGuard !== 'off';
   $('set-stallTurns').value = config.stallTurns || 6;
   $('set-stallHardTurns').value = config.stallHardTurns || 12;
+  // --- OpenTelemetry export (v0.66) ---
+  $('set-otelExport').checked = config.otelExport === 'on';
+  $('set-otelEndpoint').value = config.otelEndpoint || 'http://localhost:4318/v1/traces';
+  $('set-otelHeaders').value = config.otelHeaders || '';
+  $('set-otelServiceName').value = config.otelServiceName || 'agenite';
+  $('set-otelCaptureContent').checked = config.otelCaptureContent === 'on';
   $('set-atlasInject').checked = config.atlasInject !== false;
   $('set-atlasAutoBuild').checked = config.atlasAutoBuild === true;
   $('set-atlasAutoOpen').checked = config.atlasAutoOpen !== false;
@@ -7825,6 +7890,12 @@ function saveSettings() {
     stallGuard: $('set-stallGuard').checked ? 'on' : 'off',
     stallTurns: clampNum($('set-stallTurns').value, 1, 100, 6),
     stallHardTurns: clampNum($('set-stallHardTurns').value, 1, 1000, 12),
+    // --- OpenTelemetry export (v0.66) ---
+    otelExport: $('set-otelExport').checked ? 'on' : 'off',
+    otelEndpoint: ($('set-otelEndpoint').value || '').trim() || 'http://localhost:4318/v1/traces',
+    otelHeaders: ($('set-otelHeaders').value || '').trim(),
+    otelServiceName: ($('set-otelServiceName').value || '').trim() || 'agenite',
+    otelCaptureContent: $('set-otelCaptureContent').checked ? 'on' : 'off',
     contextWindow: clampNum($('set-contextWindow').value, 0, 2000000, 0),
     // Budget guardrail: 0 = use the server default ($3) for interactive chat.
     // Stored under `budget` (what the server reads); goals carry their own rails.
@@ -9284,6 +9355,78 @@ function openTrace() {
   loadTraceHistory();
 }
 
+// v0.66 — OpenTelemetry export helpers for the flight-recorder view.
+function currentTraceRunId() {
+  const t = historyTrace || liveTrace;
+  return t && t.runId ? t.runId : null;
+}
+
+// Download the current run as standard OTLP/HTTP JSON (OTel GenAI conventions).
+async function exportTraceOtel() {
+  const runId = currentTraceRunId();
+  if (!runId) return toast('当前没有可导出的运行记录');
+  try {
+    const capture = config.otelCaptureContent === 'on' ? 'on' : 'off';
+    const r = await fetch('/api/traces/' + encodeURIComponent(runId) + '/otel?captureContent=' + capture);
+    const j = await r.json();
+    if (!j.ok) return toast('导出失败：' + (j.error || ''));
+    const blob = new Blob([JSON.stringify(j.otlp, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'agenite-otel-' + runId + '.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('已导出 OTLP/JSON');
+  } catch (e) { toast('导出失败：' + e.message); }
+}
+
+// Push the current run to the configured OTLP Collector via the server.
+async function sendTraceToCollector() {
+  const runId = currentTraceRunId();
+  if (!runId) return toast('当前没有可发送的运行记录');
+  try {
+    const r = await fetch('/api/otel/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        endpoint: config.otelEndpoint,
+        headers: config.otelHeaders,
+        serviceName: config.otelServiceName,
+        captureContent: config.otelCaptureContent
+      })
+    });
+    const j = await r.json();
+    if (j.ok) toast('已推送到 Collector（HTTP ' + j.status + '）');
+    else toast('推送失败：' + (j.error || ('HTTP ' + j.status)));
+  } catch (e) { toast('推送失败：' + e.message); }
+}
+
+// From the settings panel: push the currently viewed run as a smoke test.
+async function otelSendTest() {
+  const msg = $('otel-msg');
+  if (msg) msg.textContent = '正在发送…';
+  const runId = currentTraceRunId();
+  if (!runId) { if (msg) msg.textContent = '当前没有可发送的运行记录（先跑一次或回放一条历史）。'; return; }
+  try {
+    const r = await fetch('/api/otel/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        endpoint: config.otelEndpoint,
+        headers: config.otelHeaders,
+        serviceName: config.otelServiceName,
+        captureContent: config.otelCaptureContent
+      })
+    });
+    const j = await r.json();
+    if (msg) msg.textContent = j.ok
+      ? ('✅ 已推送（HTTP ' + j.status + '）')
+      : ('❌ 推送失败：' + (j.error || ('HTTP ' + j.status)));
+  } catch (e) { if (msg) msg.textContent = '❌ ' + e.message; }
+}
+
 function closeTrace() {
   $('trace-modal').classList.add('hidden');
 }
@@ -10634,6 +10777,8 @@ function wire() {
   $('close-atlas').onclick = closeAtlas;
   $('open-trace').onclick = openTrace;
   const te = $('trace-export'); if (te) te.onclick = exportTraceHtml;
+  const teo = $('trace-export-otel'); if (teo) teo.onclick = exportTraceOtel;
+  const tsc = $('trace-send-collector'); if (tsc) tsc.onclick = sendTraceToCollector;
   $('close-trace').onclick = closeTrace;
   $('trace-refresh').onclick = refreshTrace;
   $('open-usage').onclick = openUsage;
@@ -10705,6 +10850,7 @@ function wire() {
   $('save-settings').onclick = saveSettings;
   $('persona-save').onclick = saveNewPersona;
   $('test-conn').onclick = testConnection;
+  const ot = $('otel-test'); if (ot) ot.onclick = otelSendTest;
   // Sidebar conversation search: filter by title + message content live.
   $('conv-search').addEventListener('input', (e) => { convQuery = e.target.value; renderConvList(); });
   // Command palette: input behaviour + backdrop-to-close.
