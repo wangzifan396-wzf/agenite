@@ -147,13 +147,54 @@ test('agent loop: replan executes recovery (resets counters + re-plans todo)', a
   assert.ok(replans.length >= 1, 'expected at least one replan self_heal event');
   assert.equal(replans[0].resetCounters, true, 'replan must signal resetCounters');
   assert.equal(replans[0].replanned, true, 'replan must signal replanned');
-  assert.equal(replans[0].reason, 'looping', 'replan reason should be looping');
+  // v0.70: the first replan under a stuck identical loop is now a flap_reflect
+  // upgrade (the prior turn already reflected on the same root cause) rather than
+  // the classic 'looping' reason. Both are valid recovery triggers — accept either.
+  assert.ok(['looping', 'flap_reflect'].includes(replans[0].reason), 'replan reason should be looping or flap_reflect');
   // The todo must have been re-planned: 1 completed preserved, the rest collapsed
   // to pending (no in_progress lingering to poison the next loop).
   assert.equal(todoState.items.length, 3);
   assert.equal(todoState.items.filter((t) => t.status === 'completed').length, 1);
   assert.equal(todoState.items.filter((t) => t.status === 'in_progress').length, 0);
   assert.equal(todoState.items.filter((t) => t.status === 'pending').length, 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('agent loop: anti-flap upgrades a repeated reflect into replan (flap_reflect)', async () => {
+  // v0.70: when the model keeps failing the SAME root cause but with DIFFERENT
+  // tool calls (so it never forms an identical-turn loop), the prior code would
+  // reflect forever until the reflection cap. Anti-flapping must convert the 2nd
+  // same-root-cause reflect into a replan tagged flap_reflect — "re-read/refix
+  // didn't work, switch approach" — instead of repeating the useless therapy.
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'hello\n');
+  const messages = [{ role: 'user', content: 'edit f.txt' }];
+  let callCount = 0;
+  const callModel = async () => {
+    callCount++;
+    return {
+      content: '',
+      // Different old_text every turn → never an identical-turn loop, just a
+      // repeated semantic failure on the same root cause.
+      toolCalls: [{ id: 'e' + callCount, name: 'edit_file', args: { path: 'f.txt', old_text: 'NOPE' + callCount, new_text: 'x' } }],
+      usage: null
+    };
+  };
+  const executeTool = async () => ({ ok: false, error: '找不到要替换的文本', errorClass: 'SCHEMA_ERROR' });
+  const selfHeals = [];
+  await runAgent({
+    messages,
+    callModel,
+    executeTool,
+    onEvent: (t, p) => { if (t === 'self_heal') selfHeals.push(p); },
+    config: { selfHeal: true, maxReflections: 3, workspace: dir, stallGuard: 'off' },
+    maxTurns: 6
+  });
+  const replans = selfHeals.filter((e) => e.action === 'replan');
+  assert.ok(replans.length >= 1, 'expected at least one anti-flap replan');
+  assert.equal(replans[0].reason, 'flap_reflect', 'repeated reflect on same category must upgrade to flap_reflect');
+  assert.equal(replans[0].flap, true, 'flap_reflect replan must flag flap:true');
+  assert.equal(replans[0].resetCounters, true, 'flap_reflect replan still resets counters');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

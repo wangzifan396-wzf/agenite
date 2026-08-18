@@ -179,6 +179,48 @@ describe('decideSelfHeal — actions', () => {
     assert.equal(d.resetCounters, true);
     assert.equal(d.retryable, false);
   });
+  // ── v0.70 anti-flapping: the decision must remember what it tried last round ──
+  it('anti-flap: repeated reflect on same category upgrades to replan (flap_reflect)', () => {
+    const d = decideSelfHeal({
+      category: 'structural', loopStreak: 0, reflections: 0, cap: 3,
+      lastAction: 'reflect', lastCategory: 'structural'
+    });
+    assert.equal(d.action, 'replan');
+    assert.equal(d.reason, 'flap_reflect');
+    assert.equal(d.resetCounters, true);
+    assert.equal(d.flap, true);
+  });
+  it('anti-flap: replan that still loops on same category → escalate (flap_replan)', () => {
+    const d = decideSelfHeal({
+      category: 'structural', loopStreak: 3, reflections: 1, cap: 3,
+      lastAction: 'replan', lastCategory: 'structural'
+    });
+    assert.equal(d.action, 'escalate');
+    assert.equal(d.reason, 'flap_replan');
+    assert.equal(d.flap, true);
+  });
+  it('anti-flap guard: a DIFFERENT root cause does NOT upgrade the reflect', () => {
+    const d = decideSelfHeal({
+      category: 'structural', loopStreak: 0, reflections: 0, cap: 3,
+      lastAction: 'reflect', lastCategory: 'semantic'
+    });
+    assert.equal(d.action, 'reflect');
+    assert.notEqual(d.reason, 'flap_reflect');
+    assert.ok(!d.flap);
+  });
+  it('anti-flap: no lastAction → first reflect is a plain reflect (no flap)', () => {
+    const d = decideSelfHeal({ category: 'semantic', loopStreak: 0, reflections: 0, cap: 3 });
+    assert.equal(d.action, 'reflect');
+    assert.ok(!d.flap);
+  });
+  it('anti-flap does NOT touch retry: transient stays bounded by maxAttempts', () => {
+    const d = decideSelfHeal({
+      category: 'transient', attempt: 0, maxAttempts: 3, reflections: 0, cap: 3,
+      lastAction: 'retry', lastCategory: 'transient'
+    });
+    assert.equal(d.action, 'retry');
+    assert.ok(!d.flap);
+  });
   it('reflect / retry / compress do NOT carry resetCounters', () => {
     const reflect = decideSelfHeal({ category: 'semantic', loopStreak: 0, reflections: 0, cap: 3 });
     assert.notEqual(reflect.action, 'replan');

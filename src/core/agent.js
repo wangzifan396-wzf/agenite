@@ -150,6 +150,13 @@ export async function runAgent({
   // Escalation latch (v0.68): once we escalate to the human (auth / retries
   // exhausted / loop hit the cap) we never nudge again — the human must act.
   let escalated = false;
+  // v0.70 anti-flapping: remember the *last remedy we actually applied* so the
+  // next decideSelfHeal call can refuse to repeat a useless therapy on the same
+  // root cause. lastHealAction is the prior decision.action; lastHealCategory
+  // is the prior fault category. Both are fed back into decideSelfHeal as
+  // lastAction / lastCategory to drive the reflect→replan→escalate upgrade.
+  let lastHealAction = null;
+  let lastHealCategory = null;
 
   // ── Runtime Resilience v2 (v0.65): stall detection + graceful degradation ──
   // Complements the exact-repeat loop breaker above: that one catches *identical*
@@ -452,7 +459,8 @@ export async function runAgent({
       const decision = decideSelfHeal({
         category, loopStreak, failedMutation, failedNames,
         reflections, cap, attempt: selfHealAttempt, maxAttempts: 3,
-        selfHeal: config.selfHeal !== false
+        selfHeal: config.selfHeal !== false,
+        lastAction: lastHealAction, lastCategory: lastHealCategory
       });
 
       if (decision.action !== 'none' && decision.message) {
@@ -466,6 +474,12 @@ export async function runAgent({
         // reports what actually triggered the decision (v0.69: replan clears it).
         const loopAtHeal = loopStreak;
         if (canNudge) {
+          // v0.70: record the remedy we are about to apply so the next turn's
+          // decideSelfHeal can refuse to repeat a useless therapy on the same
+          // root cause (anti-flapping). Set before the replan-reset block so the
+          // value already reflects this turn by the time counters are cleared.
+          lastHealAction = decision.action;
+          lastHealCategory = category;
           // replan executes recovery, not just a nudge (v0.69): clear the
           // no-progress and identical-turn counters so the new approach gets a
           // fair chance instead of being immediately re-killed by the stall
@@ -520,7 +534,10 @@ export async function runAgent({
             replanned: decision.action === 'replan',
             message: decision.message,
             backoffMs: decision.backoffMs != null ? decision.backoffMs : null,
-            escalate: !!decision.escalate
+            escalate: !!decision.escalate,
+            flap: !!decision.flap,
+            lastAction: lastHealAction,
+            lastCategory: lastHealCategory
           });
           // Escalate closes the door on blind retries; otherwise consume one nudge.
           if (isEscalate) { escalated = true; reflections = cap; }

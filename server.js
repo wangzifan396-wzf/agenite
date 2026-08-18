@@ -60,7 +60,7 @@ try {
 } catch { /* keep default if package.json is unreadable */ }
 // v0.68: rolling stats for the root-cause self-heal loop, surfaced by /api/health
 // so container orchestration / ops can watch how often the agent self-recovers.
-let selfHealStats = { total: 0, lastCategory: null, lastAction: null, lastReason: null, lastResetCounters: false, lastAt: null };
+let selfHealStats = { total: 0, lastCategory: null, lastAction: null, lastReason: null, lastResetCounters: false, lastAt: null, lastFlap: false, healHistory: [] };
 const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
 // The machine root the agent is allowed to touch. Defaults to where you ran it.
@@ -1788,7 +1788,20 @@ async function handleChat(req, res) {
           selfHealStats.lastAction = payload && payload.action ? payload.action : null;
           selfHealStats.lastReason = payload && payload.reason ? payload.reason : null;
           selfHealStats.lastResetCounters = !!(payload && payload.resetCounters);
+          selfHealStats.lastFlap = !!(payload && payload.flap);
           selfHealStats.lastAt = Date.now();
+          // v0.70 恢复账本：保留最近若干次恢复尝试，供 /api/health 运维可见。
+          // 每条记录机器可消费：根因 / 动作 / 是否反抖动 / 原因 / 时间戳。
+          const entry = {
+            category: payload && payload.category ? payload.category : null,
+            action: payload && payload.action ? payload.action : null,
+            flap: !!(payload && payload.flap),
+            reason: payload && payload.reason ? payload.reason : null,
+            at: selfHealStats.lastAt
+          };
+          const hist = Array.isArray(selfHealStats.healHistory) ? selfHealStats.healHistory : [];
+          hist.push(entry);
+          selfHealStats.healHistory = hist.slice(-6);
         } catch { /* stats are strictly best-effort */ }
       } else if (type === 'done') {
         trace.finishedAt = Date.now();

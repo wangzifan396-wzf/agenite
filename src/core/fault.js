@@ -1,6 +1,10 @@
 // src/core/fault.js
 //
-// 根因驱动的结构化自愈与重规划（Resilient Self-Healing v2, v0.68）
+// 根因驱动的结构化自愈与重规划（Resilient Self-Healing v3, v0.70）
+// v0.70 新增自适应反抖动（anti-flapping）：decideSelfHeal 现在"记得"上一轮试过
+// 什么疗法（lastAction / lastCategory）。同一根因下重复相同疗法时自动升级策略——
+// reflect → replan（reason 'flap_reflect'）→ escalate（reason 'flap_replan'）——
+// 不再对同一死胡同反复做相同的无效动作。retry 仍由 maxAttempts 约束，不参与抖动。
 // ──────────────────────────────────────────────────────────────────────────
 // 现有自愈（Loop Engineering, 2026）只往上下文里塞一条"自检提醒"，模型靠
 // 自觉去修正；它既无"机器可消费"的故障根因分类，也不区分
@@ -164,7 +168,9 @@ export function decideSelfHeal(ctx = {}) {
     cap = 3,
     attempt = 0,
     maxAttempts = 3,
-    selfHeal = true
+    selfHeal = true,
+    lastAction = null,
+    lastCategory = null
   } = ctx;
 
   if (selfHeal === false) {
@@ -220,6 +226,21 @@ export function decideSelfHeal(ctx = {}) {
     };
   }
   if (looping) {
+    // v0.70 anti-flapping：若已经为同一根因 replan 过一次，却仍陷入完全相同的
+    // 循环，说明新思路也没奏效——直接升级给人，而不是在同一死胡同里无限循环。
+    // 上一次的 replan 已经清零过停滞/循环计数并重规划过 todo，再度 identical loop
+    // 即证明恢复失败，escalate 是正确收口。
+    if (lastAction === 'replan' && lastCategory === category) {
+      return {
+        action: 'escalate',
+        reason: 'flap_replan',
+        flap: true,
+        message:
+          `🔴 已为「${category}」重规划一次，却仍陷入完全相同的循环，说明新思路也未奏效。` +
+          `停止盲试并升级给人：请检查整体思路、换用不同工具，或向用户说明卡点。`,
+        escalate: true, replan: false, retryable: false
+      };
+    }
     // v0.69: replan 不再只是"一条文本提醒"，而是携带着结构化信号——
     // reason 说明为何重规划，resetCounters 指示 agent 真正执行恢复：
     // 清零停滞/循环计数（给新方案公平机会）+ 重置任务清单（保留已完成项）。
@@ -235,7 +256,23 @@ export function decideSelfHeal(ctx = {}) {
       resetCounters: true
     };
   }
-  // 首次失败且未循环：按分类给针对性提示。
+  // 首次失败且未循环：按分类给针对性提示。但若上次已经对同一根因 reflect 过，
+  // 说明"重读/修正参数"这条路无效——反抖动升级为 replan（换思路/换工具），
+  // 而不是原样再 reflect 一次（v0.70 anti-flapping）。lastCategory === category
+  // 校验保证只有"同一根因"才升级；换了故障类型则老老实实重新 reflect。
+  if (lastAction === 'reflect' && lastCategory === category) {
+    return {
+      action: 'replan',
+      reason: 'flap_reflect',
+      flap: true,
+      message:
+        `⚠️ 自检（第 ${reflections + 1}/${cap} 次）🔁 反抖动：上一次已对「${category}」自检 / 重读却仍未解决，说明这条修正路径无效。` +
+        `请立即换用不同工具或重新拆解目标，不要重复相同调用。系统已清空停滞/循环计数，给你一次公平的新机会；` +
+        `若已建立任务清单，请立即用 todo_write 重新拆解后续步骤（已完成项务必保留）。`,
+      escalate: false, replan: true, retryable: false,
+      resetCounters: true
+    };
+  }
   const detail =
     category === 'structural'
       ? `结构性故障（${names || '工具调用'}）：目标或工具不可达 / 永久失败，请换一种做法或工具，而非原样重试。`

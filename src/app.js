@@ -1455,7 +1455,8 @@ async function runTurn(conv, opts = {}) {
         const tail = (data && data.category ? '（' + data.category : '') +
           (data && data.reason ? (data.category ? '·' : '') + data.reason : '') +
           (data && data.category || data && data.reason ? '）' : '') +
-          (data && data.resetCounters ? ' ⟳已清零' : '');
+          (data && data.resetCounters ? ' ⟳已清零' : '') +
+          (data && data.flap ? ' 🔁反抖动' : '');
         toast(icon + ' 自愈·' + label + tail, action === 'escalate' ? 5200 : 3600);
       } else if (event === 'guard') {
         // v0.57 pre-flight Experience Guard: a world-mutating tool was recalled
@@ -3804,9 +3805,11 @@ function traceStepHtml(s, depth) {
     if (d.category) bits.push(`根因 <b>${escapeHtml(d.category)}</b>`);
     if (d.action) bits.push(`动作 <b>${escapeHtml(d.action)}</b>`);
     if (d.reason) bits.push(`原因 <b>${escapeHtml(d.reason)}</b>`);
+    if (d.lastAction) bits.push(`上次动作 <b>${escapeHtml(d.lastAction)}</b>`);
     if (d.attempt != null) bits.push(`第 ${Number(d.attempt) + 1} 次`);
     if (d.backoffMs != null) bits.push(`退避 ${d.backoffMs}ms`);
     if (d.resetCounters) bits.push('<b class="tstep-ok">已清零停滞计数</b>');
+    if (d.flap) bits.push('<b class="tstep-warn">🔁反抖动</b>');
     if (d.escalate) bits.push('<b class="tstep-bad">升级</b>');
     const msg = d.message ? `<div class="tstep-content muted small">${escapeHtml(String(d.message).slice(0, 600))}</div>` : '';
     detail = (bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '') + msg;
