@@ -6857,10 +6857,16 @@ async function runTurn(conv, opts = {}) {
       } else if (event === 'self_heal') {
         // v0.68: root-cause self-heal step. Show a short, action-tagged toast so
         // the user can see *why* the agent is retrying / replanning / escalating.
+        // v0.69: also surface the structured reason + the fact that counters were
+        // reset on a real replan, so the user knows recovery actually executed.
         const action = data && data.action ? data.action : 'reflect';
         const icon = action === 'escalate' ? '🔴' : action === 'compress' ? '🧹' : action === 'retry' ? '🔁' : action === 'replan' ? '🧭' : '🩹';
         const label = { retry: '重试', reflect: '自检', replan: '重规划', compress: '压缩', escalate: '升级', none: '无' }[action] || '自愈';
-        toast(icon + ' 自愈·' + label + (data && data.category ? '（' + data.category + '）' : ''), action === 'escalate' ? 5200 : 3600);
+        const tail = (data && data.category ? '（' + data.category : '') +
+          (data && data.reason ? (data.category ? '·' : '') + data.reason : '') +
+          (data && data.category || data && data.reason ? '）' : '') +
+          (data && data.resetCounters ? ' ⟳已清零' : '');
+        toast(icon + ' 自愈·' + label + tail, action === 'escalate' ? 5200 : 3600);
       } else if (event === 'guard') {
         // v0.57 pre-flight Experience Guard: a world-mutating tool was recalled
         // against the agent's own Experience Manual. block = refused outright;
@@ -7263,7 +7269,7 @@ function exportTraceHtml() {
   .tstep-err { border-color: #e6a0a0; }
   .tstep-head { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .tstep-ic { opacity: .8; } .tstep-kind { font-size: 12px; opacity: .65; }
-  .tstep-ms { font-size: 12px; opacity: .55; margin-left: auto; } .tstep-bad { color: #c0392b; font-size: 12px; }
+  .tstep-ms { font-size: 12px; opacity: .55; margin-left: auto; } .tstep-bad { color: #c0392b; font-size: 12px; } .tstep-ok { color: #1e8e3e; font-size: 12px; }
   .tstep-detail { margin-top: 6px; } .tstep-detail summary { cursor: pointer; font-size: 13px; }
   .tstep-kv { margin: 6px 0; } .tstep-kv b { font-size: 12px; opacity: .7; }
   .tstep-kv pre { white-space: pre-wrap; word-break: break-word; background: rgba(120,120,140,.1); padding: 8px 10px; border-radius: 8px; font-size: 12.5px; overflow-x: auto; }
@@ -9210,8 +9216,10 @@ function traceStepHtml(s, depth) {
     const bits = [];
     if (d.category) bits.push(`根因 <b>${escapeHtml(d.category)}</b>`);
     if (d.action) bits.push(`动作 <b>${escapeHtml(d.action)}</b>`);
+    if (d.reason) bits.push(`原因 <b>${escapeHtml(d.reason)}</b>`);
     if (d.attempt != null) bits.push(`第 ${Number(d.attempt) + 1} 次`);
     if (d.backoffMs != null) bits.push(`退避 ${d.backoffMs}ms`);
+    if (d.resetCounters) bits.push('<b class="tstep-ok">已清零停滞计数</b>');
     if (d.escalate) bits.push('<b class="tstep-bad">升级</b>');
     const msg = d.message ? `<div class="tstep-content muted small">${escapeHtml(String(d.message).slice(0, 600))}</div>` : '';
     detail = (bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '') + msg;

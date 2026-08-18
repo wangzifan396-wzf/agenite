@@ -171,6 +171,22 @@ describe('decideSelfHeal — actions', () => {
     const d = decideSelfHeal({ category: 'semantic', loopStreak: 2, reflections: 1, cap: 3 });
     assert.equal(d.action, 'replan');
   });
+  it('replan carries structured reason + resetCounters signal (v0.69)', () => {
+    const d = decideSelfHeal({ category: 'structural', loopStreak: 3, reflections: 1, cap: 3 });
+    assert.equal(d.action, 'replan');
+    assert.equal(d.replan, true);
+    assert.equal(d.reason, 'looping');
+    assert.equal(d.resetCounters, true);
+    assert.equal(d.retryable, false);
+  });
+  it('reflect / retry / compress do NOT carry resetCounters', () => {
+    const reflect = decideSelfHeal({ category: 'semantic', loopStreak: 0, reflections: 0, cap: 3 });
+    assert.notEqual(reflect.action, 'replan');
+    assert.ok(!reflect.resetCounters, 'reflect should not carry resetCounters');
+    const retry = decideSelfHeal({ category: 'transient', attempt: 0, maxAttempts: 3, reflections: 0, cap: 3 });
+    assert.notEqual(retry.action, 'replan');
+    assert.ok(!retry.resetCounters, 'retry should not carry resetCounters');
+  });
   it('unknown + loop + cap → escalate', () => {
     const d = decideSelfHeal({ category: 'unknown', loopStreak: 5, reflections: 3, cap: 3 });
     assert.equal(d.action, 'escalate');

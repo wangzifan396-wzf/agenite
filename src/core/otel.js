@@ -308,6 +308,8 @@ export function toOtlpJson(trace, opts = {}) {
           'agenite.operation': 'self_heal',
           'agenite.self_heal.category': (step.data && step.data.category) || 'unknown',
           'agenite.self_heal.action': action,
+          'agenite.self_heal.reason': (step.data && step.data.reason) || '',
+          'agenite.self_heal.reset_counters': !!(step.data && step.data.resetCounters),
           ...(escalate ? { 'error.type': 'self_heal_escalated' } : {})
         }),
         status: statusRecord(escalate ? STATUS_CODE_ERROR : STATUS_CODE_OK, escalate ? 'self-heal escalated to human' : 'self-heal applied'),

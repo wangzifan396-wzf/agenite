@@ -60,7 +60,7 @@ try {
 } catch { /* keep default if package.json is unreadable */ }
 // v0.68: rolling stats for the root-cause self-heal loop, surfaced by /api/health
 // so container orchestration / ops can watch how often the agent self-recovers.
-let selfHealStats = { total: 0, lastCategory: null, lastAction: null, lastAt: null };
+let selfHealStats = { total: 0, lastCategory: null, lastAction: null, lastReason: null, lastResetCounters: false, lastAt: null };
 const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
 // The machine root the agent is allowed to touch. Defaults to where you ran it.
@@ -1786,6 +1786,8 @@ async function handleChat(req, res) {
           selfHealStats.total = (selfHealStats.total || 0) + 1;
           selfHealStats.lastCategory = payload && payload.category ? payload.category : null;
           selfHealStats.lastAction = payload && payload.action ? payload.action : null;
+          selfHealStats.lastReason = payload && payload.reason ? payload.reason : null;
+          selfHealStats.lastResetCounters = !!(payload && payload.resetCounters);
           selfHealStats.lastAt = Date.now();
         } catch { /* stats are strictly best-effort */ }
       } else if (type === 'done') {

@@ -462,7 +462,35 @@ export async function runAgent({
         // count against the single reflection budget so a hopeless case can't
         // nag forever. That is the door we close on infinite loops.
         const canNudge = isEscalate ? !escalated : reflections < cap;
+        // Capture the true loop depth *before* any reset so the self_heal event
+        // reports what actually triggered the decision (v0.69: replan clears it).
+        const loopAtHeal = loopStreak;
         if (canNudge) {
+          // replan executes recovery, not just a nudge (v0.69): clear the
+          // no-progress and identical-turn counters so the new approach gets a
+          // fair chance instead of being immediately re-killed by the stall
+          // guard / loop breaker, and — when a live todo/plan state exists —
+          // re-plan it: keep completed items (real progress) but collapse the
+          // remainder to pending so the model must re-state its next steps.
+          if (decision.action === 'replan') {
+            turnsSinceProgress = 0;
+            loopStreak = 0;
+            lastTurnSig = null;
+            if (todo && Array.isArray(todo.items)) {
+              const completed = todo.items.filter((t) => t.status === 'completed');
+              const remaining = todo.items
+                .filter((t) => t.status !== 'completed')
+                .map((t) => { const { activeForm, ...keep } = t; return { ...keep, status: 'pending' }; });
+              todo.items = [...completed, ...remaining];
+              todo.updatedAt = Date.now();
+              onEvent('todo', {
+                items: todo.items.map((t) => ({ ...t })),
+                progress: todoProgress(todo.items),
+                updates: (Number(todo.updates) || 0) + 1,
+                replanned: true
+              });
+            }
+          }
           messages.push({ role: 'user', content: decision.message });
           // Budget blowout: proactively reclaim context so the run can continue.
           if (decision.action === 'compress' && autoCompact) {
@@ -486,7 +514,10 @@ export async function runAgent({
           // Machine-consumable event: one source of truth for trace / OTel / health.
           onEvent('self_heal', {
             category, action: decision.action,
-            attempt: selfHealAttempt, loopStreak, failedNames,
+            attempt: selfHealAttempt, loopStreak: loopAtHeal, failedNames,
+            reason: decision.reason || null,
+            resetCounters: decision.action === 'replan',
+            replanned: decision.action === 'replan',
             message: decision.message,
             backoffMs: decision.backoffMs != null ? decision.backoffMs : null,
             escalate: !!decision.escalate

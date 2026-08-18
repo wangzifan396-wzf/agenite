@@ -106,6 +106,57 @@ test('agent loop: selfHeal:false suppresses self-heal entirely', async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('agent loop: replan executes recovery (resets counters + re-plans todo)', async () => {
+  // v0.69: a stuck loop must not only *say* "replan" — it must actually reset the
+  // stall/loop counters and re-plan the live todo list (preserving completed work)
+  // so the new approach gets a fair chance instead of being re-killed next turn.
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'hello\n');
+  const todoState = {
+    items: [
+      { content: 'Step 1: draft the plan', status: 'completed' },
+      { content: 'Step 2: edit f.txt', status: 'in_progress' },
+      { content: 'Step 3: verify the result', status: 'pending' }
+    ],
+    updates: 1, updatedAt: 0, hinted: true
+  };
+  const messages = [{ role: 'user', content: 'edit f.txt' }];
+  let callCount = 0;
+  // The model keeps emitting the identical broken edit every turn → exact-repeat
+  // loop → after two bounded reflects it must fire a real replan.
+  const callModel = async () => {
+    callCount++;
+    return {
+      content: '',
+      toolCalls: [{ id: 'e' + callCount, name: 'edit_file', args: { path: 'f.txt', old_text: 'NOPE', new_text: 'x' } }],
+      usage: null
+    };
+  };
+  const executeTool = async () => ({ ok: false, error: '找不到要替换的文本', errorClass: 'SCHEMA_ERROR' });
+  const selfHeals = [];
+  await runAgent({
+    messages,
+    callModel,
+    executeTool,
+    onEvent: (t, p) => { if (t === 'self_heal') selfHeals.push(p); },
+    config: { selfHeal: true, maxReflections: 3, workspace: dir, stallGuard: 'off' },
+    toolContext: { todoState },
+    maxTurns: 8
+  });
+  const replans = selfHeals.filter((e) => e.action === 'replan');
+  assert.ok(replans.length >= 1, 'expected at least one replan self_heal event');
+  assert.equal(replans[0].resetCounters, true, 'replan must signal resetCounters');
+  assert.equal(replans[0].replanned, true, 'replan must signal replanned');
+  assert.equal(replans[0].reason, 'looping', 'replan reason should be looping');
+  // The todo must have been re-planned: 1 completed preserved, the rest collapsed
+  // to pending (no in_progress lingering to poison the next loop).
+  assert.equal(todoState.items.length, 3);
+  assert.equal(todoState.items.filter((t) => t.status === 'completed').length, 1);
+  assert.equal(todoState.items.filter((t) => t.status === 'in_progress').length, 0);
+  assert.equal(todoState.items.filter((t) => t.status === 'pending').length, 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('agent loop: autoGit checkpoint fires once after a successful mutation', async () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'f.txt'), 'hello\n');

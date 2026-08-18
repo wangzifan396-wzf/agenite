@@ -220,10 +220,19 @@ export function decideSelfHeal(ctx = {}) {
     };
   }
   if (looping) {
+    // v0.69: replan 不再只是"一条文本提醒"，而是携带着结构化信号——
+    // reason 说明为何重规划，resetCounters 指示 agent 真正执行恢复：
+    // 清零停滞/循环计数（给新方案公平机会）+ 重置任务清单（保留已完成项）。
+    // 这些字段是机器可消费的，trace / OTel / 健康检查都能直接读取。
     return {
       action: 'replan',
-      message: `⚠️ 自检（第 ${reflections + 1}/${cap} 次）：本回合工具调用与上几回合【完全相同】，说明当前思路已卡死。请立即重规划：重新拆解目标、换用不同工具或参数，或向用户澄清——不要重复相同调用。`,
-      escalate: false, replan: true, retryable: false
+      message:
+        `⚠️ 自检（第 ${reflections + 1}/${cap} 次）：本回合工具调用与上几回合【完全相同】，说明当前思路已卡死。` +
+        `请立即重规划：重新拆解目标、换用不同工具或参数，或向用户澄清——不要重复相同调用。` +
+        `系统已清空停滞/循环计数，给你一次公平的新机会；若已建立任务清单，请立即用 todo_write 重新拆解后续步骤（已完成项务必保留）。`,
+      escalate: false, replan: true, retryable: false,
+      reason: 'looping',
+      resetCounters: true
     };
   }
   // 首次失败且未循环：按分类给针对性提示。
