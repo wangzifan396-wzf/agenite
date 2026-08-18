@@ -1444,6 +1444,13 @@ async function runTurn(conv, opts = {}) {
         // The server hit the interactive cost cap and forced a stop. Toast it so
         // the user knows why the run ended early, not just that it did.
         toast('🛡️ 预算护栏触发：已达 $' + (Number(data.max) || 0).toFixed(2) + ' 上限，已强制停止并让模型总结', 4500);
+      } else if (event === 'self_heal') {
+        // v0.68: root-cause self-heal step. Show a short, action-tagged toast so
+        // the user can see *why* the agent is retrying / replanning / escalating.
+        const action = data && data.action ? data.action : 'reflect';
+        const icon = action === 'escalate' ? '🔴' : action === 'compress' ? '🧹' : action === 'retry' ? '🔁' : action === 'replan' ? '🧭' : '🩹';
+        const label = { retry: '重试', reflect: '自检', replan: '重规划', compress: '压缩', escalate: '升级', none: '无' }[action] || '自愈';
+        toast(icon + ' 自愈·' + label + (data && data.category ? '（' + data.category + '）' : ''), action === 'escalate' ? 5200 : 3600);
       } else if (event === 'guard') {
         // v0.57 pre-flight Experience Guard: a world-mutating tool was recalled
         // against the agent's own Experience Manual. block = refused outright;
@@ -3651,9 +3658,9 @@ let traceSubId = null;
 let historyTrace = null; // non-null => viewing a past run instead of live
 
 const TRACE_ICON = {
-  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️'
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹'
 };
-const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理' };
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈' };
 
 function traceClassify(name) {
   if (name && name.startsWith('memory_')) return 'memory';
@@ -3721,6 +3728,13 @@ function traceOnEvent(type, payload) {
     liveTrace.finishedAt = Date.now();
     liveTrace.stopped = payload?.stopped || null;
     liveTrace.turns = payload?.turns || 0;
+  } else if (type === 'self_heal') {
+    traceAdd({
+      kind: 'self_heal',
+      name: '自愈·' + (payload?.action || ''),
+      status: payload?.escalate ? 'error' : 'ok',
+      data: payload || {}
+    });
   } else if (type === 'diagnosis') {
     liveTrace.diagnosis = payload || null;
   }
@@ -3778,6 +3792,16 @@ function traceStepHtml(s, depth) {
   } else if (s.kind === 'compact') {
     const d = s.data || {};
     detail = `<div class="tstep-content muted small">上下文 ${fmtTok(d.before)} → ${fmtTok(d.after)}（丢弃 ${d.dropped || 0} 组）</div>`;
+  } else if (s.kind === 'self_heal') {
+    const d = s.data || {};
+    const bits = [];
+    if (d.category) bits.push(`根因 <b>${escapeHtml(d.category)}</b>`);
+    if (d.action) bits.push(`动作 <b>${escapeHtml(d.action)}</b>`);
+    if (d.attempt != null) bits.push(`第 ${Number(d.attempt) + 1} 次`);
+    if (d.backoffMs != null) bits.push(`退避 ${d.backoffMs}ms`);
+    if (d.escalate) bits.push('<b class="tstep-bad">升级</b>');
+    const msg = d.message ? `<div class="tstep-content muted small">${escapeHtml(String(d.message).slice(0, 600))}</div>` : '';
+    detail = (bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '') + msg;
   }
   return `<div class="tstep${err}" style="margin-left:${(depth || 0) * 18}px">` +
     `<div class="tstep-head"><span class="tstep-ic">${icon}</span>` +

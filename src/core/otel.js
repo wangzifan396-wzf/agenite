@@ -293,6 +293,26 @@ export function toOtlpJson(trace, opts = {}) {
         status: statusRecord(STATUS_CODE_ERROR, 'guardrail triggered'),
         events: [], links: []
       });
+    } else if (step.kind === 'self_heal') {
+      // v0.68: root-cause self-heal step becomes its own span so telemetry
+      // backends can chart recovery rates per fault category/action.
+      const action = (step.data && step.data.action) || 'reflect';
+      const escalate = !!(step.data && step.data.escalate);
+      spans.push({
+        traceId, spanId: sid, parentSpanId: parentId,
+        name: 'self_heal ' + action,
+        kind: SPAN_KIND.INTERNAL,
+        startTimeUnixNano: nanoFromMs(start),
+        endTimeUnixNano: nanoFromMs(end),
+        attributes: attrs({
+          'agenite.operation': 'self_heal',
+          'agenite.self_heal.category': (step.data && step.data.category) || 'unknown',
+          'agenite.self_heal.action': action,
+          ...(escalate ? { 'error.type': 'self_heal_escalated' } : {})
+        }),
+        status: statusRecord(escalate ? STATUS_CODE_ERROR : STATUS_CODE_OK, escalate ? 'self-heal escalated to human' : 'self-heal applied'),
+        events: [], links: []
+      });
     } else {
       // Unknown step kind: represent it as a neutral internal span.
       spans.push({

@@ -23,6 +23,7 @@ import { compactMessages, contextWindowFor, historyBudget, toolsTokens, totalTok
 import { addUsage, costOf, emptyUsage, priceFor } from './pricing.js';
 import { todoProgress, todoReminder } from './todo.js';
 import { detectStall, turnMadeProgress } from './stallguard.js';
+import { classifyError, decideSelfHeal, dominantCategory, backoffMs } from './fault.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -142,6 +143,13 @@ export async function runAgent({
   // exact-repeat loops for display; this makes the agent *act* on them.
   let lastTurnSig = null;
   let loopStreak = 0;
+  // Self-heal attempt counter (v0.68): bounds transient retries and keeps the
+  // "single reflection budget" door closed on infinite loops. Incremented each
+  // time we emit a non-escalate self_heal nudge.
+  let selfHealAttempt = 0;
+  // Escalation latch (v0.68): once we escalate to the human (auth / retries
+  // exhausted / loop hit the cap) we never nudge again — the human must act.
+  let escalated = false;
 
   // ── Runtime Resilience v2 (v0.65): stall detection + graceful degradation ──
   // Complements the exact-repeat loop breaker above: that one catches *identical*
@@ -396,24 +404,29 @@ export async function runAgent({
       });
     }
 
-    // ── Self-healing reflection + stuck-loop breaker (Loop Engineering, 2026) ──
-    // Two distinct failure modes get a bounded, model-side nudge so the agent
-    // self-corrects instead of burning the whole turn budget:
-    //   1) a mutating tool failed this turn → re-read live state, don't repeat.
-    //   2) this turn's tool calls are byte-identical to the previous turn → it
-    //      is looping (the "same fix again" failure mode 2026 reviews flag);
-    //      switching approach is the only way out. trace.js already *detects*
-    //      these loops for display; here we *act* on them.
-    // Both share one reflection budget (maxReflections) so a hopeless case
-    // can't nag forever — that is the door we close on infinite loops.
+    // ── Root-cause-driven self-healing (Resilient Self-Healing v2, v0.68) ──
+    // Upgrades the ad-hoc "自检提醒" nudge into a structured root-cause loop:
+    // classify every failed mutation, pick the dominant root cause, then let
+    // decideSelfHeal choose the *right* remedy — retry a transient blip,
+    // re-read & fix a semantic miss, switch approach on a stuck loop, escalate
+    // auth to the human, or compress on a budget blowout. The identical
+    // structured decision is emitted as a 'self_heal' event so the trace,
+    // OTel spans and the health probe all consume one source of truth. The
+    // reflection budget (maxReflections) still bounds nudges so a hopeless
+    // case can't nag forever — that is the door we close on infinite loops.
     let failedMutation = 0;
     let succeededMutation = 0;
     const failedNames = [];
+    const failedClasses = [];
     for (let i = 0; i < toolCalls.length; i++) {
       const r = toolResults[i];
       if (!r || !MUTATION_TOOLS.has(toolCalls[i].name)) continue;
       if (r.res.ok) succeededMutation++;
-      else { failedMutation++; failedNames.push(toolCalls[i].name); }
+      else {
+        failedMutation++;
+        failedNames.push(toolCalls[i].name);
+        if (r.res.errorClass) failedClasses.push(r.res.errorClass);
+      }
     }
     // Order-independent signature of this turn's tool calls. Two turns with the
     // same (name+args) set are a stuck loop; scattered re-reads of the same
@@ -428,21 +441,61 @@ export async function runAgent({
     if (loopStreak >= 2) looping = true;
 
     const cap = Number.isFinite(Number(config.maxReflections)) ? Number(config.maxReflections) : 3;
-    if (reflections < cap && config.selfHeal !== false && (failedMutation > 0 || looping)) {
-      reflections++;
-      let body;
-      if (looping && failedMutation === 0) {
-        body =
-          `⚠️ 自检提醒（第 ${reflections}/${cap} 次）：检测到本回合的工具调用与上几回合【完全相同】，` +
-          '重复执行不会产生新结果，说明当前思路已卡死。请立即换一种做法：重新拆解目标、换用不同工具或参数，' +
-          '或向用户澄清卡点——不要继续用相同参数重复调用。';
-      } else {
-        body =
-          `⚠️ 自检提醒（第 ${reflections}/${cap} 次）：本回合有工具调用未成功（${failedNames.join('、')}）。` +
-          '请先重新读取相关文件确认其【当前】内容，再核对参数后重试——不要原样重复刚才失败的调用。' +
-          '若连续多次失败，停下来向用户说明卡点，而不是继续盲试。';
+
+    if (config.selfHeal !== false && (failedMutation > 0 || looping)) {
+      // Map every failed mutation to a root cause; a pure stuck-loop (no new
+      // failure) is itself a structural dead-end and is folded in as such.
+      const cats = failedClasses.map((ec) => classifyError({ errorClass: ec }).category);
+      if (looping && failedMutation === 0) cats.push('structural');
+      const category = dominantCategory(cats.length ? cats : ['unknown']);
+
+      const decision = decideSelfHeal({
+        category, loopStreak, failedMutation, failedNames,
+        reflections, cap, attempt: selfHealAttempt, maxAttempts: 3,
+        selfHeal: config.selfHeal !== false
+      });
+
+      if (decision.action !== 'none' && decision.message) {
+        const isEscalate = decision.action === 'escalate';
+        // Escalate (auth / exhausted retries / loop hit the cap) fires once and
+        // then stays silent — the human must act. reflect/replan/retry/compress
+        // count against the single reflection budget so a hopeless case can't
+        // nag forever. That is the door we close on infinite loops.
+        const canNudge = isEscalate ? !escalated : reflections < cap;
+        if (canNudge) {
+          messages.push({ role: 'user', content: decision.message });
+          // Budget blowout: proactively reclaim context so the run can continue.
+          if (decision.action === 'compress' && autoCompact) {
+            try {
+              const before = totalTokens(messages);
+              if (before > budget) {
+                const r = await compactMessages(messages, {
+                  budget, keepRecentGroups: 3, toolTrimTo: 1200,
+                  summarize: config.smartCompact === false ? null : summarize
+                });
+                if (r.compacted) {
+                  messages.length = 0;
+                  for (const m of r.messages) messages.push(m);
+                  onEvent('compact', {
+                    before: r.before, after: r.after, dropped: r.droppedGroups, trimmed: r.trimmed, budget
+                  });
+                }
+              }
+            } catch { /* compaction is strictly best-effort */ }
+          }
+          // Machine-consumable event: one source of truth for trace / OTel / health.
+          onEvent('self_heal', {
+            category, action: decision.action,
+            attempt: selfHealAttempt, loopStreak, failedNames,
+            message: decision.message,
+            backoffMs: decision.backoffMs != null ? decision.backoffMs : null,
+            escalate: !!decision.escalate
+          });
+          // Escalate closes the door on blind retries; otherwise consume one nudge.
+          if (isEscalate) { escalated = true; reflections = cap; }
+          else { reflections++; selfHealAttempt++; }
+        }
       }
-      messages.push({ role: 'user', content: body });
     }
 
     // ── Auto git checkpoint (Aider-style safety net) ──

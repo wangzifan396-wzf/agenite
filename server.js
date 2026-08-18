@@ -58,6 +58,9 @@ let APP_VERSION = '0.0.0';
 try {
   APP_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version || APP_VERSION;
 } catch { /* keep default if package.json is unreadable */ }
+// v0.68: rolling stats for the root-cause self-heal loop, surfaced by /api/health
+// so container orchestration / ops can watch how often the agent self-recovers.
+let selfHealStats = { total: 0, lastCategory: null, lastAction: null, lastAt: null };
 const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
 // The machine root the agent is allowed to touch. Defaults to where you ran it.
@@ -353,7 +356,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url === '/api/browser/close') return handleBrowserClose(req, res);
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
-      ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR
+      ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR,
+      selfHealStats: { ...selfHealStats }
     });
   }
   // Liveness/readiness + version probe for container orchestration (k8s,
@@ -1680,6 +1684,7 @@ async function handleChat(req, res) {
     else if (type === 'done') sse('done', payload);
     else if (type === 'subagent') sse('subagent', payload);
     else if (type === 'guardrail') sse('guardrail', payload);
+    else if (type === 'self_heal') sse('self_heal', payload);
     else if (type === 'todo') sse('todo', payload);
     else if (type === 'verify') sse('verify', payload);
 
@@ -1769,6 +1774,20 @@ async function handleChat(req, res) {
         usagePrev = { prompt: p, completion: c };
       } else if (type === 'guardrail') {
         addStep(trace, { kind: 'guardrail', name: '预算护栏触发', status: 'error', data: payload || {} });
+      } else if (type === 'self_heal') {
+        addStep(trace, {
+          kind: 'self_heal',
+          name: '自愈·' + (payload && payload.action ? payload.action : ''),
+          status: payload && payload.escalate ? 'error' : 'ok',
+          data: payload || {}
+        });
+        // Roll the running stats so /api/health can report self-heal activity.
+        try {
+          selfHealStats.total = (selfHealStats.total || 0) + 1;
+          selfHealStats.lastCategory = payload && payload.category ? payload.category : null;
+          selfHealStats.lastAction = payload && payload.action ? payload.action : null;
+          selfHealStats.lastAt = Date.now();
+        } catch { /* stats are strictly best-effort */ }
       } else if (type === 'done') {
         trace.finishedAt = Date.now();
         trace.stopped = payload?.stopped || null;

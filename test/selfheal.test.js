@@ -1,9 +1,11 @@
 // Loop Engineering / self-healing:
 //   1. edit_file returns Aider-style "Did you mean these actual lines?" when the
 //      SEARCH block doesn't match, so the model self-corrects instead of looping.
-//   2. The agent loop injects a *bounded* self-check reminder (capped by
-//      maxReflections) when a mutating tool fails, so a hopeless edit can't spin
-//      forever — the 2026 "same fix again" failure mode.
+//   2. The agent loop runs a *root-cause* self-heal (v0.68, fault.js): a failed
+//      mutating tool or a stuck loop is classified into a fault category, and
+//      decideSelfHeal picks the right remedy — reflect / replan / retry /
+//      compress / escalate — bounded by maxReflections, escalating exactly once
+//      when the cap is hit. See test/fault.test.js for the pure-decision suite.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -47,7 +49,7 @@ test('edit_file: ambiguous match tells which lines and asks for a longer span', 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('agent loop: injects bounded self-check reminders on repeated mutation failure', async () => {
+test('agent loop: root-cause self-heal is bounded then escalates once', async () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'f.txt'), 'hello\n');
   const messages = [{ role: 'user', content: 'edit f.txt' }];
@@ -72,15 +74,17 @@ test('agent loop: injects bounded self-check reminders on repeated mutation fail
     maxTurns: 10
   });
   assert.equal(res.stopped, 'max_turns');
-  const reflections = messages.filter((m) => m.role === 'user' && /自检提醒/.test(m.content));
-  // Capped at 3 even though the model failed 10 times.
-  assert.equal(reflections.length, 3);
-  assert.match(reflections[0].content, /第 1\/3 次/);
-  assert.match(reflections[2].content, /第 3\/3 次/);
+  // Three bounded nudges (reflect → reflect → replan), then exactly one escalate.
+  const nudges = messages.filter((m) => m.role === 'user' && /自检（第/.test(m.content));
+  assert.equal(nudges.length, 3);
+  assert.match(nudges[0].content, /第 1\/3 次/);
+  assert.match(nudges[2].content, /第 3\/3 次/);
+  const escalations = messages.filter((m) => m.role === 'user' && /已尝试 3\/3 次仍失败/.test(m.content));
+  assert.equal(escalations.length, 1);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('agent loop: selfHeal:false suppresses reflection reminders', async () => {
+test('agent loop: selfHeal:false suppresses self-heal entirely', async () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'f.txt'), 'hello\n');
   const messages = [{ role: 'user', content: 'edit f.txt' }];
@@ -97,8 +101,8 @@ test('agent loop: selfHeal:false suppresses reflection reminders', async () => {
     config: { selfHeal: false, workspace: dir },
     maxTurns: 5
   });
-  const reflections = messages.filter((m) => m.role === 'user' && /自检提醒/.test(m.content));
-  assert.equal(reflections.length, 0);
+  const nudges = messages.filter((m) => m.role === 'user' && /自检|重规划|重试|已尝试/.test(m.content));
+  assert.equal(nudges.length, 0);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
