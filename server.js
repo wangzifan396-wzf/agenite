@@ -75,6 +75,16 @@ let guardrailStats = {
 // the loop already emits, surfaced by /api/health. One machine-consumable
 // record per event, matching the guardrail / self-heal ledger pattern.
 const contextEconomy = new ContextEconomy();
+// v0.73.0: A2A multi-agent observability ledger — surfaced by /api/health so
+// ops can watch how many A2A peers were discovered, tasks opened, and whether
+// they completed or failed. Rolled from each `a2a` event (peer_card /
+// task_submitted / task_completed / task_failed), in the same ledger pattern
+// as guardrailStats / selfHealStats.
+let a2aStats = {
+  peers: 0, tasks: 0, completed: 0, failed: 0,
+  lastPeer: null, lastPhase: null, lastTaskStatus: null, lastAt: null,
+  ledger: []
+};
 // v0.71: roll the guardrail audit ledger from each guardrail event so /api/health
 // can report governance activity. One machine-consumable record per event: the
 // unified decision (deny / ask / allow / cost) and its category / reason / tool.
@@ -100,6 +110,36 @@ function rollGuardrailStats(payload) {
     const hist = Array.isArray(guardrailStats.ledger) ? guardrailStats.ledger : [];
     hist.push(entry);
     guardrailStats.ledger = hist.slice(-6);
+  } catch { /* stats are strictly best-effort */ }
+}
+// v0.73.0: roll the A2A ledger from each `a2a` event. One machine-consumable
+// record per event: the phase, the peer name, and the resulting task status.
+function rollA2AStats(payload) {
+  try {
+    const phase = payload && payload.phase;
+    if (phase === 'peer_card') {
+      a2aStats.peers = (a2aStats.peers || 0) + 1;
+      a2aStats.lastPeer = payload && payload.card && payload.card.name ? payload.card.name : null;
+    } else if (phase === 'task_submitted') {
+      a2aStats.tasks = (a2aStats.tasks || 0) + 1;
+    } else if (phase === 'task_completed') {
+      a2aStats.completed = (a2aStats.completed || 0) + 1;
+      a2aStats.lastTaskStatus = 'completed';
+    } else if (phase === 'task_failed') {
+      a2aStats.failed = (a2aStats.failed || 0) + 1;
+      a2aStats.lastTaskStatus = 'failed';
+    }
+    a2aStats.lastPhase = phase || null;
+    a2aStats.lastAt = Date.now();
+    const entry = {
+      phase: a2aStats.lastPhase,
+      peer: a2aStats.lastPeer,
+      taskStatus: a2aStats.lastTaskStatus,
+      at: a2aStats.lastAt
+    };
+    const hist = Array.isArray(a2aStats.ledger) ? a2aStats.ledger : [];
+    hist.push(entry);
+    a2aStats.ledger = hist.slice(-6);
   } catch { /* stats are strictly best-effort */ }
 }
 const PORT = Number(process.env.PORT) || 4173;
@@ -400,6 +440,7 @@ const server = http.createServer((req, res) => {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR,
       selfHealStats: { ...selfHealStats },
       guardrailStats: { ...guardrailStats },
+      a2aStats: { ...a2aStats },
       contextEconomy: contextEconomy.snapshot()
     });
   }
@@ -1749,6 +1790,7 @@ async function handleChat(req, res) {
     else if (type === 'subagent') sse('subagent', payload);
     else if (type === 'guardrail') sse('guardrail', payload);
     else if (type === 'self_heal') sse('self_heal', payload);
+    else if (type === 'a2a') sse('a2a', payload);
     else if (type === 'todo') sse('todo', payload);
     else if (type === 'verify') sse('verify', payload);
 
@@ -1879,6 +1921,25 @@ async function handleChat(req, res) {
           hist.push(entry);
           selfHealStats.healHistory = hist.slice(-6);
         } catch { /* stats are strictly best-effort */ }
+      } else if (type === 'a2a') {
+        // v0.73.0: A2A exchange events (peer_card / task_submitted /
+        // task_completed / task_failed). Roll the ledger for all; render a
+        // trace step for the meaningful ones but skip the per-turn host_card
+        // so the timeline stays readable (it's the same agent every message).
+        const phase = payload && payload.phase;
+        rollA2AStats(payload);
+        if (phase === 'host_card') {
+          // no trace step — only the host advertises a card, every turn.
+        } else if (phase === 'peer_card') {
+          const peer = payload && payload.card && payload.card.name ? payload.card.name : '子代理';
+          addStep(trace, { kind: 'a2a', name: '多智能体·' + peer, parentId: traceTurnId || null, status: 'ok', data: { phase, peer } });
+        } else if (phase === 'task_completed') {
+          addStep(trace, { kind: 'a2a', name: 'A2A 任务完成', parentId: traceTurnId || null, status: 'ok', data: { phase, taskStatus: 'completed' } });
+        } else if (phase === 'task_failed') {
+          addStep(trace, { kind: 'a2a', name: 'A2A 任务失败', parentId: traceTurnId || null, status: 'error', data: { phase, taskStatus: 'failed' } });
+        } else if (phase === 'task_submitted') {
+          addStep(trace, { kind: 'a2a', name: 'A2A 任务已提交', parentId: traceTurnId || null, status: 'ok', data: { phase, taskStatus: 'submitted' } });
+        }
       } else if (type === 'done') {
         trace.finishedAt = Date.now();
         trace.stopped = payload?.stopped || null;
@@ -1988,7 +2049,10 @@ async function handleChat(req, res) {
     onSubEvent: (id, name, type, payload) => onEvent('subagent', { subId: id, name, event: type, ...payload }),
     summarize,
     requestApproval,
-    platform: process.platform
+    platform: process.platform,
+    // v0.73.0: route A2A exchange events (peer_card / task_submitted /
+    // task_completed / task_failed) into the same event bus SSE + trace + stats.
+    onA2A: (phase, payload) => onEvent('a2a', { phase, ...payload })
   });
 
   // Fan-out scheduler: runs several independent sub-agents concurrently and

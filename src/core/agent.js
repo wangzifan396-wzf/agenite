@@ -25,6 +25,9 @@ import { todoProgress, todoReminder } from './todo.js';
 import { detectStall, turnMadeProgress } from './stallguard.js';
 import { classifyError, decideSelfHeal, dominantCategory, backoffMs } from './fault.js';
 import { evaluateGuardrail, resolveMode } from './guardrails.js';
+// v0.73.0: A2A Agent Card — advertises this agent's A2A-shaped identity so a
+// delegate/fanout peer (or external A2A client) can discover it.
+import { cardFromConfig } from './agentcard.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -98,7 +101,10 @@ export async function runAgent({
   toolContext = {},
   maxTurns,
   tools = [],
-  summarize = null
+  summarize = null,
+  // v0.73.0: when true this run is an A2A peer (sub-agent), not the host, so
+  // it must NOT advertise a host Agent Card — only the top-level run does.
+  isPeer = false
 }) {
   const opts = {
     dangerTools: config.dangerTools,
@@ -121,6 +127,17 @@ export async function runAgent({
     allowList: (config.guardrails && Array.isArray(config.guardrails.allowList)) ? config.guardrails.allowList : [],
     networkCap: (config.guardrails && config.guardrails.networkCap != null) ? Number(config.guardrails.networkCap) : -1
   };
+  // v0.73.0: A2A Agent Card. The top-level (host) run advertises its A2A
+  // identity once, so a delegate/fanout peer — or an external A2A client — can
+  // discover it. Sub-agent (peer) runs skip this via isPeer:true so only the
+  // host emits a card. Best-effort: a card failure must never break a run.
+  if (!isPeer && typeof onEvent === 'function') {
+    try {
+      const hostCard = cardFromConfig(config, { tools, version: config.version, name: config.name });
+      onEvent('a2a', { phase: 'host_card', card: hostCard, contextId: (opts && opts.contextId) || null });
+    } catch { /* Agent Card is strictly best-effort */ }
+  }
+
   // Per-run network call counter, fed to the gate for the rate cap. Updated
   // synchronously during the pre-scan so parallel network tools can't race it.
   let netCount = 0;

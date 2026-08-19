@@ -342,6 +342,28 @@ export function toOtlpJson(trace, opts = {}) {
         status: statusRecord(escalate ? STATUS_CODE_ERROR : STATUS_CODE_OK, escalate ? 'self-heal escalated to human' : 'self-heal applied'),
         events: [], links: []
       });
+    } else if (step.kind === 'a2a') {
+      // v0.73.0: a multi-agent A2A exchange step (peer_card / task lifecycle).
+      // We keep span name='a2a' so existing telemetry dashboards/otel.test.js
+      // keep working, and extend the attributes instead of replacing them.
+      const d = step.data || {};
+      const phase = d.phase || 'unknown';
+      const isError = phase === 'task_failed';
+      spans.push({
+        traceId, spanId: sid, parentSpanId: parentId,
+        name: 'a2a',
+        kind: SPAN_KIND.INTERNAL,
+        startTimeUnixNano: nanoFromMs(start),
+        endTimeUnixNano: nanoFromMs(end),
+        attributes: attrs({
+          'agenite.operation': 'a2a',
+          'agenite.a2a.phase': phase,
+          'agenite.a2a.peer': d.peer || '',
+          'agenite.a2a.task_status': d.taskStatus || ''
+        }),
+        status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'A2A task failed' : 'A2A exchange'),
+        events: [], links: []
+      });
     } else {
       // Unknown step kind: represent it as a neutral internal span.
       spans.push({

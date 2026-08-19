@@ -18,6 +18,11 @@
 // `createSubAgentRunner` is a factory so the whole thing is unit-testable with
 // fake `callModel` / `executeTool` — no real model or network required.
 import { runAgent, clampTurns } from './agent.js';
+// v0.73.0: A2A Agent Card + Task/Artifact protocol. These are thin, non-breaking
+// adapters over the existing delegate/fanout engine — they add A2A-shaped
+// observability (peer card + task lifecycle) without changing execution.
+import { cardFromConfig } from './agentcard.js';
+import { wrapDelegation } from './a2a.js';
 
 // Remove `delegate` (no nesting), `git` (a sub-agent must never rewrite the
 // parent's repo history / undo its commits) and `regression_hunt` (it checks
@@ -75,7 +80,12 @@ export function createSubAgentRunner({
   onSubEvent = null,
   summarize = null,
   requestApproval = null,
-  platform = process.platform
+  platform = process.platform,
+  // v0.73.0: A2A event sink. When wired (by server.js), every delegation is
+  // emitted as a full A2A exchange: peer_card / task_submitted /
+  // task_completed / task_failed. Left optional so unit tests that call the
+  // runner directly stay unchanged.
+  onA2A = null
 }) {
   return async function runSubAgent(args = {}, opts = {}) {
     const goal = String(args.goal || '').trim();
@@ -114,27 +124,55 @@ export function createSubAgentRunner({
 
     const id = 'sa_' + Math.random().toString(36).slice(2, 8);
 
-    const result = await runAgent({
-      messages: childMessages,
-      callModel,
-      executeTool,
-      onEvent: (type, payload) => {
-        if (onSubEvent) onSubEvent(id, persona || 'sub-agent', type, payload);
-      },
-      config: childConfig,
-      tools: childTools,
-      summarize,
-      toolContext: { requestApproval, platform, memoryBase }
-    });
-
-    const summary = extractSubAgentSummary(result.messages) || '(子代理未返回内容)';
-    return {
-      ok: true,
-      content:
-        `【子代理${persona ? ' · ' + persona : ''} · ${result.turns} 步 · 状态 ${result.stopped}】\n${summary}`,
-      turns: result.turns,
-      stopped: result.stopped
+    // The actual child execution, factored out so it can be wrapped in the
+    // A2A Task/Artifact protocol when onA2A is wired. Returns the same shape
+    // the delegate tool expects.
+    const runPeer = async () => {
+      const result = await runAgent({
+        messages: childMessages,
+        callModel,
+        executeTool,
+        onEvent: (type, payload) => {
+          if (onSubEvent) onSubEvent(id, persona || 'sub-agent', type, payload);
+        },
+        config: childConfig,
+        tools: childTools,
+        summarize,
+        toolContext: { requestApproval, platform, memoryBase },
+        // v0.73.0: this child is an A2A peer, not the host — suppress the
+        // host Agent Card so only the top-level run advertises one.
+        isPeer: true
+      });
+      const summary = extractSubAgentSummary(result.messages) || '(子代理未返回内容)';
+      return {
+        ok: true,
+        content:
+          `【子代理${persona ? ' · ' + persona : ''} · ${result.turns} 步 · 状态 ${result.stopped}】\n${summary}`,
+        turns: result.turns,
+        stopped: result.stopped
+      };
     };
+
+    // v0.73.0: when A2A is wired at the server, wrap the delegation in a full
+    // A2A exchange (peer card + task lifecycle). The return shape is unchanged
+    // so the delegate/fanout tools and all existing tests behave identically.
+    if (onA2A) {
+      const peerCard = cardFromConfig(childConfig, {
+        tools: childTools,
+        name: persona || 'sub-agent',
+        isPeer: true,
+        version: baseConfig.version
+      });
+      return wrapDelegation({
+        runPeer,
+        onEvent: onA2A,
+        peerCard,
+        args,
+        contextId: (opts && opts.contextId) || null
+      });
+    }
+
+    return runPeer();
   };
 }
 

@@ -49,7 +49,12 @@ const READ_TOOLS = new Set([
   'memory_recall', 'context_retrieve'
 ]);
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'make_dir', 'apply_patch']);
-const EXEC_TOOLS = new Set(['run_command', 'run_code']);
+const EXEC_TOOLS = new Set(['run_command', 'run_code', 'delegate', 'fanout']);
+// `delegate` / `fanout` spawn a full child agent loop with its own tool set, so
+// they carry a high blast radius. Treating them as `exec` routes them through
+// the same v0.71 blast-radius gate as run_command/run_code (ask-mode human
+// gate, allow/deny-list, network cap), which is exactly the 2026 agentic-
+// governance posture A2A interoperability should inherit.
 const NETWORK_TOOLS = new Set(['web_fetch', 'web_search']);
 
 export const GUARDRAIL_CATEGORIES = ['read', 'write', 'exec', 'network', 'destructive', 'secret', 'unknown'];

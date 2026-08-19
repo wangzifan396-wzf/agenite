@@ -1392,6 +1392,17 @@ async function runTurn(conv, opts = {}) {
         saveConvs();
       } else if (event === 'subagent') {
         handleSubAgentEvent(el, data);
+      } else if (event === 'a2a') {
+        // v0.73.0: A2A multi-agent exchange events. Toast the meaningful ones
+        // so the user can see peers being discovered and tasks resolving.
+        const phase = data?.phase;
+        if (phase === 'peer_card') {
+          toast('🕸️ 发现 A2A 对端：' + (data.card?.name || '子代理'), 2800);
+        } else if (phase === 'task_completed') {
+          toast('🕸️ A2A 任务完成：' + (data.task?.id || ''), 2600);
+        } else if (phase === 'task_failed') {
+          toast('🕸️ A2A 任务失败：' + (data.task?.id || '') + '（' + (data.error || 'unknown') + '）', 4200);
+        }
       } else if (event === 'skill_auto') {
         if (data.saved) {
           // Say WHY it was trusted: a skill learned from a verified run is a
@@ -3692,9 +3703,9 @@ let traceSubId = null;
 let historyTrace = null; // non-null => viewing a past run instead of live
 
 const TRACE_ICON = {
-  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️'
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️'
 };
-const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏' };
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体' };
 
 function traceClassify(name) {
   if (name && name.startsWith('memory_')) return 'memory';
@@ -3784,6 +3795,19 @@ function traceOnEvent(type, payload) {
       status: payload?.escalate ? 'error' : 'ok',
       data: payload || {}
     });
+  } else if (type === 'a2a') {
+    // v0.73.0: A2A exchange events. Render a timeline step for the meaningful
+    // ones; skip host_card (emitted every turn by the same agent).
+    const phase = payload?.phase;
+    if (phase === 'peer_card') {
+      traceAdd({ kind: 'a2a', name: '多智能体·' + (payload?.card?.name || '子代理'), parentId: traceTurnId || null, status: 'ok', data: { phase, peer: payload?.card?.name } });
+    } else if (phase === 'task_completed') {
+      traceAdd({ kind: 'a2a', name: 'A2A 任务完成', parentId: traceTurnId || null, status: 'ok', data: { phase, taskStatus: 'completed' } });
+    } else if (phase === 'task_failed') {
+      traceAdd({ kind: 'a2a', name: 'A2A 任务失败', parentId: traceTurnId || null, status: 'error', data: { phase, taskStatus: 'failed' } });
+    } else if (phase === 'task_submitted') {
+      traceAdd({ kind: 'a2a', name: 'A2A 任务已提交', parentId: traceTurnId || null, status: 'ok', data: { phase, taskStatus: 'submitted' } });
+    }
   } else if (type === 'diagnosis') {
     liveTrace.diagnosis = payload || null;
   }
@@ -3863,6 +3887,13 @@ function traceStepHtml(s, depth) {
     if (d.reason) bits.push(`原因 <b>${escapeHtml(d.reason)}</b>`);
     if (d.tool) bits.push(`工具 <b>${escapeHtml(d.tool)}</b>`);
     if (d.mode) bits.push(`模式 <b>${escapeHtml(d.mode)}</b>`);
+    detail = bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '';
+  } else if (s.kind === 'a2a') {
+    const d = s.data || {};
+    const bits = [];
+    if (d.phase) bits.push(`阶段 <b>${escapeHtml(String(d.phase))}</b>`);
+    if (d.peer) bits.push(`对端 <b>${escapeHtml(d.peer)}</b>`);
+    if (d.taskStatus) bits.push(`任务 <b>${escapeHtml(d.taskStatus)}</b>`);
     detail = bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '';
   }
   return `<div class="tstep${err}" style="margin-left:${(depth || 0) * 18}px">` +
