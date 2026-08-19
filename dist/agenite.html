@@ -6849,12 +6849,19 @@ async function runTurn(conv, opts = {}) {
         renderErrorCard(el, aMsg.error);
         paintFallback(md, aMsg.content, '<span class="muted small">（无文本输出）</span>');
       } else if (event === 'guardrail') {
-        // The server hit the interactive cost cap and forced a stop. Toast it so
-        // the user knows why the run ended early, not just that it did.
-        toast('🛡️ 预算护栏触发：已达 
+        // v0.71: one guardrail event now covers the budget cap and the action-level
+        // blast-radius gate. Toast the three meaningful shapes distinctly.
+        if (data?.decision === 'deny') {
+          toast('🛡️ 护栏拦截：' + (data.tool || '') + ' 被阻止（' + (data.reason || 'deny') + '）', 4500);
+        } else if (data?.decision === 'ask') {
+          toast('🛡️ 护栏：' + (data.tool || '') + ' 需审批（' + (data.category || '') + '）', 3500);
+        } else {
+          // cost (default) — the server hit the interactive budget cap and forced a stop.
+          toast('🛡️ 预算护栏触发：已达 
 </body>
 </html>
  + (Number(data.max) || 0).toFixed(2) + ' 上限，已强制停止并让模型总结', 4500);
+        }
       } else if (event === 'self_heal') {
         // v0.68: root-cause self-heal step. Show a short, action-tagged toast so
         // the user can see *why* the agent is retrying / replanning / escalating.
@@ -9079,9 +9086,9 @@ let traceSubId = null;
 let historyTrace = null; // non-null => viewing a past run instead of live
 
 const TRACE_ICON = {
-  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹'
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️'
 };
-const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈' };
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏' };
 
 function traceClassify(name) {
   if (name && name.startsWith('memory_')) return 'memory';
@@ -9149,6 +9156,21 @@ function traceOnEvent(type, payload) {
     liveTrace.finishedAt = Date.now();
     liveTrace.stopped = payload?.stopped || null;
     liveTrace.turns = payload?.turns || 0;
+  } else if (type === 'guardrail') {
+    // v0.71: render a trace step only for meaningful decisions (deny / ask / cost).
+    // The per-tool 'allow' entries are no-ops for the timeline but still roll the
+    // server-side audit ledger, so we skip them here to keep the view readable.
+    if (payload?.decision !== 'allow') {
+      const label = payload?.decision === 'deny' ? '拦截'
+        : payload?.decision === 'ask' ? '待审批'
+        : '预算';
+      traceAdd({
+        kind: 'guardrail',
+        name: '护栏·' + label + (payload?.tool ? '·' + payload.tool : ''),
+        status: (payload?.decision === 'deny' || payload?.decision === 'cost') ? 'error' : 'ok',
+        data: payload || {}
+      });
+    }
   } else if (type === 'self_heal') {
     traceAdd({
       kind: 'self_heal',
@@ -9227,6 +9249,15 @@ function traceStepHtml(s, depth) {
     if (d.escalate) bits.push('<b class="tstep-bad">升级</b>');
     const msg = d.message ? `<div class="tstep-content muted small">${escapeHtml(String(d.message).slice(0, 600))}</div>` : '';
     detail = (bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '') + msg;
+  } else if (s.kind === 'guardrail') {
+    const d = s.data || {};
+    const bits = [];
+    if (d.decision) bits.push(`判定 <b>${escapeHtml(String(d.decision))}</b>`);
+    if (d.category) bits.push(`类别 <b>${escapeHtml(d.category)}</b>`);
+    if (d.reason) bits.push(`原因 <b>${escapeHtml(d.reason)}</b>`);
+    if (d.tool) bits.push(`工具 <b>${escapeHtml(d.tool)}</b>`);
+    if (d.mode) bits.push(`模式 <b>${escapeHtml(d.mode)}</b>`);
+    detail = bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '';
   }
   return `<div class="tstep${err}" style="margin-left:${(depth || 0) * 18}px">` +
     `<div class="tstep-head"><span class="tstep-ic">${icon}</span>` +

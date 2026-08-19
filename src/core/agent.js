@@ -24,6 +24,7 @@ import { addUsage, costOf, emptyUsage, priceFor } from './pricing.js';
 import { todoProgress, todoReminder } from './todo.js';
 import { detectStall, turnMadeProgress } from './stallguard.js';
 import { classifyError, decideSelfHeal, dominantCategory, backoffMs } from './fault.js';
+import { evaluateGuardrail, resolveMode } from './guardrails.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -108,6 +109,21 @@ export async function runAgent({
     autoApproveReadonly: config.mcpAutoApproveReadonly,
     ...toolContext
   };
+
+  // ── Action-level blast-radius gate (v0.71.0, governance track) ──
+  // Built once per run from config. `denyList`/`allowList`/`networkCap` come
+  // from config.guardrails; the approval mode is the existing config.approvalMode
+  // (already threaded through opts). networkCap defaults to -1 (unlimited) so
+  // existing behavior is unchanged unless an operator sets a cap.
+  const guardPolicy = {
+    mode: config.approvalMode || 'ask',
+    denyList: (config.guardrails && Array.isArray(config.guardrails.denyList)) ? config.guardrails.denyList : [],
+    allowList: (config.guardrails && Array.isArray(config.guardrails.allowList)) ? config.guardrails.allowList : [],
+    networkCap: (config.guardrails && config.guardrails.networkCap != null) ? Number(config.guardrails.networkCap) : -1
+  };
+  // Per-run network call counter, fed to the gate for the rate cap. Updated
+  // synchronously during the pre-scan so parallel network tools can't race it.
+  let netCount = 0;
 
   const limit = clampTurns(maxTurns != null ? maxTurns : config.maxTurns);
   const price = priceFor(config.model, config);
@@ -251,7 +267,7 @@ export async function runAgent({
         guardNoted = true;
         const c = costOf(usage, price);
         const sym = c.currency === 'USD' ? '$' : '¥';
-        onEvent('guardrail', { reason: 'cost', cost: c.amount, max: guardCost, currency: c.currency || 'CNY' });
+        onEvent('guardrail', { decision: 'cost', reason: 'cost', cost: c.amount, max: guardCost, currency: c.currency || 'CNY' });
         messages.push({
           role: 'system',
           content:
@@ -357,9 +373,50 @@ export async function runAgent({
     });
 
     const toolResults = new Array(toolCalls.length);
+    // Pre-evaluate the blast-radius gate for every tool call in this turn,
+    // synchronously, before any async execution. This makes the per-run network
+    // counter race-free even when network tools run in parallel below, and keeps
+    // the hard-deny floor (secret / denyList / rate cap / allowList) applied
+    // identically whether the call is parallel or serial.
+    const guardDecisions = toolCalls.map((tc) => {
+      const g = evaluateGuardrail({
+        tool: tc.name,
+        args: tc.args || {},
+        policy: guardPolicy,
+        stats: { netCount }
+      });
+      // Reserve the network slot now so concurrent network tools count correctly.
+      if (g.category === 'network' && g.decision !== 'deny') netCount++;
+      return g;
+    });
     async function runOneTool(i) {
       const tc = toolCalls[i];
       onEvent('tool_start', { id: tc.id, name: tc.name, args: tc.args || {} });
+      const g = guardDecisions[i];
+      // Hard deny / ask / allow are emitted as a single audit event so the trace,
+      // OTel spans and /api/health all consume one source of truth. A denied call
+      // never reaches executeTool — we synthesize a GUARDRAIL_DENIED result.
+      if (g.decision === 'deny') {
+        onEvent('guardrail', {
+          decision: 'deny', category: g.category, reason: g.reason,
+          tool: tc.name, args: tc.args || {}, mode: resolveMode(guardPolicy.mode)
+        });
+        toolResults[i] = {
+          tc,
+          res: {
+            ok: false,
+            error: 'Guardrail blocked this tool call: ' + g.reason,
+            errorClass: 'GUARDRAIL_DENIED',
+            content: null, diff: null, undoToken: null
+          },
+          ms: 0
+        };
+        return;
+      }
+      onEvent('guardrail', {
+        decision: g.decision, category: g.category, reason: g.reason,
+        tool: tc.name, args: tc.args || {}, mode: resolveMode(guardPolicy.mode)
+      });
       const started = Date.now();
       const res = await executeTool(tc.name, tc.args || {}, opts);
       toolResults[i] = { tc, res, ms: Date.now() - started };

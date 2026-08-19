@@ -61,6 +61,40 @@ try {
 // v0.68: rolling stats for the root-cause self-heal loop, surfaced by /api/health
 // so container orchestration / ops can watch how often the agent self-recovers.
 let selfHealStats = { total: 0, lastCategory: null, lastAction: null, lastReason: null, lastResetCounters: false, lastAt: null, lastFlap: false, healHistory: [] };
+// v0.71: action-level blast-radius gate audit ledger (governance track), surfaced
+// by /api/health so ops can watch how often the guardrail blocks/asks/allows.
+let guardrailStats = {
+  total: 0, blocked: 0, asked: 0, allowed: 0,
+  lastDecision: null, lastCategory: null, lastReason: null, lastTool: null, lastAt: null,
+  ledger: []
+};
+// v0.71: roll the guardrail audit ledger from each guardrail event so /api/health
+// can report governance activity. One machine-consumable record per event: the
+// unified decision (deny / ask / allow / cost) and its category / reason / tool.
+function rollGuardrailStats(payload) {
+  try {
+    const dec = (payload && payload.decision) || 'cost';
+    guardrailStats.total = (guardrailStats.total || 0) + 1;
+    if (dec === 'deny' || dec === 'cost') guardrailStats.blocked = (guardrailStats.blocked || 0) + 1;
+    else if (dec === 'ask') guardrailStats.asked = (guardrailStats.asked || 0) + 1;
+    else guardrailStats.allowed = (guardrailStats.allowed || 0) + 1;
+    guardrailStats.lastDecision = dec;
+    guardrailStats.lastCategory = payload && payload.category ? payload.category : null;
+    guardrailStats.lastReason = payload && payload.reason ? payload.reason : null;
+    guardrailStats.lastTool = payload && payload.tool ? payload.tool : null;
+    guardrailStats.lastAt = Date.now();
+    const entry = {
+      decision: dec,
+      category: guardrailStats.lastCategory,
+      reason: guardrailStats.lastReason,
+      tool: guardrailStats.lastTool,
+      at: guardrailStats.lastAt
+    };
+    const hist = Array.isArray(guardrailStats.ledger) ? guardrailStats.ledger : [];
+    hist.push(entry);
+    guardrailStats.ledger = hist.slice(-6);
+  } catch { /* stats are strictly best-effort */ }
+}
 const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
 // The machine root the agent is allowed to touch. Defaults to where you ran it.
@@ -357,7 +391,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/health') {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR,
-      selfHealStats: { ...selfHealStats }
+      selfHealStats: { ...selfHealStats },
+      guardrailStats: { ...guardrailStats }
     });
   }
   // Liveness/readiness + version probe for container orchestration (k8s,
@@ -1773,7 +1808,19 @@ async function handleChat(req, res) {
         };
         usagePrev = { prompt: p, completion: c };
       } else if (type === 'guardrail') {
-        addStep(trace, { kind: 'guardrail', name: '预算护栏触发', status: 'error', data: payload || {} });
+        // v0.71: a single guardrail event now covers the budget cap (decision 'cost')
+        // and the action-level blast-radius gate (deny / ask / allow). We render a
+        // trace step only for the meaningful ones (deny / ask / cost) and skip the
+        // no-op 'allow' entries so the timeline stays readable. Stats roll for all.
+        const dec = payload && payload.decision;
+        if (dec !== 'allow') {
+          let name, status;
+          if (dec === 'deny') { name = '护栏拦截·' + (payload && payload.tool ? payload.tool : ''); status = 'error'; }
+          else if (dec === 'ask') { name = '护栏待审批·' + (payload && payload.tool ? payload.tool : ''); status = 'ok'; }
+          else { name = '预算护栏触发'; status = 'error'; } // cost / fallback
+          addStep(trace, { kind: 'guardrail', name, status, data: payload || {} });
+        }
+        rollGuardrailStats(payload);
       } else if (type === 'self_heal') {
         addStep(trace, {
           kind: 'self_heal',

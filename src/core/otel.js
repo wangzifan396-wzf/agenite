@@ -283,14 +283,25 @@ export function toOtlpJson(trace, opts = {}) {
         events: [], links: []
       });
     } else if (step.kind === 'guardrail') {
+      // v0.71: the audit event now carries decision / category / reason for both
+      // the budget cap and the action-level blast-radius gate. We keep span
+      // name='guardrail' so existing telemetry dashboards/otel.test.js keep
+      // working, and extend the attributes instead of replacing them.
+      const dec = (step.data && step.data.decision) || 'cost';
+      const isError = dec === 'deny' || dec === 'cost';
       spans.push({
         traceId, spanId: sid, parentSpanId: parentId,
         name: 'guardrail',
         kind: SPAN_KIND.INTERNAL,
         startTimeUnixNano: nanoFromMs(start),
         endTimeUnixNano: nanoFromMs(end),
-        attributes: attrs({ 'agenite.operation': 'guardrail', 'error.type': 'budget_guardrail' }),
-        status: statusRecord(STATUS_CODE_ERROR, 'guardrail triggered'),
+        attributes: attrs({
+          'agenite.operation': 'guardrail',
+          'agenite.guardrail.decision': dec,
+          'agenite.guardrail.category': (step.data && step.data.category) || '',
+          'agenite.guardrail.reason': (step.data && step.data.reason) || ''
+        }),
+        status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'guardrail blocked' : 'guardrail allowed'),
         events: [], links: []
       });
     } else if (step.kind === 'self_heal') {
