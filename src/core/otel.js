@@ -239,6 +239,11 @@ export function toOtlpJson(trace, opts = {}) {
         'gen_ai.tool.call.id': step.id,
         'agenite.tool.class': (step.data && step.data.kind) || 'tool'
       };
+      // v0.72: a context_retrieve answer closes the reversible-compression
+      // loop — tag the hit so telemetry can chart cache effectiveness.
+      if (name === 'context_retrieve') {
+        a['agenite.context_retrieve.hit'] = ok;
+      }
       if (capture) {
         if (step.data && step.data.args) a['gen_ai.tool.call.arguments'] = step.data.args;
         if (step.data && step.data.result) a['gen_ai.tool.call.result'] = step.data.result;
@@ -272,13 +277,23 @@ export function toOtlpJson(trace, opts = {}) {
         events: [], links: []
       });
     } else if (step.kind === 'compact') {
+      // v0.72: a compaction step carries the savings when it was a single
+      // tool-result shrink (method/savedTokens); a history compaction carries
+      // only before/after. We tag both so telemetry can chart token savings.
+      const d = step.data || {};
+      const subkind = d.method ? 'shrink' : 'history';
+      const a = { 'agenite.operation': 'compact', 'agenite.compact.subkind': subkind };
+      if (d.method) a['agenite.compact.method'] = String(d.method);
+      if (typeof d.savedTokens === 'number') a['agenite.compact.saved_tokens'] = d.savedTokens;
+      if (typeof d.before === 'number') a['agenite.compact.before_tokens'] = d.before;
+      if (typeof d.after === 'number') a['agenite.compact.after_tokens'] = d.after;
       spans.push({
         traceId, spanId: sid, parentSpanId: parentId,
         name: 'compact',
         kind: SPAN_KIND.INTERNAL,
         startTimeUnixNano: nanoFromMs(start),
         endTimeUnixNano: nanoFromMs(end),
-        attributes: attrs({ 'agenite.operation': 'compact' }),
+        attributes: attrs(a),
         status: statusRecord(STATUS_CODE_OK),
         events: [], links: []
       });

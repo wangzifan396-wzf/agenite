@@ -5781,6 +5781,32 @@ function fmtTokens(n) {
   if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k';
   return String(v);
 }
+// v0.72: keep one in-place notice that tells the whole reversible-compression
+// story — how many results were shrunk, how many tokens that saved, and how
+// many times the model actually pulled an original back via context_retrieve.
+// The user sees a closed loop ("compressed → retrieved"), not two orphan chips.
+function renderEconomyNotice(el, aMsg) {
+  const e = aMsg.shrink || { n: 0, saved: 0, retrieved: 0, kinds: {} };
+  const parts = [];
+  if (e.n > 0) parts.push(`⧉ 上下文压缩 ${e.n} 次，省约 ${fmtTokens(e.saved)} tokens（原文可取回）`);
+  if (e.retrieved > 0) parts.push(`🔍 已取回 ${e.retrieved} 次（缓存命中，未重跑原工具）`);
+  if (!parts.length) return;
+  const text = parts.join('；');
+  const detail = (Object.entries(e.kinds || {}).map(([k, v]) => `${k} ×${v}`).join('\n') || '（无压缩明细）') +
+    '\n\n原文完整保留在本地缓存中，模型可用 context_retrieve 按需取回，不是截断丢弃。';
+  if (!aMsg.shrinkNotice) {
+    aMsg.shrinkNotice = { kind: 'shrink', text, detail };
+    aMsg.notices.push(aMsg.shrinkNotice);
+    aMsg.shrinkEl = addNotice(el, aMsg.shrinkNotice);
+  } else {
+    aMsg.shrinkNotice.text = text;
+    aMsg.shrinkNotice.detail = detail;
+    if (aMsg.shrinkEl) {
+      aMsg.shrinkEl.lastElementChild.textContent = text;
+      aMsg.shrinkEl.title = detail;
+    }
+  }
+}
 function fmtCost(amount, currency) {
   const v = Number(amount) || 0;
   const sign = CURRENCY_SIGN[currency] || '';
@@ -6754,6 +6780,14 @@ async function runTurn(conv, opts = {}) {
         conv.messages.push({ role: 'tool', tool_call_id: data.id, name: data.name, content: data.ok ? data.result : 'Error: ' + data.result });
         aMsg.toolCalls.push(data);
         upsertToolCard(el, data);
+        // v0.72: a context_retrieve answer closes the reversible-compression
+        // loop. Track it on the same economy notice as compression so the user
+        // sees "compressed → retrieved" as one story.
+        if (data.name === 'context_retrieve') {
+          aMsg.shrink = aMsg.shrink || { n: 0, saved: 0, retrieved: 0, kinds: {} };
+          aMsg.shrink.retrieved = (aMsg.shrink.retrieved || 0) + 1;
+          renderEconomyNotice(el, aMsg);
+        }
         // Flash the overlay marker the agent just acted on so the user can see
         // exactly which element was clicked/typed into on the live page.
         if (data.ref && !$('browser-modal').classList.contains('hidden')) {
@@ -6819,26 +6853,12 @@ async function runTurn(conv, opts = {}) {
         // way into the history. These can fire many times per run, so instead of
         // stacking N notices we keep one and update it in place — the user wants
         // the running total, not a play-by-play.
-        aMsg.shrink = aMsg.shrink || { n: 0, saved: 0, kinds: {} };
+        aMsg.shrink = aMsg.shrink || { n: 0, saved: 0, retrieved: 0, kinds: {} };
         aMsg.shrink.n++;
         aMsg.shrink.saved += Number(data.savedTokens) || 0;
         const method = data.method || data.kind || 'compress';
         aMsg.shrink.kinds[method] = (aMsg.shrink.kinds[method] || 0) + 1;
-        const text = `⧉ 上下文压缩 ${aMsg.shrink.n} 次，省约 ${fmtTokens(aMsg.shrink.saved)} tokens（原文可取回）`;
-        const detail = Object.entries(aMsg.shrink.kinds).map(([k, v]) => `${k} ×${v}`).join('\n') +
-          '\n\n原文完整保留在本地缓存中，模型可用 context_retrieve 按需取回，不是截断丢弃。';
-        if (!aMsg.shrinkNotice) {
-          aMsg.shrinkNotice = { kind: 'shrink', text, detail };
-          aMsg.notices.push(aMsg.shrinkNotice);
-          aMsg.shrinkEl = addNotice(el, aMsg.shrinkNotice);
-        } else {
-          aMsg.shrinkNotice.text = text;
-          aMsg.shrinkNotice.detail = detail;
-          if (aMsg.shrinkEl) {
-            aMsg.shrinkEl.lastElementChild.textContent = text;
-            aMsg.shrinkEl.title = detail;
-          }
-        }
+        renderEconomyNotice(el, aMsg);
       } else if (event === 'usage') {
         setUsageFrom(turnUsage, data);
         aMsg.usage = { ...turnUsage };

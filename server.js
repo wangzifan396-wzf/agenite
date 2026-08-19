@@ -26,6 +26,7 @@ import { activeTools, executeTool, scanWorkspaceFiles, applyUndo, setUndoStore }
 import { BROWSER } from './src/core/browser.js';
 import { McpManager, parseMcpConfigJson } from './src/core/mcp.js';
 import { ContextStore } from './src/core/compress.js';
+import { ContextEconomy } from './src/core/context-economy.js';
 import { contextWindowFor, historyBudget, toolsTokens, totalTokens } from './src/core/context.js';
 import { priceFor } from './src/core/pricing.js';
 import { listSessions, readSession, writeSession, deleteSession, SESSIONS_DIR, searchSessionsForLabel } from './src/core/sessions.js';
@@ -68,6 +69,12 @@ let guardrailStats = {
   lastDecision: null, lastCategory: null, lastReason: null, lastTool: null, lastAt: null,
   ledger: []
 };
+// v0.72: context-economy observability — a single ledger for how much the
+// reversible compression system actually saved and whether context_retrieve
+// hits the cache. Rolled from the `shrink` and `tool(context_retrieve)` events
+// the loop already emits, surfaced by /api/health. One machine-consumable
+// record per event, matching the guardrail / self-heal ledger pattern.
+const contextEconomy = new ContextEconomy();
 // v0.71: roll the guardrail audit ledger from each guardrail event so /api/health
 // can report governance activity. One machine-consumable record per event: the
 // unified decision (deny / ask / allow / cost) and its category / reason / tool.
@@ -392,7 +399,8 @@ const server = http.createServer((req, res) => {
     return sendJson(res, 200, {
       ok: true, workspace: WORKSPACE, approvalModes: APPROVAL_MODES, sessionsDir: SESSIONS_DIR,
       selfHealStats: { ...selfHealStats },
-      guardrailStats: { ...guardrailStats }
+      guardrailStats: { ...guardrailStats },
+      contextEconomy: contextEconomy.snapshot()
     });
   }
   // Liveness/readiness + version probe for container orchestration (k8s,
@@ -1712,9 +1720,30 @@ async function handleChat(req, res) {
       sse('tool', payload);
       if (payload && payload.ok === false) runSignals.errorTools++;
       if (payload && isDestructiveTool(payload.name)) runSignals.destructiveUsed = true;
+      // v0.72: a context_retrieve answer closes the reversible-compression
+      // loop. Roll a cache hit/miss into the economy ledger — but skip the
+      // synthetic GUARDRAIL_DENIED result so a blocked call is never counted
+      // as a (missing) retrieval.
+      if (payload && payload.name === 'context_retrieve') {
+        const r = payload.result || {};
+        const denied = r.errorClass === 'GUARDRAIL_DENIED';
+        const hit = !denied && r.ok !== false && payload.ok !== false;
+        contextEconomy.recordRetrieve({
+          hit,
+          pattern: !!(payload.args && payload.args.pattern),
+          hits: r.hits || 0,
+          total: r.total || 0
+        });
+        contextEconomy.syncStore(contextStore);
+      }
     }
     else if (type === 'compact') sse('compact', payload);
-    else if (type === 'shrink') sse('shrink', payload);
+    else if (type === 'shrink') {
+      sse('shrink', payload);
+      // v0.72: a tool result was compressed on the way into the history.
+      contextEconomy.recordCompress(payload);
+      contextEconomy.syncStore(contextStore);
+    }
     else if (type === 'usage') sse('usage', payload);
     else if (type === 'done') sse('done', payload);
     else if (type === 'subagent') sse('subagent', payload);
