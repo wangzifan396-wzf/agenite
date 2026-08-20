@@ -1859,6 +1859,8 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .tdi-ico { font-size: 12px; margin-top: 1px; }
 .td-item.fb .tdi-ico { color: #ff9b9b; }
 .td-item.fw .tdi-ico { color: #ffcf7a; }
+.td-item.fg .tdi-ico { color: #8fe3a8; }
+.td-item.fa .tdi-ico { color: #9ec5ff; }
 .tdi-title { font-weight: 500; color: var(--text); }
 .tdi-detail { font-size: 11.5px; color: var(--text-2); margin-top: 2px; line-height: 1.45; }
 .trace-diagnosis.sev-ok .td-title, .trace-diagnosis.sev-ok .td-ico { color: #8fe3a8; }
@@ -9117,9 +9119,9 @@ let traceSubId = null;
 let historyTrace = null; // non-null => viewing a past run instead of live
 
 const TRACE_ICON = {
-  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️', plan_gate: '🗺️', plan_refine: '🛠️'
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️', plan_gate: '🗺️', plan_refine: '🛠️', plan_decompose: '🧩'
 };
-const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体', plan_gate: '规划门控', plan_refine: '规划自精炼' };
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体', plan_gate: '规划门控', plan_refine: '规划自精炼', plan_decompose: '规划自分解' };
 
 function traceClassify(name) {
   if (name && name.startsWith('memory_')) return 'memory';
@@ -9264,6 +9266,22 @@ function traceOnEvent(type, payload) {
     if (errs) {
       toast('🛠️ 规划自精炼：发现 ' + errs + ' 处必须修复的问题，详见规划时间线', 4200);
     }
+  } else if (type === 'plan_decompose') {
+    // v0.76.0: Plan Decomposition. Render the seeded draft plan as the first
+    // planning step so the user sees the research → action → verify skeleton
+    // the run started from. Advisory only — no toast (it is a seed, not a
+    // verdict), to keep the timeline informative without adding noise.
+    const payload2 = payload || {};
+    const steps = Array.isArray(payload2.steps) ? payload2.steps : [];
+    const kinds = payload2.kinds || {};
+    const label = '规划自分解·草稿';
+    traceAdd({
+      kind: 'plan_decompose',
+      name: label + '（' + steps.length + '步：研' + (kinds.research || 0) + '/行' + (kinds.action || 0) + '/验' + (kinds.verify || 0) + '）',
+      parentId: traceTurnId || null,
+      status: 'ok',
+      data: { stepCount: steps.length, goal: payload2.goal || null, steps: steps.map((s) => ({ kind: s.kind, text: s.text, tool: s.tool || null })) }
+    });
   } else if (type === 'diagnosis') {
     liveTrace.diagnosis = payload || null;
   }
@@ -9376,6 +9394,22 @@ function traceStepHtml(s, depth) {
       const cls = i.severity === 'error' ? 'fb' : i.severity === 'warning' ? 'fw' : 'fn';
       const step = i.step ? `（第${i.step}步）` : '';
       return `<div class="td-item ${cls}"><span class="tdi-ico">${ico}</span><div class="tdi-title">${escapeHtml((i.message || i.code || '') + step)}</div></div>`;
+    }).join('');
+    detail = `<div class="tstep-content muted small">${head}</div>` + (items ? `<div class="tstep-issues">${items}</div>` : '');
+  } else if (s.kind === 'plan_decompose') {
+    // v0.76.0: render the seeded draft plan steps (research → action → verify)
+    // so the user can see the skeleton the run started from right in the
+    // timeline. Reuses the issue-item styling for visual continuity.
+    const d = s.data || {};
+    const steps = Array.isArray(d.steps) ? d.steps : [];
+    const kindIcon = { research: '🔍', action: '⚙', verify: '✅' };
+    const kindLabel = { research: '调研', action: '执行', verify: '验证' };
+    const head = `草稿 <b>${typeof d.stepCount === 'number' ? d.stepCount : steps.length}</b> 步`;
+    const items = steps.map((i) => {
+      const ico = kindIcon[i.kind] || '·';
+      const cls = i.kind === 'verify' ? 'fg' : i.kind === 'action' ? 'fa' : 'fn';
+      const tool = i.tool ? ` 〔${escapeHtml(i.tool)}〕` : '';
+      return `<div class="td-item ${cls}"><span class="tdi-ico">${ico}</span><div class="tdi-title"><b>${escapeHtml(kindLabel[i.kind] || i.kind || '')}</b> ${escapeHtml(i.text || '')}${tool}</div></div>`;
     }).join('');
     detail = `<div class="tstep-content muted small">${head}</div>` + (items ? `<div class="tstep-issues">${items}</div>` : '');
   }

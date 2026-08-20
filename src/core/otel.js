@@ -417,6 +417,33 @@ export function toOtlpJson(trace, opts = {}) {
         status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'plan refinement has errors' : 'plan refinement ok'),
         events: [], links: []
       });
+    } else if (step.kind === 'plan_decompose') {
+      // v0.76.0: Plan Decomposition. The gate span says *what* broke and the
+      // refine span says *how many fixes*; this span says *how the run started*
+      // — the seeded draft's step count and phase split — so telemetry can
+      // chart decomposition shape per run. span name='plan_decompose' keeps
+      // dashboards/otel.test.js intact; we add shape attributes instead.
+      const d = step.data || {};
+      const steps = Array.isArray(d.steps) ? d.steps : [];
+      const kinds = d.kinds || {};
+      const hasVerify = !!(d.hasVerify || kinds.verify > 0);
+      spans.push({
+        traceId, spanId: sid, parentSpanId: parentId,
+        name: 'plan_decompose',
+        kind: SPAN_KIND.INTERNAL,
+        startTimeUnixNano: nanoFromMs(start),
+        endTimeUnixNano: nanoFromMs(end),
+        attributes: attrs({
+          'agenite.operation': 'plan_decompose',
+          'agenite.plan_decompose.steps': steps.length,
+          'agenite.plan_decompose.research': kinds.research || 0,
+          'agenite.plan_decompose.action': kinds.action || 0,
+          'agenite.plan_decompose.verify': kinds.verify || 0,
+          'agenite.plan_decompose.has_verify': hasVerify
+        }),
+        status: statusRecord(STATUS_CODE_OK, 'plan decomposition ok'),
+        events: [], links: []
+      });
     } else {
       // Unknown step kind: represent it as a neutral internal span.
       spans.push({

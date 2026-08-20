@@ -32,6 +32,10 @@ import { cardFromConfig } from './agentcard.js';
 // / governance compliance before the human approves it (pure, model-free).
 import { validatePlan } from './plan-gate.js';
 import { refinePlan } from './plan-refine.js';
+// v0.76.0: Plan Decomposition — seeds a structured draft plan (research →
+// action → verify) from the run goal BEFORE any turn, completing the planning
+// lifecycle (decompose → gate → refine → execute) on the same event stack.
+import { decomposeGoal } from './plan-decompose.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -143,6 +147,21 @@ export async function runAgent({
       const hostCard = cardFromConfig(config, { tools, version: config.version, name: config.name });
       onEvent('a2a', { phase: 'host_card', card: hostCard, contextId: (opts && opts.contextId) || null });
     } catch { /* Agent Card is strictly best-effort */ }
+  }
+
+  // v0.76.0: Plan Decomposition. Before any turn, turn the run goal into a
+  // structured draft plan (research → action → verify) and emit a single
+  // `plan_decompose` event — seeding the planning lifecycle at the very start
+  // (decompose → gate → refine → execute) on the exact same single-source-of-
+  // truth stack as v0.74 (gate) and v0.75 (refine). Pure, model-free, no IO.
+  // Best-effort: a decomposition failure must never break a run.
+  if (!isPeer && typeof onEvent === 'function' && goal) {
+    try {
+      const toolNames = Array.isArray(tools)
+        ? tools.map((t) => (t && t.name) || '').filter(Boolean)
+        : [];
+      onEvent('plan_decompose', decomposeGoal(goal, { tools: toolNames }));
+    } catch { /* decomposition is strictly best-effort */ }
   }
 
   // Per-run network call counter, fed to the gate for the rate cap. Updated

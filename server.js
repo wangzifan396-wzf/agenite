@@ -103,6 +103,15 @@ let planRefineStats = {
   lastSuggestionCount: null, lastErrorCount: null, lastLevel: null, lastAt: null,
   ledger: []
 };
+// v0.76.0: Plan Decomposition ledger — rolled from each `plan_decompose` event.
+// Mirrors planStats / planRefineStats but tracks how often the run goal was
+// turned into a structured draft and the step-shape of those drafts (how many
+// research / action / verify steps). Same ledger pattern as the rest.
+let planDecomposeStats = {
+  decomposed: 0, withVerify: 0, fullSkeleton: 0,
+  lastStepCount: null, lastVerify: null, lastAt: null,
+  ledger: []
+};
 // v0.75.0: roll the Plan Self-Refinement ledger from each `plan_refine` event.
 // One machine-consumable record per event: the suggestion count and the
 // error/warning split, so /api/health can report refinement activity over time.
@@ -126,6 +135,25 @@ function rollPlanRefineStats(payload) {
     const hist = Array.isArray(planRefineStats.ledger) ? planRefineStats.ledger : [];
     hist.push({ suggestions: sug.length, errors: errs, warnings: warns, level, at: planRefineStats.lastAt });
     planRefineStats.ledger = hist.slice(-6);
+  } catch { /* stats are strictly best-effort */ }
+}
+// v0.76.0: roll the Plan Decomposition ledger from each `plan_decompose` event.
+// One machine-consumable record per event: the step count and whether the draft
+// carried a verify step, so /api/health can report decomposition activity.
+function rollPlanDecomposeStats(payload) {
+  try {
+    const steps = Array.isArray(payload && payload.steps) ? payload.steps : [];
+    const hasVerify = !!(payload && payload.hasVerify);
+    const ok = !!(payload && payload.ok);
+    planDecomposeStats.decomposed = (planDecomposeStats.decomposed || 0) + 1;
+    if (hasVerify) planDecomposeStats.withVerify = (planDecomposeStats.withVerify || 0) + 1;
+    if (ok) planDecomposeStats.fullSkeleton = (planDecomposeStats.fullSkeleton || 0) + 1;
+    planDecomposeStats.lastStepCount = steps.length;
+    planDecomposeStats.lastVerify = hasVerify;
+    planDecomposeStats.lastAt = Date.now();
+    const hist = Array.isArray(planDecomposeStats.ledger) ? planDecomposeStats.ledger : [];
+    hist.push({ stepCount: steps.length, hasVerify, ok, at: planDecomposeStats.lastAt });
+    planDecomposeStats.ledger = hist.slice(-6);
   } catch { /* stats are strictly best-effort */ }
 }
 // v0.74.0: roll the Plan Quality Gate ledger from each `plan_gate` event. One
@@ -510,6 +538,7 @@ const server = http.createServer((req, res) => {
       a2aStats: { ...a2aStats },
       planStats: { ...planStats },
       planRefineStats: { ...planRefineStats },
+      planDecomposeStats: { ...planDecomposeStats },
       contextEconomy: contextEconomy.snapshot()
     });
   }
@@ -1862,6 +1891,7 @@ async function handleChat(req, res) {
     else if (type === 'a2a') sse('a2a', payload);
     else if (type === 'plan_gate') sse('plan_gate', payload);
     else if (type === 'plan_refine') sse('plan_refine', payload);
+    else if (type === 'plan_decompose') sse('plan_decompose', payload);
     else if (type === 'todo') sse('todo', payload);
     else if (type === 'verify') sse('verify', payload);
 
@@ -2045,6 +2075,22 @@ async function handleChat(req, res) {
           parentId: traceTurnId || null,
           status: errs ? 'error' : (warns ? 'ok' : 'ok'),
           data: { count: suggestions.length, level, suggestions: suggestions.map((s) => ({ severity: s.severity, code: s.code, message: s.message, step: s.step || null })) }
+        });
+      } else if (type === 'plan_decompose') {
+        // v0.76.0: Plan Decomposition. Render the seeded draft plan as the very
+        // first planning step so the timeline shows the research → action →
+        // verify skeleton the run started from (before gate/refine act on it).
+        const payload2 = payload || {};
+        const steps = Array.isArray(payload2.steps) ? payload2.steps : [];
+        const kinds = payload2.kinds || {};
+        rollPlanDecomposeStats(payload2);
+        const label = '规划自分解·草稿';
+        addStep(trace, {
+          kind: 'plan_decompose',
+          name: label + '（' + steps.length + '步：研' + (kinds.research || 0) + '/行' + (kinds.action || 0) + '/验' + (kinds.verify || 0) + '）',
+          parentId: traceTurnId || null,
+          status: 'ok',
+          data: { stepCount: steps.length, goal: payload2.goal || null, steps: steps.map((s) => ({ kind: s.kind, text: s.text, tool: s.tool || null })) }
         });
       } else if (type === 'done') {
         trace.finishedAt = Date.now();

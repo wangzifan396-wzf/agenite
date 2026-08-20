@@ -1850,6 +1850,8 @@ select.text-input { appearance: auto; padding-right: 8px; }
 .tdi-ico { font-size: 12px; margin-top: 1px; }
 .td-item.fb .tdi-ico { color: #ff9b9b; }
 .td-item.fw .tdi-ico { color: #ffcf7a; }
+.td-item.fg .tdi-ico { color: #8fe3a8; }
+.td-item.fa .tdi-ico { color: #9ec5ff; }
 .tdi-title { font-weight: 500; color: var(--text); }
 .tdi-detail { font-size: 11.5px; color: var(--text-2); margin-top: 2px; line-height: 1.45; }
 .trace-diagnosis.sev-ok .td-title, .trace-diagnosis.sev-ok .td-ico { color: #8fe3a8; }
