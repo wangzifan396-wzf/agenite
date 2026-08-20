@@ -878,6 +878,9 @@ export async function runGoal(id, dir = GOALS_DIR, deps = null) {
           maxTurns: Math.max(1, budget.maxTurns - state.turns),
           autoCompact: true
         },
+        // v0.74.0: the autonomous goal text is the objective — pass it to the
+        // Plan Quality Gate so plan steps are checked against the real goal.
+        goal: state.goal || '',
         tools,
         summarize,
         toolContext: {

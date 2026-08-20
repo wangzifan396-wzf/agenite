@@ -28,6 +28,9 @@ import { evaluateGuardrail, resolveMode } from './guardrails.js';
 // v0.73.0: A2A Agent Card — advertises this agent's A2A-shaped identity so a
 // delegate/fanout peer (or external A2A client) can discover it.
 import { cardFromConfig } from './agentcard.js';
+// v0.74.0: Plan Quality Gate — validates a plan's executability / goal coverage
+// / governance compliance before the human approves it (pure, model-free).
+import { validatePlan } from './plan-gate.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -104,7 +107,10 @@ export async function runAgent({
   summarize = null,
   // v0.73.0: when true this run is an A2A peer (sub-agent), not the host, so
   // it must NOT advertise a host Agent Card — only the top-level run does.
-  isPeer = false
+  isPeer = false,
+  // v0.74.0: the run's objective, passed to the Plan Quality Gate so it can
+  // check whether the plan actually covers the goal. Optional; empty = skip.
+  goal = ''
 }) {
   const opts = {
     dangerTools: config.dangerTools,
@@ -437,6 +443,27 @@ export async function runAgent({
       const started = Date.now();
       const res = await executeTool(tc.name, tc.args || {}, opts);
       toolResults[i] = { tc, res, ms: Date.now() - started };
+      // v0.74.0: Plan Quality Gate. The `plan` tool only records steps, so a
+      // human may approve a plan that is unexecutable, off-goal, or trips the
+      // governance denyList. We validate here (pure, no model call) and emit a
+      // single `plan_gate` event so the UI, /api/health ledger and OTel spans
+      // all consume one source of truth. Best-effort: a gate failure must never
+      // break the run — it is advisory, not a hard block.
+      if (tc.name === 'plan' && res && res.ok) {
+        try {
+          const toolNames = Array.isArray(tools)
+            ? tools.map((t) => (t && t.name) || '').filter(Boolean)
+            : [];
+          const assessment = validatePlan({
+            steps: tc.args && tc.args.steps,
+            text: tc.args && tc.args.text,
+            goal: goal || '',
+            toolNames,
+            guardPolicy
+          });
+          onEvent('plan_gate', assessment);
+        } catch { /* gate is strictly best-effort */ }
+      }
     }
 
     // Read-only tools fire off together; the harness resolves each as it lands.

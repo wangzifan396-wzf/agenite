@@ -364,6 +364,34 @@ export function toOtlpJson(trace, opts = {}) {
         status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'A2A task failed' : 'A2A exchange'),
         events: [], links: []
       });
+    } else if (step.kind === 'plan_gate') {
+      // v0.74.0: the Plan Quality Gate assessment becomes its own span so
+      // telemetry backends can chart plan-quality rates per run. We keep
+      // span name='plan_gate' so existing dashboards/otel.test.js keep working
+      // and extend the attributes instead of replacing them.
+      const d = step.data || {};
+      const score = (typeof d.score === 'number') ? d.score : 0;
+      const level = d.level || 'unknown';
+      const issues = Array.isArray(d.issues) ? d.issues : [];
+      const errs = issues.filter((i) => i.severity === 'error').length;
+      const warns = issues.filter((i) => i.severity === 'warning').length;
+      const isError = level === 'fail' || errs > 0;
+      spans.push({
+        traceId, spanId: sid, parentSpanId: parentId,
+        name: 'plan_gate',
+        kind: SPAN_KIND.INTERNAL,
+        startTimeUnixNano: nanoFromMs(start),
+        endTimeUnixNano: nanoFromMs(end),
+        attributes: attrs({
+          'agenite.operation': 'plan_gate',
+          'agenite.plan_gate.score': score,
+          'agenite.plan_gate.level': level,
+          'agenite.plan_gate.errors': errs,
+          'agenite.plan_gate.warnings': warns
+        }),
+        status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'plan gate failed' : 'plan gate passed'),
+        events: [], links: []
+      });
     } else {
       // Unknown step kind: represent it as a neutral internal span.
       spans.push({

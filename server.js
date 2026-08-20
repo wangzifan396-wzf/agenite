@@ -85,6 +85,39 @@ let a2aStats = {
   lastPeer: null, lastPhase: null, lastTaskStatus: null, lastAt: null,
   ledger: []
 };
+// v0.74.0: Plan Quality Gate ledger — surfaced by /api/health so ops can watch
+// how often plans pass / need attention / fail the gate and the average score.
+// Rolled from each `plan_gate` event, in the same ledger pattern as
+// guardrailStats / selfHealStats / a2aStats.
+let planStats = {
+  validated: 0, passed: 0, withWarnings: 0, withErrors: 0,
+  avgScore: 0, lastScore: null, lastLevel: null, lastAt: null,
+  ledger: []
+};
+// v0.74.0: roll the Plan Quality Gate ledger from each `plan_gate` event. One
+// machine-consumable record per event: the score, the level, and the issue
+// count, so /api/health can report plan-quality trends over time.
+function rollPlanGateStats(payload) {
+  try {
+    const score = (payload && typeof payload.score === 'number') ? payload.score : 0;
+    const level = payload && payload.level ? payload.level : 'unknown';
+    const issues = Array.isArray(payload && payload.issues) ? payload.issues : [];
+    const errs = issues.filter((i) => i.severity === 'error').length;
+    const warns = issues.filter((i) => i.severity === 'warning').length;
+    planStats.validated = (planStats.validated || 0) + 1;
+    if (errs) planStats.withErrors = (planStats.withErrors || 0) + 1;
+    else if (warns) planStats.withWarnings = (planStats.withWarnings || 0) + 1;
+    else planStats.passed = (planStats.passed || 0) + 1;
+    planStats.lastScore = score;
+    planStats.lastLevel = level;
+    planStats.lastAt = Date.now();
+    const prevTotal = planStats.validated;
+    planStats.avgScore = Math.round(((planStats.avgScore || 0) * (prevTotal - 1) + score) / prevTotal);
+    const hist = Array.isArray(planStats.ledger) ? planStats.ledger : [];
+    hist.push({ score, level, issues: errs + warns, at: planStats.lastAt });
+    planStats.ledger = hist.slice(-6);
+  } catch { /* stats are strictly best-effort */ }
+}
 // v0.71: roll the guardrail audit ledger from each guardrail event so /api/health
 // can report governance activity. One machine-consumable record per event: the
 // unified decision (deny / ask / allow / cost) and its category / reason / tool.
@@ -441,6 +474,7 @@ const server = http.createServer((req, res) => {
       selfHealStats: { ...selfHealStats },
       guardrailStats: { ...guardrailStats },
       a2aStats: { ...a2aStats },
+      planStats: { ...planStats },
       contextEconomy: contextEconomy.snapshot()
     });
   }
@@ -1791,6 +1825,7 @@ async function handleChat(req, res) {
     else if (type === 'guardrail') sse('guardrail', payload);
     else if (type === 'self_heal') sse('self_heal', payload);
     else if (type === 'a2a') sse('a2a', payload);
+    else if (type === 'plan_gate') sse('plan_gate', payload);
     else if (type === 'todo') sse('todo', payload);
     else if (type === 'verify') sse('verify', payload);
 
@@ -1940,6 +1975,24 @@ async function handleChat(req, res) {
         } else if (phase === 'task_submitted') {
           addStep(trace, { kind: 'a2a', name: 'A2A 任务已提交', parentId: traceTurnId || null, status: 'ok', data: { phase, taskStatus: 'submitted' } });
         }
+      } else if (type === 'plan_gate') {
+        // v0.74.0: Plan Quality Gate assessment for a plan the agent just wrote.
+        // Always roll the ledger; render a trace step so the timeline shows plan
+        // quality (pass / warn / fail) right where the plan was produced.
+        const score = (payload && typeof payload.score === 'number') ? payload.score : 0;
+        const level = payload && payload.level ? payload.level : 'unknown';
+        const issues = Array.isArray(payload && payload.issues) ? payload.issues : [];
+        const errs = issues.filter((i) => i.severity === 'error').length;
+        const warns = issues.filter((i) => i.severity === 'warning').length;
+        rollPlanGateStats(payload);
+        const label = level === 'pass' ? '规划门控·通过' : level === 'warn' ? '规划门控·需关注' : '规划门控·不合格';
+        addStep(trace, {
+          kind: 'plan_gate',
+          name: label + '（' + score + '分）',
+          parentId: traceTurnId || null,
+          status: errs ? 'error' : (warns ? 'ok' : 'ok'),
+          data: { score, level, issues: issues.map((i) => ({ severity: i.severity, code: i.code, message: i.message, step: i.step || null })) }
+        });
       } else if (type === 'done') {
         trace.finishedAt = Date.now();
         trace.stopped = payload?.stopped || null;
@@ -2066,6 +2119,17 @@ async function handleChat(req, res) {
   let chatStopped = null;
 
   try {
+    // v0.74.0: derive the run's objective from the thread's first user message
+    // and pass it to runAgent so the Plan Quality Gate can check goal coverage.
+    // Empty when there is no user message — the gate then skips goal checks.
+    let runGoal = '';
+    const goalMsg = incoming.find((m) => m && m.role === 'user' && m.content);
+    if (goalMsg) {
+      const c = goalMsg.content;
+      runGoal = typeof c === 'string'
+        ? c.slice(0, 400)
+        : (Array.isArray(c) ? c.map((p) => p.text || '').join(' ').slice(0, 400) : '');
+    }
     const result = await runAgent({
       messages,
       callModel,
@@ -2073,6 +2137,7 @@ async function handleChat(req, res) {
       onEvent,
       config,
       tools,
+      goal: runGoal,
       summarize,
       toolContext: {
         requestApproval,

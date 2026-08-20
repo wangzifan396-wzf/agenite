@@ -3703,9 +3703,9 @@ let traceSubId = null;
 let historyTrace = null; // non-null => viewing a past run instead of live
 
 const TRACE_ICON = {
-  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️'
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️', plan_gate: '🗺️'
 };
-const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体' };
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体', plan_gate: '规划门控' };
 
 function traceClassify(name) {
   if (name && name.startsWith('memory_')) return 'memory';
@@ -3808,6 +3808,28 @@ function traceOnEvent(type, payload) {
     } else if (phase === 'task_submitted') {
       traceAdd({ kind: 'a2a', name: 'A2A 任务已提交', parentId: traceTurnId || null, status: 'ok', data: { phase, taskStatus: 'submitted' } });
     }
+  } else if (type === 'plan_gate') {
+    // v0.74.0: Plan Quality Gate. Render a timeline step showing the score and
+    // level (pass / warn / fail) wherever the agent produced a plan. Issues are
+    // surfaced in the step detail so the user can fix the plan before approving.
+    const score = (payload && typeof payload.score === 'number') ? payload.score : 0;
+    const level = payload?.level || 'unknown';
+    const issues = Array.isArray(payload?.issues) ? payload.issues : [];
+    const errs = issues.filter((i) => i.severity === 'error').length;
+    const warns = issues.filter((i) => i.severity === 'warning').length;
+    const label = level === 'pass' ? '规划门控·通过' : level === 'warn' ? '规划门控·需关注' : '规划门控·不合格';
+    traceAdd({
+      kind: 'plan_gate',
+      name: label + '（' + score + '分）',
+      parentId: traceTurnId || null,
+      status: errs ? 'error' : (warns ? 'ok' : 'ok'),
+      data: { score, level, issues }
+    });
+    // Surface a non-blocking toast for failing plans so the user pauses before
+    // blindly approving. A passing plan stays silent to avoid noise.
+    if (level === 'fail') {
+      toast('🗺️ 规划门控：计划不合格（' + score + '分），请先修复再批准', 4200);
+    }
   } else if (type === 'diagnosis') {
     liveTrace.diagnosis = payload || null;
   }
@@ -3895,6 +3917,20 @@ function traceStepHtml(s, depth) {
     if (d.peer) bits.push(`对端 <b>${escapeHtml(d.peer)}</b>`);
     if (d.taskStatus) bits.push(`任务 <b>${escapeHtml(d.taskStatus)}</b>`);
     detail = bits.length ? `<div class="tstep-content muted small">${bits.join(' · ')}</div>` : '';
+  } else if (s.kind === 'plan_gate') {
+    // v0.74.0: render the gate's score + level + each issue so the user can see
+    // WHY a plan passed / needs attention / failed without leaving the timeline.
+    const d = s.data || {};
+    const issues = Array.isArray(d.issues) ? d.issues : [];
+    const levelLabel = d.level === 'pass' ? '通过' : d.level === 'warn' ? '需关注' : d.level === 'fail' ? '不合格' : d.level;
+    const head = `评分 <b>${typeof d.score === 'number' ? d.score : '—'}</b> · 等级 <b>${escapeHtml(levelLabel)}</b>`;
+    const items = issues.map((i) => {
+      const ico = i.severity === 'error' ? '✕' : i.severity === 'warning' ? '⚠' : '·';
+      const cls = i.severity === 'error' ? 'fb' : i.severity === 'warning' ? 'fw' : 'fn';
+      const step = i.step ? `（第${i.step}步）` : '';
+      return `<div class="td-item ${cls}"><span class="tdi-ico">${ico}</span><div class="tdi-title">${escapeHtml((i.message || i.code || '') + step)}</div></div>`;
+    }).join('');
+    detail = `<div class="tstep-content muted small">${head}</div>` + (items ? `<div class="tstep-issues">${items}</div>` : '');
   }
   return `<div class="tstep${err}" style="margin-left:${(depth || 0) * 18}px">` +
     `<div class="tstep-head"><span class="tstep-ic">${icon}</span>` +
