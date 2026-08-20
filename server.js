@@ -94,6 +94,40 @@ let planStats = {
   avgScore: 0, lastScore: null, lastLevel: null, lastAt: null,
   ledger: []
 };
+// v0.75.0: Plan Self-Refinement ledger — rolled from each `plan_refine` event.
+// Mirrors planStats but tracks how often the refinement produced actionable fix
+// suggestions and how many were error-level (must-fix) vs. advisory. Same
+// ledger pattern as guardrailStats / selfHealStats / a2aStats / planStats.
+let planRefineStats = {
+  refined: 0, withSuggestions: 0, errorLevel: 0, warningLevel: 0, clean: 0,
+  lastSuggestionCount: null, lastErrorCount: null, lastLevel: null, lastAt: null,
+  ledger: []
+};
+// v0.75.0: roll the Plan Self-Refinement ledger from each `plan_refine` event.
+// One machine-consumable record per event: the suggestion count and the
+// error/warning split, so /api/health can report refinement activity over time.
+function rollPlanRefineStats(payload) {
+  try {
+    const sug = Array.isArray(payload && payload.suggestions) ? payload.suggestions : [];
+    const errs = sug.filter((s) => s.severity === 'error').length;
+    const warns = sug.filter((s) => s.severity === 'warning').length;
+    const level = payload && payload.level ? payload.level : 'unknown';
+    planRefineStats.refined = (planRefineStats.refined || 0) + 1;
+    if (!sug.length) planRefineStats.clean = (planRefineStats.clean || 0) + 1;
+    else {
+      planRefineStats.withSuggestions = (planRefineStats.withSuggestions || 0) + 1;
+      if (errs) planRefineStats.errorLevel = (planRefineStats.errorLevel || 0) + 1;
+      else if (warns) planRefineStats.warningLevel = (planRefineStats.warningLevel || 0) + 1;
+    }
+    planRefineStats.lastSuggestionCount = sug.length;
+    planRefineStats.lastErrorCount = errs;
+    planRefineStats.lastLevel = level;
+    planRefineStats.lastAt = Date.now();
+    const hist = Array.isArray(planRefineStats.ledger) ? planRefineStats.ledger : [];
+    hist.push({ suggestions: sug.length, errors: errs, warnings: warns, level, at: planRefineStats.lastAt });
+    planRefineStats.ledger = hist.slice(-6);
+  } catch { /* stats are strictly best-effort */ }
+}
 // v0.74.0: roll the Plan Quality Gate ledger from each `plan_gate` event. One
 // machine-consumable record per event: the score, the level, and the issue
 // count, so /api/health can report plan-quality trends over time.
@@ -475,6 +509,7 @@ const server = http.createServer((req, res) => {
       guardrailStats: { ...guardrailStats },
       a2aStats: { ...a2aStats },
       planStats: { ...planStats },
+      planRefineStats: { ...planRefineStats },
       contextEconomy: contextEconomy.snapshot()
     });
   }
@@ -1826,6 +1861,7 @@ async function handleChat(req, res) {
     else if (type === 'self_heal') sse('self_heal', payload);
     else if (type === 'a2a') sse('a2a', payload);
     else if (type === 'plan_gate') sse('plan_gate', payload);
+    else if (type === 'plan_refine') sse('plan_refine', payload);
     else if (type === 'todo') sse('todo', payload);
     else if (type === 'verify') sse('verify', payload);
 
@@ -1992,6 +2028,23 @@ async function handleChat(req, res) {
           parentId: traceTurnId || null,
           status: errs ? 'error' : (warns ? 'ok' : 'ok'),
           data: { score, level, issues: issues.map((i) => ({ severity: i.severity, code: i.code, message: i.message, step: i.step || null })) }
+        });
+      } else if (type === 'plan_refine') {
+        // v0.75.0: Plan Self-Refinement. The gate told us *what* is wrong; this
+        // step renders the concrete fix suggestions so the timeline shows not
+        // just "plan failed" but "here is how to repair it" right next to it.
+        const suggestions = Array.isArray(payload && payload.suggestions) ? payload.suggestions : [];
+        const errs = suggestions.filter((s) => s.severity === 'error').length;
+        const warns = suggestions.filter((s) => s.severity === 'warning').length;
+        const level = payload && payload.level ? payload.level : 'unknown';
+        rollPlanRefineStats(payload);
+        const label = level === 'fail' ? '规划自精炼·需修复' : level === 'warn' ? '规划自精炼·建议' : '规划自精炼·无问题';
+        addStep(trace, {
+          kind: 'plan_refine',
+          name: label + '（' + suggestions.length + '条建议）',
+          parentId: traceTurnId || null,
+          status: errs ? 'error' : (warns ? 'ok' : 'ok'),
+          data: { count: suggestions.length, level, suggestions: suggestions.map((s) => ({ severity: s.severity, code: s.code, message: s.message, step: s.step || null })) }
         });
       } else if (type === 'done') {
         trace.finishedAt = Date.now();

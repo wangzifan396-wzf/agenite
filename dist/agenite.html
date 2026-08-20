@@ -9117,9 +9117,9 @@ let traceSubId = null;
 let historyTrace = null; // non-null => viewing a past run instead of live
 
 const TRACE_ICON = {
-  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️', plan_gate: '🗺️'
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️', plan_gate: '🗺️', plan_refine: '🛠️'
 };
-const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体', plan_gate: '规划门控' };
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体', plan_gate: '规划门控', plan_refine: '规划自精炼' };
 
 function traceClassify(name) {
   if (name && name.startsWith('memory_')) return 'memory';
@@ -9244,6 +9244,26 @@ function traceOnEvent(type, payload) {
     if (level === 'fail') {
       toast('🗺️ 规划门控：计划不合格（' + score + '分），请先修复再批准', 4200);
     }
+  } else if (type === 'plan_refine') {
+    // v0.75.0: Plan Self-Refinement. Render a timeline step listing the concrete
+    // fix suggestions right after the gate, so the user sees HOW to repair a
+    // failing plan without leaving the timeline. Non-blocking toast only when
+    // there are error-level (must-fix) suggestions, to avoid noise on clean plans.
+    const suggestions = Array.isArray(payload?.suggestions) ? payload.suggestions : [];
+    const errs = suggestions.filter((s) => s.severity === 'error').length;
+    const warns = suggestions.filter((s) => s.severity === 'warning').length;
+    const level = payload?.level || 'unknown';
+    const label = level === 'fail' ? '规划自精炼·需修复' : level === 'warn' ? '规划自精炼·建议' : '规划自精炼·无问题';
+    traceAdd({
+      kind: 'plan_refine',
+      name: label + '（' + suggestions.length + '条建议）',
+      parentId: traceTurnId || null,
+      status: errs ? 'error' : (warns ? 'ok' : 'ok'),
+      data: { count: suggestions.length, level, suggestions }
+    });
+    if (errs) {
+      toast('🛠️ 规划自精炼：发现 ' + errs + ' 处必须修复的问题，详见规划时间线', 4200);
+    }
   } else if (type === 'diagnosis') {
     liveTrace.diagnosis = payload || null;
   }
@@ -9339,6 +9359,19 @@ function traceStepHtml(s, depth) {
     const levelLabel = d.level === 'pass' ? '通过' : d.level === 'warn' ? '需关注' : d.level === 'fail' ? '不合格' : d.level;
     const head = `评分 <b>${typeof d.score === 'number' ? d.score : '—'}</b> · 等级 <b>${escapeHtml(levelLabel)}</b>`;
     const items = issues.map((i) => {
+      const ico = i.severity === 'error' ? '✕' : i.severity === 'warning' ? '⚠' : '·';
+      const cls = i.severity === 'error' ? 'fb' : i.severity === 'warning' ? 'fw' : 'fn';
+      const step = i.step ? `（第${i.step}步）` : '';
+      return `<div class="td-item ${cls}"><span class="tdi-ico">${ico}</span><div class="tdi-title">${escapeHtml((i.message || i.code || '') + step)}</div></div>`;
+    }).join('');
+    detail = `<div class="tstep-content muted small">${head}</div>` + (items ? `<div class="tstep-issues">${items}</div>` : '');
+  } else if (s.kind === 'plan_refine') {
+    // v0.75.0: render the concrete fix suggestions so the user can repair the
+    // plan. Reuses the same issue-item styling as plan_gate for visual continuity.
+    const d = s.data || {};
+    const suggestions = Array.isArray(d.suggestions) ? d.suggestions : [];
+    const head = `建议 <b>${typeof d.count === 'number' ? d.count : suggestions.length}</b> 条`;
+    const items = suggestions.map((i) => {
       const ico = i.severity === 'error' ? '✕' : i.severity === 'warning' ? '⚠' : '·';
       const cls = i.severity === 'error' ? 'fb' : i.severity === 'warning' ? 'fw' : 'fn';
       const step = i.step ? `（第${i.step}步）` : '';

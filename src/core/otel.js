@@ -392,6 +392,31 @@ export function toOtlpJson(trace, opts = {}) {
         status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'plan gate failed' : 'plan gate passed'),
         events: [], links: []
       });
+    } else if (step.kind === 'plan_refine') {
+      // v0.75.0: Plan Self-Refinement. The gate span says *what* broke; this
+      // span says *how many concrete fixes* were produced. We keep
+      // span name='plan_refine' so dashboards/otel.test.js stay intact and add
+      // suggestion-count attributes instead of replacing the gate's.
+      const d = step.data || {};
+      const sug = Array.isArray(d.suggestions) ? d.suggestions : [];
+      const errs = sug.filter((s) => s.severity === 'error').length;
+      const warns = sug.filter((s) => s.severity === 'warning').length;
+      const isError = errs > 0;
+      spans.push({
+        traceId, spanId: sid, parentSpanId: parentId,
+        name: 'plan_refine',
+        kind: SPAN_KIND.INTERNAL,
+        startTimeUnixNano: nanoFromMs(start),
+        endTimeUnixNano: nanoFromMs(end),
+        attributes: attrs({
+          'agenite.operation': 'plan_refine',
+          'agenite.plan_refine.count': sug.length,
+          'agenite.plan_refine.errors': errs,
+          'agenite.plan_refine.warnings': warns
+        }),
+        status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'plan refinement has errors' : 'plan refinement ok'),
+        events: [], links: []
+      });
     } else {
       // Unknown step kind: represent it as a neutral internal span.
       spans.push({

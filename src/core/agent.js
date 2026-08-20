@@ -31,6 +31,7 @@ import { cardFromConfig } from './agentcard.js';
 // v0.74.0: Plan Quality Gate — validates a plan's executability / goal coverage
 // / governance compliance before the human approves it (pure, model-free).
 import { validatePlan } from './plan-gate.js';
+import { refinePlan } from './plan-refine.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -462,6 +463,11 @@ export async function runAgent({
             guardPolicy
           });
           onEvent('plan_gate', assessment);
+          // v0.75.0: Plan Self-Refinement. The gate only says *what* is wrong;
+          // refinePlan turns each issue into a concrete fix suggestion and emits
+          // a single `plan_refine` event on the same stack (ledger/SSE/otel/trace)
+          // as the gate. Advisory only — the human still decides. Best-effort.
+          onEvent('plan_refine', refinePlan(assessment, { goal: goal || '' }));
         } catch { /* gate is strictly best-effort */ }
       }
     }
