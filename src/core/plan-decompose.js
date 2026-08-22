@@ -1,3 +1,8 @@
+// v0.77.0: shares the canonical plan vocabulary (step kinds + counts) with gate
+// / refine / cohere via plan-schema.js, so the four planning stages can never
+// disagree about what a "plan" is. Import kept at the top for module clarity.
+import { countKinds } from './plan-schema.js';
+
 // v0.76.0 — Plan Decomposition
 // --------------------------------------------------------------------------
 // v0.74.0 shipped the Plan Quality Gate (validate a plan BEFORE execution) and
@@ -9,10 +14,11 @@
 // This module closes that gap at the very start of a run. `decomposeGoal`
 // turns a run objective into a structured DRAFT plan — a research → action →
 // verify skeleton — before any turn, so the planning lifecycle is complete:
-//   decompose → gate → refine → execute
+//   decompose → gate → refine → cohere → execute
 // The agent emits the result as a single `plan_decompose` event that flows
 // through the EXACT same single-source-of-truth stack as v0.74 (gate) and
-// v0.75 (refine): event → server ledger/SSE → otel span → app trace/toast.
+// v0.75 (refine) and v0.77 (cohere): event → server ledger/SSE → otel span
+// → app trace/toast.
 //
 // Design constraints (kept identical to plan-gate.js / plan-refine.js so the
 // feature stays tiny and testable):
@@ -54,12 +60,6 @@ function pickTool(names, hints) {
     if (hit) return hit;
   }
   return undefined;
-}
-
-function countKinds(steps) {
-  const out = { research: 0, action: 0, verify: 0 };
-  for (const s of steps) if (out[s.kind] != null) out[s.kind]++;
-  return out;
 }
 
 // decomposeGoal(goal, { tools = [], maxSteps = 6 } = {}) → draft plan object

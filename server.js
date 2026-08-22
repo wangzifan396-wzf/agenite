@@ -112,6 +112,15 @@ let planDecomposeStats = {
   lastStepCount: null, lastVerify: null, lastAt: null,
   ledger: []
 };
+// v0.77.0: Plan Coherence ledger — rolled from each `plan_cohere` event.
+// Mirrors the sibling plan ledgers but tracks how often the agent's written
+// plan stayed coherent with the decompose draft + run goal: how many kept a
+// coherent shape (order + kinds + goal) vs. drifted. Same ledger pattern.
+let planCohereStats = {
+  coherenceChecked: 0, coherent: 0, drifted: 0,
+  lastScore: null, lastLevel: null, lastOrderOk: null, lastGoalAligned: null, lastAt: null,
+  ledger: []
+};
 // v0.75.0: roll the Plan Self-Refinement ledger from each `plan_refine` event.
 // One machine-consumable record per event: the suggestion count and the
 // error/warning split, so /api/health can report refinement activity over time.
@@ -154,6 +163,30 @@ function rollPlanDecomposeStats(payload) {
     const hist = Array.isArray(planDecomposeStats.ledger) ? planDecomposeStats.ledger : [];
     hist.push({ stepCount: steps.length, hasVerify, ok, at: planDecomposeStats.lastAt });
     planDecomposeStats.ledger = hist.slice(-6);
+  } catch { /* stats are strictly best-effort */ }
+}
+// v0.77.0: roll the Plan Coherence ledger from each `plan_cohere` event. One
+// machine-consumable record per event: the score, level, and whether the plan
+// drifted from the draft/goal, so /api/health can report coherence trends.
+function rollPlanCohereStats(payload) {
+  try {
+    const score = (payload && typeof payload.score === 'number') ? payload.score : 0;
+    const level = payload && payload.level ? payload.level : 'unknown';
+    const ok = !!(payload && payload.ok);
+    const stats = (payload && payload.stats) || {};
+    const orderOk = stats.orderOk != null ? !!stats.orderOk : null;
+    const goalAligned = stats.goalAligned != null ? !!stats.goalAligned : null;
+    planCohereStats.coherenceChecked = (planCohereStats.coherenceChecked || 0) + 1;
+    if (ok) planCohereStats.coherent = (planCohereStats.coherent || 0) + 1;
+    else planCohereStats.drifted = (planCohereStats.drifted || 0) + 1;
+    planCohereStats.lastScore = score;
+    planCohereStats.lastLevel = level;
+    planCohereStats.lastOrderOk = orderOk;
+    planCohereStats.lastGoalAligned = goalAligned;
+    planCohereStats.lastAt = Date.now();
+    const hist = Array.isArray(planCohereStats.ledger) ? planCohereStats.ledger : [];
+    hist.push({ score, level, orderOk, goalAligned, at: planCohereStats.lastAt });
+    planCohereStats.ledger = hist.slice(-6);
   } catch { /* stats are strictly best-effort */ }
 }
 // v0.74.0: roll the Plan Quality Gate ledger from each `plan_gate` event. One
@@ -539,6 +572,7 @@ const server = http.createServer((req, res) => {
       planStats: { ...planStats },
       planRefineStats: { ...planRefineStats },
       planDecomposeStats: { ...planDecomposeStats },
+      planCohereStats: { ...planCohereStats },
       contextEconomy: contextEconomy.snapshot()
     });
   }
@@ -1892,6 +1926,7 @@ async function handleChat(req, res) {
     else if (type === 'plan_gate') sse('plan_gate', payload);
     else if (type === 'plan_refine') sse('plan_refine', payload);
     else if (type === 'plan_decompose') sse('plan_decompose', payload);
+    else if (type === 'plan_cohere') sse('plan_cohere', payload);
     else if (type === 'todo') sse('todo', payload);
     else if (type === 'verify') sse('verify', payload);
 
@@ -2091,6 +2126,34 @@ async function handleChat(req, res) {
           parentId: traceTurnId || null,
           status: 'ok',
           data: { stepCount: steps.length, goal: payload2.goal || null, steps: steps.map((s) => ({ kind: s.kind, text: s.text, tool: s.tool || null })) }
+        });
+      } else if (type === 'plan_cohere') {
+        // v0.77.0: Plan Coherence. The gate/refine validated the plan in
+        // isolation; this step shows whether the agent's written plan stayed
+        // coherent with the seeded decompose draft + run goal. Always roll the
+        // ledger; render a trace step so structural drift (order / dropped kind
+        // / goal drift) is visible right where the plan was committed.
+        const score = (payload && typeof payload.score === 'number') ? payload.score : 0;
+        const level = payload && payload.level ? payload.level : 'unknown';
+        const issues = Array.isArray(payload && payload.issues) ? payload.issues : [];
+        const errs = issues.filter((i) => i.severity === 'error').length;
+        const warns = issues.filter((i) => i.severity === 'warning').length;
+        const stats = (payload && payload.stats) || {};
+        const drifted = !!(payload && payload.ok === false);
+        rollPlanCohereStats(payload);
+        const label = drifted ? '规划连贯性·有偏差' : '规划连贯性·连贯';
+        addStep(trace, {
+          kind: 'plan_cohere',
+          name: label + '（' + score + '分）',
+          parentId: traceTurnId || null,
+          status: errs ? 'error' : (warns ? 'ok' : 'ok'),
+          data: {
+            score, level,
+            orderOk: stats.orderOk != null ? !!stats.orderOk : null,
+            goalAligned: stats.goalAligned != null ? !!stats.goalAligned : null,
+            droppedKinds: Array.isArray(stats.droppedKinds) ? stats.droppedKinds : [],
+            issues: issues.map((i) => ({ severity: i.severity, code: i.code, message: i.message, kind: i.kind || null }))
+          }
         });
       } else if (type === 'done') {
         trace.finishedAt = Date.now();

@@ -36,6 +36,10 @@ import { refinePlan } from './plan-refine.js';
 // action → verify) from the run goal BEFORE any turn, completing the planning
 // lifecycle (decompose → gate → refine → execute) on the same event stack.
 import { decomposeGoal } from './plan-decompose.js';
+// v0.77.0: Plan Coherence — compares the agent's written plan against the
+// decompose draft + run goal and reports structural drift, completing the
+// planning lifecycle (decompose → gate → refine → cohere → execute).
+import { assessCoherence } from './plan-cohere.js';
 
 export const DEFAULT_MAX_TURNS = 20;
 
@@ -152,15 +156,20 @@ export async function runAgent({
   // v0.76.0: Plan Decomposition. Before any turn, turn the run goal into a
   // structured draft plan (research → action → verify) and emit a single
   // `plan_decompose` event — seeding the planning lifecycle at the very start
-  // (decompose → gate → refine → execute) on the exact same single-source-of-
-  // truth stack as v0.74 (gate) and v0.75 (refine). Pure, model-free, no IO.
-  // Best-effort: a decomposition failure must never break a run.
+  // (decompose → gate → refine → cohere → execute) on the exact same
+  // single-source-of-truth stack as v0.74 (gate) and v0.75 (refine). Pure,
+  // model-free, no IO. Best-effort: a decomposition failure must never break a
+  // run. The draft is also kept in `planDraft` so the later cohere check (when
+  // the agent writes its own plan) can compare against it.
+  let planDraft = null;
   if (!isPeer && typeof onEvent === 'function' && goal) {
     try {
       const toolNames = Array.isArray(tools)
         ? tools.map((t) => (t && t.name) || '').filter(Boolean)
         : [];
-      onEvent('plan_decompose', decomposeGoal(goal, { tools: toolNames }));
+      const draft = decomposeGoal(goal, { tools: toolNames });
+      planDraft = draft;
+      onEvent('plan_decompose', draft);
     } catch { /* decomposition is strictly best-effort */ }
   }
 
@@ -487,6 +496,17 @@ export async function runAgent({
           // a single `plan_refine` event on the same stack (ledger/SSE/otel/trace)
           // as the gate. Advisory only — the human still decides. Best-effort.
           onEvent('plan_refine', refinePlan(assessment, { goal: goal || '' }));
+          // v0.77.0: Plan Coherence. The gate validates the plan in isolation
+          // and refine suggests fixes, but neither checks the plan stayed
+          // coherent with the seeded decompose draft and the original goal. We
+          // compare the agent's written plan against `planDraft` (captured above)
+          // and the run goal, surfacing any structural drift on the same stack
+          // (ledger/SSE/otel/trace). Advisory only — never blocks. Best-effort.
+          const planArg = tc.args && tc.args.steps;
+          const planInput = (Array.isArray(planArg) && planArg.length)
+            ? planArg
+            : (tc.args && tc.args.text ? tc.args.text : []);
+          onEvent('plan_cohere', assessCoherence({ goal: goal || '', draft: planDraft, plan: planInput }));
         } catch { /* gate is strictly best-effort */ }
       }
     }

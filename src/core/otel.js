@@ -444,6 +444,41 @@ export function toOtlpJson(trace, opts = {}) {
         status: statusRecord(STATUS_CODE_OK, 'plan decomposition ok'),
         events: [], links: []
       });
+    } else if (step.kind === 'plan_cohere') {
+      // v0.77.0: Plan Coherence. The gate span says *what* broke, the refine
+      // span says *how many fixes*, the decompose span says *how the run
+      // started*, and this span says *whether the written plan stayed coherent*
+      // with that draft + goal. span name='plan_cohere' keeps dashboards and
+      // otel.test.js intact; we add drift attributes (order / goal / dropped).
+      const d = step.data || {};
+      const score = (typeof d.score === 'number') ? d.score : 0;
+      const level = d.level || 'unknown';
+      const orderOk = d.orderOk != null ? !!d.orderOk : true;
+      const goalAligned = d.goalAligned != null ? !!d.goalAligned : true;
+      const dropped = Array.isArray(d.droppedKinds) ? d.droppedKinds : [];
+      const issues = Array.isArray(d.issues) ? d.issues : [];
+      const errs = issues.filter((i) => i.severity === 'error').length;
+      const warns = issues.filter((i) => i.severity === 'warning').length;
+      const isError = errs > 0;
+      spans.push({
+        traceId, spanId: sid, parentSpanId: parentId,
+        name: 'plan_cohere',
+        kind: SPAN_KIND.INTERNAL,
+        startTimeUnixNano: nanoFromMs(start),
+        endTimeUnixNano: nanoFromMs(end),
+        attributes: attrs({
+          'agenite.operation': 'plan_cohere',
+          'agenite.plan_cohere.score': score,
+          'agenite.plan_cohere.level': level,
+          'agenite.plan_cohere.order_ok': orderOk,
+          'agenite.plan_cohere.goal_aligned': goalAligned,
+          'agenite.plan_cohere.dropped_kinds': dropped.length,
+          'agenite.plan_cohere.errors': errs,
+          'agenite.plan_cohere.warnings': warns
+        }),
+        status: statusRecord(isError ? STATUS_CODE_ERROR : STATUS_CODE_OK, isError ? 'plan coherence has errors' : 'plan coherence ok'),
+        events: [], links: []
+      });
     } else {
       // Unknown step kind: represent it as a neutral internal span.
       spans.push({

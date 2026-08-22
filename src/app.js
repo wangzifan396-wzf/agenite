@@ -3703,9 +3703,9 @@ let traceSubId = null;
 let historyTrace = null; // non-null => viewing a past run instead of live
 
 const TRACE_ICON = {
-  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️', plan_gate: '🗺️', plan_refine: '🛠️', plan_decompose: '🧩'
+  turn: '🧠', tool: '🔧', subagent: '🤖', compact: '🗜️', self_heal: '🩹', guardrail: '🛡️', a2a: '🕸️', plan_gate: '🗺️', plan_refine: '🛠️', plan_decompose: '🧩', plan_cohere: '🔗'
 };
-const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体', plan_gate: '规划门控', plan_refine: '规划自精炼', plan_decompose: '规划自分解' };
+const TRACE_KIND_LABEL = { tool: '工具', memory: '记忆', mcp: 'MCP', subagent: '子智能体', compact: '压缩', turn: '推理', self_heal: '自愈', guardrail: '护栏', a2a: '多智能体', plan_gate: '规划门控', plan_refine: '规划自精炼', plan_decompose: '规划自分解', plan_cohere: '规划连贯性' };
 
 function traceClassify(name) {
   if (name && name.startsWith('memory_')) return 'memory';
@@ -3866,6 +3866,32 @@ function traceOnEvent(type, payload) {
       status: 'ok',
       data: { stepCount: steps.length, goal: payload2.goal || null, steps: steps.map((s) => ({ kind: s.kind, text: s.text, tool: s.tool || null })) }
     });
+  } else if (type === 'plan_cohere') {
+    // v0.77.0: Plan Coherence. Render a timeline step showing whether the
+    // agent's written plan stayed coherent with the seeded decompose draft
+    // and the run goal. Advisory only — no toast (the gate already toasts on
+    // a failing plan; coherence adds a structural lens without extra noise).
+    const payload2 = payload || {};
+    const score = (typeof payload2.score === 'number') ? payload2.score : 0;
+    const level = payload2.level || 'unknown';
+    const issues = Array.isArray(payload2.issues) ? payload2.issues : [];
+    const errs = issues.filter((i) => i.severity === 'error').length;
+    const warns = issues.filter((i) => i.severity === 'warning').length;
+    const drifted = level === 'fail' || warns > 0;
+    const label = drifted ? '规划连贯性·有偏差' : '规划连贯性·连贯';
+    traceAdd({
+      kind: 'plan_cohere',
+      name: label + '（' + score + '分）',
+      parentId: traceTurnId || null,
+      status: errs ? 'error' : (warns ? 'ok' : 'ok'),
+      data: {
+        score, level,
+        orderOk: payload2.orderOk != null ? !!payload2.orderOk : null,
+        goalAligned: payload2.goalAligned != null ? !!payload2.goalAligned : null,
+        droppedKinds: Array.isArray(payload2.droppedKinds) ? payload2.droppedKinds : [],
+        issues
+      }
+    });
   } else if (type === 'diagnosis') {
     liveTrace.diagnosis = payload || null;
   }
@@ -3994,6 +4020,25 @@ function traceStepHtml(s, depth) {
       const cls = i.kind === 'verify' ? 'fg' : i.kind === 'action' ? 'fa' : 'fn';
       const tool = i.tool ? ` 〔${escapeHtml(i.tool)}〕` : '';
       return `<div class="td-item ${cls}"><span class="tdi-ico">${ico}</span><div class="tdi-title"><b>${escapeHtml(kindLabel[i.kind] || i.kind || '')}</b> ${escapeHtml(i.text || '')}${tool}</div></div>`;
+    }).join('');
+    detail = `<div class="tstep-content muted small">${head}</div>` + (items ? `<div class="tstep-issues">${items}</div>` : '');
+  } else if (s.kind === 'plan_cohere') {
+    // v0.77.0: render the coherence findings so the user can see WHY a plan
+    // drifted from the seeded draft / goal without leaving the timeline.
+    // Reuses the same issue-item styling as plan_gate for visual continuity.
+    const d = s.data || {};
+    const issues = Array.isArray(d.issues) ? d.issues : [];
+    const levelLabel = d.level === 'pass' ? '连贯' : d.level === 'warn' ? '有偏差' : d.level === 'fail' ? '不连贯' : d.level;
+    const bits = [];
+    if (d.orderOk != null) bits.push(`顺序连贯 <b>${d.orderOk ? '是' : '否'}</b>`);
+    if (d.goalAligned != null) bits.push(`贴合目标 <b>${d.goalAligned ? '是' : '否'}</b>`);
+    const dropped = Array.isArray(d.droppedKinds) ? d.droppedKinds : [];
+    if (dropped.length) bits.push(`丢弃环节 <b>${dropped.join('/')}</b>`);
+    const head = `评分 <b>${typeof d.score === 'number' ? d.score : '—'}</b> · 状态 <b>${escapeHtml(levelLabel)}</b>` + (bits.length ? ' · ' + bits.join(' · ') : '');
+    const items = issues.map((i) => {
+      const ico = i.severity === 'error' ? '✕' : i.severity === 'warning' ? '⚠' : '·';
+      const cls = i.severity === 'error' ? 'fb' : i.severity === 'warning' ? 'fw' : 'fn';
+      return `<div class="td-item ${cls}"><span class="tdi-ico">${ico}</span><div class="tdi-title">${escapeHtml(i.message || i.code || '')}</div></div>`;
     }).join('');
     detail = `<div class="tstep-content muted small">${head}</div>` + (items ? `<div class="tstep-issues">${items}</div>` : '');
   }

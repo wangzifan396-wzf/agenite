@@ -16,6 +16,10 @@
 //
 // Emits a `plan_gate` event: { ok, score, level, issues[], stats, goal }.
 
+// v0.77.0: step normalization + CJK-aware tokenization now live in plan-schema.js
+// so the gate and the coherence module share one vocabulary (and one tokenizer).
+import { normSteps, tokenize } from './plan-schema.js';
+
 // Destructive operations the human must explicitly guard before executing.
 const DESTRUCTIVE_RE = /\b(rm\s+-rf|rmdir|del\b|delete\s+(file|folder|dir|table)|drop\s+(table|database)|truncate|format|wipe|purge|destroy|shutdown|kill\b|force\s+push|--force|reset\s+--hard|rm\s+-fr)\b/i;
 // Secret / credential material — must never be typed into a plan or logged.
@@ -31,19 +35,6 @@ const VERIFY_RE = /\b(test|build|verify|check|validate|assert|run\s+(the\s+)?(su
 const LOOP_RE = /\b(repeat|loop|again|re-?run|redo|circular|until\s+it|while\s+not|loop\s+until)\b|回到|重复|循环|再跑|重试.*直到/i;
 
 export const PLAN_GATE_VERSION = '0.74.0';
-
-function normSteps(input) {
-  if (Array.isArray(input)) return input.map(String).filter(Boolean);
-  if (typeof input === 'string') {
-    return input.split(/\n+/).map((s) => s.replace(/^\s*\d+[.、)]\s*/, '').trim()).filter(Boolean);
-  }
-  return [];
-}
-
-// Light tokenization: latin/digit/underscore runs + CJK single chars.
-function tokenize(text) {
-  return (text || '').toLowerCase().match(/[a-z0-9_]+|[一-龥]/g) || [];
-}
 
 function finalize({ ok, score, level, issues, stats, goal }) {
   return { ok, score, level, issues, stats, goal: goal || null };
